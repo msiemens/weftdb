@@ -285,6 +285,39 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
     },
   },
   {
+    id: "§5.8.unsent",
+    title: "a field with an unsent write shows what this device wrote, not what the scope says",
+    check: (world) => {
+      // What a pull carries cannot include a write the relay has not been given, so applying it
+      // over an unsent local edit replaces what the person typed with the value they typed over
+      // — while their own edit waits its turn in the outbox.
+      for (const device of [...world.devices, world.neighbour]) {
+        for (const [key, row] of device.client.rows) {
+          const { tableName: table, rowId: id } = parseLocalKey(key);
+          const pending = pendingOps(device.client, table, id);
+          // Only while the row's existence is settled. A queued create, delete or restore means
+          // the writes behind it belong to a life of the row that the scope may have already
+          // replaced — another device creating the same id hands this one a row whose values
+          // were never what the queued writes said.
+          if (pending.some((op) => op.kind !== "set")) continue;
+          const queued = pending.filter((op) => op.kind === "set");
+          // The last write queued for a field is the one the field ends on locally: `update`
+          // supersedes an earlier unsent write to the same field rather than queueing both.
+          const lastByField = new Map<FieldName, WeftOp>();
+          for (const op of queued) if (op.kind === "set") lastByField.set(op.field, op);
+          for (const [field, op] of lastByField) {
+            if (op.kind !== "set") continue;
+            assert.deepEqual(
+              row.fields.get(field),
+              op.value,
+              `${device.client.deviceId} shows ${key}.${field} as something other than its own unsent write`,
+            );
+          }
+        }
+      }
+    },
+  },
+  {
     id: "§9.43",
     title: "a scope's schema version never decreases",
     check: (world) => {

@@ -46,6 +46,8 @@ test("the invariant registry covers the world-checkable §9 invariants", () => {
     "§9.25",
     "§9.30",
     "§9.31",
+    // Not a §9 rule, but continuously checkable: an unsent write must survive a pull.
+    "§5.8.unsent",
   ];
   for (const id of expected) {
     if (!covered.has(id)) throw new Error(`the world model no longer checks ${id}`);
