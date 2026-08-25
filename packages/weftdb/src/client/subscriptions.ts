@@ -1,5 +1,7 @@
-import { fieldName, tableName, wireText, type FieldName, type RowId, type TableName } from "weftdb/core";
+import { fieldName, rowId, tableName, wireText, type FieldName, type RowId, type TableName } from "weftdb/core";
 import type { SchemaDefinition } from "weftdb/schema";
+import type { SqlExecutor, SqlStatement, SqlValue } from "weftdb/shared";
+import { queryCacheKey, type CompiledQuery, type QueryBuilderLike } from "./query.ts";
 import type { LocalRow, MaterializedRow } from "./index.ts";
 
 export interface QueryKey {
@@ -63,6 +65,51 @@ export function queryKey<const Schema extends SchemaDefinition, const Table exte
   };
 }
 
+/**
+ * A compiled statement bound to what it reads. The statement decides which rows match and in what
+ * order, which is where `where`, a multi-field `order by`, `limit` and `offset` come from; the
+ * rows themselves come back out of `client.rows`, so a result keeps the identity that row caching
+ * and the delta both rest on.
+ */
+export interface ReactiveSqlQuery {
+  readonly tableName: TableName;
+  readonly compiled: CompiledQuery;
+  readonly cacheKey: string;
+  readonly dependsOn: ReadonlySet<TableName>;
+}
+
+export interface ReactiveSqlQueryOptions {
+  /** The collection the statement selects `id` from, and whose rows the result materializes from. */
+  readonly tableName: TableName;
+  readonly query: QueryBuilderLike | CompiledQuery;
+  /** The collections whose changes make this answer stale. Defaults to the one it reads. */
+  readonly dependsOn?: Iterable<TableName>;
+}
+
+export function reactiveSqlQuery(options: ReactiveSqlQueryOptions): ReactiveSqlQuery {
+  const compiled = "compile" in options.query ? options.query.compile() : options.query;
+  assertScoped(compiled);
+  return {
+    tableName: options.tableName,
+    compiled,
+    cacheKey: queryCacheKey(compiled),
+    dependsOn: new Set(options.dependsOn ?? [options.tableName]),
+  };
+}
+
+/**
+ * One database file holds every scope a person is signed into, and every read the store makes
+ * itself is filtered on `scope_id`. A statement that leaves it out is refused here rather than
+ * answered: materializing out of `client.rows` already drops ids this scope does not hold, but a
+ * row id is unique only within its collection, so two scopes can hold the same id and the other
+ * scope's match would come back as this scope's row. This is a guard, not a SQL parser.
+ */
+function assertScoped(query: CompiledQuery): void {
+  if (!/\bscope_id\b/u.test(query.sql)) {
+    throw new Error("a reactive SQL query must constrain scope_id");
+  }
+}
+
 export interface QueryDelta {
   readonly added: readonly RowId[];
   readonly removed: readonly RowId[];
@@ -107,6 +154,9 @@ export class SubscriptionEngine {
   readonly #rowCache = new RowIdentityCache();
   readonly #snapshots = new Map<string, QuerySnapshot>();
   readonly #listeners = new Map<string, Set<QueryListener>>();
+  /** Which generation each SQL query was last run against, so one change costs one run of it. */
+  readonly #sqlRuns = new Map<string, number>();
+  #generation = 0;
   #queued = false;
 
   getSnapshot(key: QueryKey, rows: Iterable<LocalRow>): QuerySnapshot {
@@ -125,8 +175,44 @@ export class SubscriptionEngine {
     return snapshot;
   }
 
+  /**
+   * The snapshot of a compiled SQL query, against the SQLite mirror `SqliteClientStore` keeps
+   * current. The statement answers which rows and in what order; `client.rows` answers what a row
+   * is, so a row that did not change is the same object it was and `React.memo` still holds.
+   */
+  getSqlSnapshot(query: ReactiveSqlQuery, executor: SqlExecutor, rows: ReadonlyMap<string, LocalRow>): QuerySnapshot {
+    const cacheKey = `sql\0${query.cacheKey}`;
+    const cached = this.#snapshots.get(cacheKey);
+    // React calls `getSnapshot` more than once for one render pass, and running the statement
+    // again per call would put a SQLite query in the render path. Nothing can have changed
+    // without a `notify`, so one run per generation is both enough and what keeps two calls in
+    // one pass tearing-free.
+    if (cached !== undefined && this.#sqlRuns.get(cacheKey) === this.#generation) return cached;
+    this.#sqlRuns.set(cacheKey, this.#generation);
+
+    const nextRows: MaterializedRow[] = [];
+    for (const id of executor.all(selectMatchingIds(query))) {
+      const row = rows.get(`${query.tableName}\0${id}`);
+      // A row the statement matched that this client does not hold is dropped rather than
+      // reported: the database outlives any one hydrate, and a scope holds only its own rows.
+      if (row !== undefined) nextRows.push(this.#rowCache.materialize(row));
+    }
+
+    if (cached !== undefined && sameRows(cached.rows, nextRows)) return cached;
+    const snapshot = Object.freeze({ rows: nextRows, delta: computeDelta(cached?.rows ?? [], nextRows) });
+    this.#snapshots.set(cacheKey, snapshot);
+    return snapshot;
+  }
+
   subscribe(key: QueryKey, listener: QueryListener): () => void {
-    const cacheKey = queryKeyToString(key);
+    return this.#subscribeTo(queryKeyToString(key), listener);
+  }
+
+  subscribeSql(query: ReactiveSqlQuery, listener: QueryListener): () => void {
+    return this.#subscribeTo(`sql\0${query.cacheKey}`, listener);
+  }
+
+  #subscribeTo(cacheKey: string, listener: QueryListener): () => void {
     const listeners = this.#listeners.get(cacheKey) ?? new Set<QueryListener>();
     listeners.add(listener);
     this.#listeners.set(cacheKey, listeners);
@@ -137,6 +223,10 @@ export class SubscriptionEngine {
   }
 
   notify(): void {
+    // Bumped whatever the fan-out does, because it is what tells a cached SQL result that the
+    // rows underneath it moved. Coalescing the listener call is about how often React is woken;
+    // this is about what the next `getSqlSnapshot` is allowed to reuse.
+    this.#generation += 1;
     if (this.#queued) return;
     this.#queued = true;
     queueMicrotask(() => {
@@ -146,6 +236,34 @@ export class SubscriptionEngine {
       }
     });
   }
+}
+
+function selectMatchingIds(query: ReactiveSqlQuery): SqlStatement<RowId> {
+  return {
+    sql: query.compiled.sql,
+    parameters: query.compiled.parameters.map(toSqlValue),
+    decode: (row) => {
+      const value = row["id"];
+      if (typeof value !== "string") throw new Error("a reactive SQL query must select the id column");
+      return rowId(value);
+    },
+  };
+}
+
+/**
+ * A bind parameter as the executor takes it. A query builder types its parameters `unknown`
+ * because a dialect may accept anything, and SQLite takes four kinds of which a boolean is not
+ * one: without this, `where("done", "=", false)` reaches the driver as a boolean and fails at the
+ * binding rather than answering. Anything else is refused here, where the value is still
+ * attached to the query that produced it.
+ */
+function toSqlValue(value: unknown): SqlValue {
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "bigint") {
+    return value;
+  }
+  if (value instanceof Uint8Array) return value as Uint8Array<ArrayBuffer>;
+  throw new Error(`a SQL parameter of this kind cannot be bound: ${value === undefined ? "undefined" : typeof value}`);
 }
 
 /** Row identity is already cached per revision, so identity comparison is the whole test. */

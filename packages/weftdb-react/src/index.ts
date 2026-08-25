@@ -1,6 +1,13 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
 import { hasConflictMarkers } from "weftdb/core";
-import type { MaterializedRow, QuerySnapshot, SubscriptionEngine, QueryKey, TypedQueryKey } from "weftdb/client";
+import type {
+  MaterializedRow,
+  QuerySnapshot,
+  ReactiveSqlQuery,
+  SubscriptionEngine,
+  QueryKey,
+  TypedQueryKey,
+} from "weftdb/client";
 
 /**
  * A store this can subscribe to, and the keys it accepts. The key type comes from the source
@@ -87,6 +94,41 @@ export function useWeftRows<Row>(
   decode: (row: MaterializedRow) => Row,
 ): readonly Row[] {
   const snapshot = useWeftQuerySnapshot(source, key);
+  const cache = useRef<{ snapshot: QuerySnapshot; rows: readonly Row[] } | undefined>(undefined);
+  if (cache.current?.snapshot !== snapshot) {
+    cache.current = { snapshot, rows: snapshot.rows.map((row) => decode(row)) };
+  }
+  return cache.current.rows;
+}
+
+/**
+ * What a SQL-backed read needs on top of the row map: the executor the statement runs against.
+ * That is the device's own SQLite, so this source exists only where `SqliteClientStore` does.
+ */
+export interface SqlQuerySource extends QueryLifecycleSource {
+  readonly executor: import("weftdb/shared").SqlExecutor;
+}
+
+export function useWeftSqlSnapshot(source: SqlQuerySource, query: ReactiveSqlQuery): QuerySnapshot {
+  const subscribe = useCallback((listener: () => void) => source.engine.subscribeSql(query, listener), [source, query]);
+  const getSnapshot = useCallback(
+    () => source.engine.getSqlSnapshot(query, source.executor, source.rows),
+    [source, query],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+/**
+ * The rows a compiled statement selects, decoded. Filtering, multi-field ordering, and paging
+ * live in the statement rather than in the component, and the decoded array is cached against
+ * the snapshot for the same reason `useWeftRows` caches its own.
+ */
+export function useWeftSqlRows<Row>(
+  source: SqlQuerySource,
+  query: ReactiveSqlQuery,
+  decode: (row: MaterializedRow) => Row,
+): readonly Row[] {
+  const snapshot = useWeftSqlSnapshot(source, query);
   const cache = useRef<{ snapshot: QuerySnapshot; rows: readonly Row[] } | undefined>(undefined);
   if (cache.current?.snapshot !== snapshot) {
     cache.current = { snapshot, rows: snapshot.rows.map((row) => decode(row)) };
