@@ -922,6 +922,8 @@ export { WeftSession } from "./session.ts";
 export type { BroadcastChannelLike, SessionOptions, SessionStatus, SocketHandlers } from "./session.ts";
 export { serializeClient, WebStorageClientStore } from "./web-storage.ts";
 export type { StorageLike, StoredClient, StoredValue } from "./web-storage.ts";
+export { EphemeralClientStore } from "./ephemeral.ts";
+export type { EphemeralClientStoreOptions } from "./ephemeral.ts";
 export {
   executorRowSelect,
   queryKey,
@@ -975,9 +977,13 @@ export { WeftClientMirror } from "./worker-mirror.ts";
 export type { WeftClientMirrorOptions } from "./worker-mirror.ts";
 export { BroadcastDbProxy, MultiTabCoordinator, serveBroadcastDbProxy } from "./multitab.ts";
 export type {
+  BroadcastDbProxyOptions,
   BroadcastDbProxyServer,
   BroadcastDbProxyServerOptions,
+  LeadershipAnnouncement,
+  LeadershipListener,
   LockManagerLike,
+  LockRequestOptionsLike,
   MultiTabOptions,
   ProxyPush,
   ProxyRequest,
