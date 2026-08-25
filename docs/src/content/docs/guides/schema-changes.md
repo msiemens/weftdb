@@ -14,9 +14,9 @@ a field to a schema is a change deployed to devices, never to the relay.
 
 `schemaHash()`, from `weftdb/schema`, hashes the whole schema: `schemaVersion`, and for every
 collection its kind and, for every field, its name, `type`, `merge` annotation, `nullable` flag,
-`derived` expression, and `retentionAnchor` flag, plus every relationship's target table and its
-two field names. Fields are read as an object keyed by name, so a rename changes the hash exactly
-as a changed `type` does.
+allowed `values`, and `retentionAnchor` flag, plus every relationship's target table and its two
+field names. Fields are read as an object keyed by name, so a rename changes the hash exactly as a
+changed `type` does.
 
 The relay never reads the hash. It stores whatever the first device sends as an opaque string on
 the scope, the unit of data one person's devices share (see [Scopes](/concepts/scopes/)), and

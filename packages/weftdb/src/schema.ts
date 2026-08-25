@@ -6,7 +6,6 @@ export interface FieldDefinition {
   type: "string" | "number" | "boolean" | "json" | "date" | "enum";
   merge: MergeStrategy;
   nullable: boolean;
-  derived?: string;
   retentionAnchor?: boolean;
   /** The values an `enum` field may hold. Everything else leaves this undefined. */
   values?: readonly string[];
@@ -93,7 +92,7 @@ export type ScalarType<Type extends FieldDefinition["type"]> = Type extends "num
       ? import("weftdb/core").WireValue
       : string;
 
-type FieldOptions = Partial<Pick<FieldDefinition, "merge" | "nullable" | "derived" | "retentionAnchor">>;
+type FieldOptions = Partial<Pick<FieldDefinition, "merge" | "nullable" | "retentionAnchor">>;
 
 type JsonFieldOptions = FieldOptions & Partial<JsonTypeReference>;
 
@@ -126,7 +125,6 @@ function field(type: FieldDefinition["type"], options: FieldOptions = {}): Field
     merge: options.merge ?? "lww",
     nullable: options.nullable ?? false,
   };
-  if (options.derived !== undefined) definition.derived = options.derived;
   if (options.retentionAnchor !== undefined) definition.retentionAnchor = options.retentionAnchor;
   return definition;
 }
@@ -380,7 +378,6 @@ function toWireSchema(schema: SchemaDefinition): WireValue {
                 type: field.type,
                 merge: field.merge,
                 nullable: field.nullable,
-                derived: field.derived ?? null,
                 retentionAnchor: field.retentionAnchor ?? false,
                 // The allowed values are part of what the schema says. Two devices that disagree
                 // about them disagree about which writes are legal, and a value one accepts

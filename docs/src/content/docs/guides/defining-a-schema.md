@@ -27,7 +27,6 @@ export const schema = defineSchema({
       due_at: S.date({ nullable: true, retentionAnchor: true }),
       status: S.enum(["open", "done"]),
       metadata: S.json({ nullable: true }),
-      logged_minutes: S.number({ derived: "SUM(task_events.minutes)" }),
     },
     { events: S.hasMany("task_events", "id", "task_id") },
   ),
@@ -101,14 +100,6 @@ paragraph under `lww` would discard one edit entirely. `rank` uses `fracIndex` b
 a list under `lww` would otherwise mean rewriting every row between the old position and the new
 one. Reach for `immutable` on a value nothing should revise after creation, which is how the base
 fields below are declared.
-
-### Derived fields
-
-`derived` takes a SQL select fragment instead of a merge option, as on `logged_minutes` above. A
-derived field is never written by a mutator: `weft generate` gives it no column and no place in
-the generated mutation interface, because its value comes from the fragment rather than from an
-edit. Declaring a field `derived` keeps it present in the entity type on every row, rather than
-present only where a particular query happened to compute it.
 
 ### Retention anchors
 

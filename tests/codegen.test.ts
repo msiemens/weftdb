@@ -273,7 +273,7 @@ test("checking a relationship leaves the schema hash where it was", () => {
     projects: S.collection({ name: S.string() }, { issues: S.hasMany("issues", "id", "project_id") }),
     issues: S.collection({ project_id: S.string() }, { project: S.hasOne("projects", "project_id", "id") }),
   });
-  assert.equal(schemaHash(schema), "ce3a07d5822456de3215663995eadadc9c9796c901bd01b4771be067ee7cee21");
+  assert.equal(schemaHash(schema), "2f66d9655767558e226873f9bef5ecc803cf0ac58515535486711a83b2010db6");
 });
 
 test("a relationship that names something the schema does not have is a compile error", () => {

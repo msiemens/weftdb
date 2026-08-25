@@ -52,7 +52,6 @@ export function generateClientAddMissingColumnDdl(
     if (!existingColumns.has(name)) statements.push(`ALTER TABLE ${quoteIdent(tableName)} ADD COLUMN ${definition};`);
   };
   for (const [name, field] of Object.entries(collection.fields)) {
-    if (field.derived) continue;
     addColumn(name, domainColumnDdl(name, field, "alter"));
     addColumn(`_weft_hlc_${name}`, `${quoteIdent(`_weft_hlc_${name}`)} TEXT`);
     if (field.merge === "diff3") addColumn(`_weft_base_${name}`, `${quoteIdent(`_weft_base_${name}`)} TEXT`);
@@ -231,7 +230,7 @@ CREATE TABLE IF NOT EXISTS devices (
 }
 
 function generateTableDdl(tableName: string, collection: CollectionDefinition): string {
-  const fields = Object.entries(collection.fields).filter(([, field]) => !field.derived);
+  const fields = Object.entries(collection.fields);
   // The `CHECK` says in the database what the generated union says in the types, so a row
   // written by anything that is not this build still cannot hold a value the schema forbids.
   const columns = fields.map(([name, field]) => `  ${domainColumnDdl(name, field, "create")}`);
@@ -316,9 +315,7 @@ export function generateMutators(schema: SchemaDefinition): string {
       return [
         `export interface ${inputName} {`,
         ...Object.entries(collection.fields)
-          .filter(
-            ([fieldName, field]) => !BASE_FIELD_NAMES.has(fieldName) && !field.derived && field.merge !== "immutable",
-          )
+          .filter(([fieldName, field]) => !BASE_FIELD_NAMES.has(fieldName) && field.merge !== "immutable")
           .map(([fieldName, field]) => `  readonly ${propertyName(fieldName)}?: ${tsType(field)};`),
         "}",
         "",
@@ -618,7 +615,7 @@ function typeFields(collection: CollectionDefinition, internal: boolean): string
   const lines: string[] = [];
   for (const [name, field] of Object.entries(collection.fields)) {
     lines.push(`    ${propertyName(name)}: ${tsType(field)};`);
-    if (internal && !field.derived) {
+    if (internal) {
       lines.push(`    ${propertyName(`_weft_hlc_${name}`)}: string | null;`);
       if (field.merge === "diff3")
         lines.push(`    ${propertyName(`_weft_base_${name}`)}: ${tsType({ ...field, nullable: true })};`);
@@ -637,7 +634,7 @@ function kyselyFields(collection: CollectionDefinition, internal: boolean): stri
   const lines: string[] = [];
   for (const [name, field] of Object.entries(collection.fields)) {
     lines.push(`    ${propertyName(name)}: ColumnType<${tsType(field)}, ${insertType(field)}, ${updateType(field)}>;`);
-    if (internal && !field.derived) {
+    if (internal) {
       lines.push(`    ${propertyName(`_weft_hlc_${name}`)}: string | null;`);
       if (field.merge === "diff3")
         lines.push(`    ${propertyName(`_weft_base_${name}`)}: ${tsType({ ...field, nullable: true })};`);
@@ -772,12 +769,11 @@ function jsonTypeGuard(schema: SchemaDefinition): readonly string[] {
 }
 
 function insertType(field: FieldDefinition): string {
-  if (field.derived) return "never";
   return field.nullable ? `${tsType(field)} | undefined` : tsType(field);
 }
 
 function updateType(field: FieldDefinition): string {
-  if (field.derived || field.merge === "immutable") return "never";
+  if (field.merge === "immutable") return "never";
   return field.nullable ? tsType(field) : `${tsType(field)} | undefined`;
 }
 

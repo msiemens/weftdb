@@ -1,8 +1,8 @@
 // Generated code, over schemas nobody wrote by hand. Everything about codegen has been checked
 // against two or three schemas somebody thought of, which tests the schemas rather than the
 // generator: the interesting inputs are the ones with names that collide once punctuation is
-// dropped, collections that are event logs, fields that are nullable, derived or immutable, and
-// tables whose names need quoting.
+// dropped, collections that are event logs, fields that are nullable or immutable, and tables
+// whose names need quoting.
 //
 // What the generated artifacts have to be is checkable without reading them: the DDL has to be
 // SQL that SQLite accepts and that produces the columns the types promise, the emitted names
