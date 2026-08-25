@@ -9,8 +9,11 @@ import {
   BroadcastDbProxy,
   MultiTabCoordinator,
   OpfsWorkerTransport,
+  serveBroadcastDbProxy,
+  type CompiledQuery,
   type LockManagerLike,
   type ProxyRequest,
+  type ProxyTarget,
   type TabRole,
   type WorkerRequest,
   type WorkerResponse,
@@ -264,6 +267,237 @@ test("§8.7 a tab with no Web Locks support runs degraded rather than pretending
   assert.equal(coordinator.role, "degraded");
   coordinator.close();
 });
+
+test("§8.7 the leader answers a follower's request without an application-written responder", async () => {
+  const channelName = `weft-serve-${Math.trunc(performance.now() * 1000)}`;
+  const followerChannel = new BroadcastChannel(channelName);
+  const leaderChannel = new BroadcastChannel(channelName);
+  const proxy = new BroadcastDbProxy(followerChannel);
+  const target = new RecordingTarget();
+  const stop = serveBroadcastDbProxy({ channel: leaderChannel, target });
+
+  try {
+    // Each of the three request kinds has to reach its own method with its own argument, or the
+    // proxy is forwarding into a responder that answers everything the same way.
+    assert.deepEqual(await proxy.request({ type: "open", scopeId: "scope" }), {
+      id: 1,
+      ok: true,
+      value: "opened:scope",
+    });
+    assert.deepEqual(await proxy.request({ type: "execute", query: { sql: "select 1", parameters: [] } }), {
+      id: 2,
+      ok: true,
+      value: "rows:select 1",
+    });
+    assert.deepEqual(await proxy.request({ type: "close" }), { id: 3, ok: true, value: "closed" });
+    assert.deepEqual(target.calls, ["open:scope", "execute:select 1", "close"]);
+  } finally {
+    stop();
+    proxy.dispose();
+    followerChannel.close();
+    leaderChannel.close();
+  }
+});
+
+test("§8.7 a target that throws reaches the follower as a failed response", async () => {
+  const channelName = `weft-serve-fail-${Math.trunc(performance.now() * 1000)}`;
+  const followerChannel = new BroadcastChannel(channelName);
+  const leaderChannel = new BroadcastChannel(channelName);
+  const proxy = new BroadcastDbProxy(followerChannel);
+  const target = new RecordingTarget();
+  target.failWith = "no such table: todos";
+  const stop = serveBroadcastDbProxy({ channel: leaderChannel, target });
+
+  try {
+    const response = await proxy.request({ type: "close" });
+    // A rejection has to survive the channel as text; dropping it would hang the follower on a
+    // request the leader had already given up on.
+    assert.equal(response.ok, false, "a throwing target answered as a success");
+    assert.equal(response.ok ? "" : response.error, "no such table: todos");
+  } finally {
+    stop();
+    proxy.dispose();
+    followerChannel.close();
+    leaderChannel.close();
+  }
+});
+
+test("§8.7 the leader treats a reply on the channel as noise rather than as a request", async () => {
+  // Every tab on the channel hears every message, another leader's replies included. A responder
+  // that took a `ProxyResponse` for a request would answer an answer, and two of them would feed
+  // each other forever.
+  const channelName = `weft-serve-noise-${Math.trunc(performance.now() * 1000)}`;
+  const leaderChannel = new BroadcastChannel(channelName);
+  const noiseChannel = new BroadcastChannel(channelName);
+  const watcherChannel = new BroadcastChannel(channelName);
+  const target = new RecordingTarget();
+  // Counting what crosses the channel is what makes this a test of the guard. Asserting only that
+  // the target went untouched would also pass for a responder that let the noise through and threw
+  // on the way, which still puts a reply on the channel for a peer to trip over.
+  let seen = 0;
+  watcherChannel.addEventListener("message", () => {
+    seen += 1;
+  });
+  const stop = serveBroadcastDbProxy({ channel: leaderChannel, target });
+
+  try {
+    const noise = [
+      { client: "somebody", response: { id: 1, ok: true, value: "an answer" } },
+      { client: "somebody", request: { id: 2, type: "nonsense" } },
+      "not an envelope at all",
+    ];
+    for (const message of noise) noiseChannel.postMessage(message);
+    await waitFor(() => seen >= noise.length, "the watcher never heard the noise");
+    await delay(25);
+
+    assert.deepEqual(target.calls, [], "the leader ran something that was not a request");
+    assert.equal(seen, noise.length, "the leader put a reply on the channel in answer to noise");
+  } finally {
+    stop();
+    leaderChannel.close();
+    noiseChannel.close();
+    watcherChannel.close();
+  }
+});
+
+test("§8.7 a tab that has lost the lock stops answering", async () => {
+  const channelName = `weft-serve-abdicate-${Math.trunc(performance.now() * 1000)}`;
+  const followerChannel = new BroadcastChannel(channelName);
+  const leaderChannel = new BroadcastChannel(channelName);
+  const proxy = new BroadcastDbProxy(followerChannel);
+  const target = new RecordingTarget();
+  let leading = true;
+  const stop = serveBroadcastDbProxy({ channel: leaderChannel, target, isLeader: () => leading });
+
+  try {
+    assert.deepEqual(await proxy.request({ type: "close" }), { id: 1, ok: true, value: "closed" });
+
+    // Losing the lock has to take effect before the successor takes it, or one request is run by
+    // two leaders against two handles.
+    leading = false;
+    const pending = proxy.request({ type: "close" });
+    const result = await Promise.race([
+      pending.then(() => "answered" as const),
+      delay(50).then(() => "silent" as const),
+    ]);
+    assert.equal(result, "silent", "a tab that had lost the lock still answered");
+    assert.deepEqual(target.calls, ["close"], "a tab that had lost the lock still touched the database");
+  } finally {
+    stop();
+    proxy.dispose();
+    followerChannel.close();
+    leaderChannel.close();
+  }
+});
+
+test("§8.7 stopping the leader drops a reply it had not yet posted", async () => {
+  const channelName = `weft-serve-stop-${Math.trunc(performance.now() * 1000)}`;
+  const followerChannel = new BroadcastChannel(channelName);
+  const leaderChannel = new BroadcastChannel(channelName);
+  const proxy = new BroadcastDbProxy(followerChannel);
+  let release: (() => void) | undefined;
+  const target: ProxyTarget = {
+    open: () => Promise.resolve(undefined),
+    execute: () => Promise.resolve(undefined),
+    close: () =>
+      new Promise((resolve) => {
+        release = () => {
+          resolve("late");
+        };
+      }),
+  };
+  const stop = serveBroadcastDbProxy({ channel: leaderChannel, target });
+
+  try {
+    const pending = proxy.request({ type: "close" });
+    await waitFor(() => release !== undefined, "the leader never began the request");
+    stop();
+    release?.();
+
+    const result = await Promise.race([
+      pending.then(() => "answered" as const),
+      delay(50).then(() => "silent" as const),
+    ]);
+    assert.equal(result, "silent", "a stopped leader posted a reply it had started before stopping");
+  } finally {
+    proxy.dispose();
+    followerChannel.close();
+    leaderChannel.close();
+  }
+});
+
+test("§8.7 one served channel answers every follower's every request", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.integer({ min: 1, max: 4 }), fc.integer({ min: 1, max: 5 }), async (followers, each) => {
+      const channelName = `weft-serve-many-${followers}-${each}-${Math.trunc(performance.now() * 1000)}`;
+      const leaderChannel = new BroadcastChannel(channelName);
+      const channels = Array.from({ length: followers }, () => new BroadcastChannel(channelName));
+      const proxies = channels.map((channel) => new BroadcastDbProxy(channel));
+      const stop = serveBroadcastDbProxy({ channel: leaderChannel, target: new RecordingTarget() });
+
+      try {
+        // Every request carries its own statement, so a reply that reached the wrong follower or
+        // the wrong request inside one follower shows up as a mismatched answer rather than as a
+        // hang that a timeout would have to catch.
+        const issued = proxies.flatMap((proxy, tab) =>
+          Array.from({ length: each }, (_, index) => {
+            const sql = `select ${tab}-${index}`;
+            return proxy.request({ type: "execute", query: { sql, parameters: [] } }).then((response) => ({
+              sql,
+              value: response.ok ? response.value : `error:${response.error}`,
+            }));
+          }),
+        );
+
+        for (const answer of await Promise.all(issued)) {
+          assert.equal(answer.value, `rows:${answer.sql}`, "a reply reached the wrong follower or request");
+        }
+      } finally {
+        stop();
+        for (const proxy of proxies) proxy.dispose();
+        for (const channel of channels) channel.close();
+        leaderChannel.close();
+      }
+    }),
+    { numRuns: Math.min(SCENARIO_RUNS, 25) },
+  );
+});
+
+test("§8.7 the worker transport is a leader-side target as it stands", () => {
+  const worker = new DeferredWorker();
+  const transport = new OpfsWorkerTransport(worker);
+  // A leader holding the worker passes it straight in. If this stops compiling, the two halves of
+  // the same protocol have drifted apart.
+  const target: ProxyTarget = transport;
+  assert.equal(typeof target.execute, "function");
+  transport.dispose();
+});
+
+/** A leader-side target that records what it was asked and answers with a value naming the call. */
+class RecordingTarget implements ProxyTarget {
+  readonly calls: string[] = [];
+  failWith: string | undefined;
+
+  open(scopeId: string): Promise<unknown> {
+    this.calls.push(`open:${scopeId}`);
+    return this.#answer(`opened:${scopeId}`);
+  }
+
+  execute(query: CompiledQuery): Promise<unknown> {
+    this.calls.push(`execute:${query.sql}`);
+    return this.#answer(`rows:${query.sql}`);
+  }
+
+  close(): Promise<unknown> {
+    this.calls.push("close");
+    return this.#answer("closed");
+  }
+
+  #answer(value: string): Promise<unknown> {
+    if (this.failWith !== undefined) return Promise.reject(new Error(this.failWith));
+    return Promise.resolve(value);
+  }
+}
 
 /** Web Locks semantics: the holder keeps the lock until its tab goes away. */
 class ExclusiveLocks implements LockManagerLike {

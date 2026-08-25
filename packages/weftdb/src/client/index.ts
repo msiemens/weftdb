@@ -918,7 +918,15 @@ export type { CompiledQuery, QueryBuilderLike, QueryDependency, RegisteredQuery 
 export { compileOnlyKysely } from "./kysely.ts";
 export { OpfsWorkerTransport } from "./worker.ts";
 export type { WorkerLike, WorkerRequest, WorkerRequestBody, WorkerResponse } from "./worker.ts";
-export { BroadcastDbProxy, MultiTabCoordinator } from "./multitab.ts";
-export type { LockManagerLike, MultiTabOptions, ProxyRequest, ProxyResponse, TabRole } from "./multitab.ts";
+export { BroadcastDbProxy, MultiTabCoordinator, serveBroadcastDbProxy } from "./multitab.ts";
+export type {
+  BroadcastDbProxyServerOptions,
+  LockManagerLike,
+  MultiTabOptions,
+  ProxyRequest,
+  ProxyResponse,
+  ProxyTarget,
+  TabRole,
+} from "./multitab.ts";
 export { Diff3EditorBuffer } from "./editor.ts";
 export type { BufferedRemoteEdit } from "./editor.ts";

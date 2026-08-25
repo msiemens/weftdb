@@ -1,3 +1,4 @@
+import type { CompiledQuery } from "./query.ts";
 import type { WorkerRequest, WorkerRequestBody, WorkerResponse } from "./worker.ts";
 
 export type TabRole = "leader" | "follower" | "degraded";
@@ -133,6 +134,97 @@ export class BroadcastDbProxy {
     this.#pending.delete(message.response.id);
     pending.resolve(message.response);
   };
+}
+
+/**
+ * What a leader runs a follower's request against. `OpfsWorkerTransport` satisfies this
+ * structurally, so a leader that already holds one passes it straight in; a test passes a double.
+ */
+export interface ProxyTarget {
+  open(scopeId: string): Promise<unknown>;
+  execute(query: CompiledQuery): Promise<unknown>;
+  close(): Promise<unknown>;
+}
+
+export interface BroadcastDbProxyServerOptions {
+  readonly channel: BroadcastChannel;
+  readonly target: ProxyTarget;
+  /**
+   * Consulted once per request. A tab that has lost the lock must stop answering before a
+   * successor starts, or two leaders answer one request and the follower settles on whichever
+   * reply arrived first.
+   */
+  readonly isLeader?: () => boolean;
+}
+
+/**
+ * The leader half of `BroadcastDbProxy`: it takes what a follower puts on the channel, runs it
+ * against the target, and addresses the reply back to the tab that asked. Returns the function
+ * that stops it.
+ *
+ * A reply produced after stopping is dropped rather than posted. Stopping is how a tab abdicates,
+ * and an abdicated leader that still answers is the two-leader case `isLeader` exists to prevent.
+ */
+export function serveBroadcastDbProxy(options: BroadcastDbProxyServerOptions): () => void {
+  const { channel, target } = options;
+  let serving = true;
+
+  const reply = (client: string, response: WorkerResponse): void => {
+    if (!serving) return;
+    channel.postMessage({ client, response } satisfies ProxyResponse);
+  };
+
+  const onMessage = (event: MessageEvent<unknown>): void => {
+    const envelope = event.data;
+    // The guard is what keeps a leader from answering its own replies: a `ProxyResponse` carries
+    // `response` where a request carries `request`, and both ride the same channel.
+    if (!serving || !isProxyRequest(envelope)) return;
+    if (options.isLeader !== undefined && !options.isLeader()) return;
+    const { id } = envelope.request;
+    void dispatch(target, envelope.request).then(
+      (value) => {
+        reply(envelope.client, { id, ok: true, value });
+      },
+      (error: unknown) => {
+        reply(envelope.client, { id, ok: false, error: describeError(error) });
+      },
+    );
+  };
+
+  channel.addEventListener("message", onMessage);
+  return () => {
+    serving = false;
+    channel.removeEventListener("message", onMessage);
+  };
+}
+
+function dispatch(target: ProxyTarget, request: WorkerRequest): Promise<unknown> {
+  switch (request.type) {
+    case "open":
+      return target.open(request.scopeId);
+    case "execute":
+      return target.execute(request.query);
+    case "close":
+      return target.close();
+  }
+}
+
+/**
+ * A rejection crosses the channel as text, because an `Error` does not survive structured clone
+ * with its prototype intact and the follower rebuilds one from the message anyway.
+ */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isProxyRequest(value: unknown): value is ProxyRequest {
+  if (typeof value !== "object" || value === null) return false;
+  const envelope = value as { readonly client?: unknown; readonly request?: unknown };
+  if (typeof envelope.client !== "string" || typeof envelope.request !== "object" || envelope.request === null)
+    return false;
+  const request = envelope.request as { readonly id?: unknown; readonly type?: unknown };
+  if (typeof request.id !== "number") return false;
+  return request.type === "open" || request.type === "execute" || request.type === "close";
 }
 
 function isProxyResponse(value: unknown): value is ProxyResponse {

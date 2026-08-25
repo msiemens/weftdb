@@ -154,19 +154,53 @@ on drop. Otherwise a remote reorder could resort the row out from under the poin
 
 An on-device database opened through the WebAssembly SQLite executor holds one OPFS synchronous
 access handle, open in one tab at a time. `MultiTabCoordinator.elect()` resolves that with a Web
-Lock: the tab that acquires it becomes `leader`, everything else becomes `follower`, and a tab with
-neither the lock nor an answer yet is `degraded`:
+Lock: the tab that acquires it becomes `leader`, and every other tab becomes `follower`. A tab in a
+browser without Web Locks is `degraded`, and so is a leader after it calls `close()`.
+
+A Web Lock is held for exactly as long as the callback's promise is pending, so the leader's
+callback returns one that stays pending until `close()`. A callback that returned straight away
+would hand the lock back and leave each tab in turn believing it leads:
 
 ```ts
 // inside MultiTabCoordinator.elect
-await this.locks.request(`weft:${this.scopeId}:opfs`, { ifAvailable: true }, (lock) => {
-  this.role = lock === null ? "follower" : "leader";
+locks.request(`weft:${this.scopeId}:opfs`, { ifAvailable: true }, (lock) => {
+  if (lock === null) {
+    this.role = "follower";
+    resolveRole(this.role);
+    return undefined;
+  }
+  this.role = "leader";
+  resolveRole(this.role);
+  return new Promise<void>((releaseLock) => {
+    this.#release = releaseLock;
+  });
 });
 ```
 
-A follower does not open the database itself: `BroadcastDbProxy` forwards its requests to the
-leader over a `BroadcastChannel` and resolves when the leader answers. `degraded` is the state to
-show a banner for: the window between a leader tab closing and a successor acquiring the lock.
+A follower does not open the database itself. `BroadcastDbProxy` forwards its requests over a
+`BroadcastChannel`, and `serveBroadcastDbProxy` answers them on the leader:
+
+```ts
+// on the leader, after elect() has returned "leader"
+const stop = serveBroadcastDbProxy({
+  channel: new BroadcastChannel(`weft:${scopeId}:db`),
+  target: transport,
+  isLeader: () => coordinator.role === "leader",
+});
+```
+
+`target` is anything with `open`, `execute`, and `close`, which `OpfsWorkerTransport` already is.
+`isLeader` is consulted once per request, so a tab that has lost the lock stops answering before
+its successor starts. Calling `stop` detaches the responder, and a reply produced after that is
+dropped rather than posted.
+
+Give the proxy and the responder the same channel name. `MultiTabCoordinator` opens a channel of
+its own and never posts on it, so name a channel yourself and pass it to both.
+
+`BroadcastDbProxy.request` waits without a deadline. A follower whose leader dies mid-request, or
+that asks before any leader is serving, waits until the proxy is disposed. Drive a banner from
+`role` rather than from a request that has not come back, and re-run `elect()` when a follower
+needs to find out that leadership has moved.
 
 The demo sidesteps this rather than exercising it: each tab gets its own device id and its own
 `localStorage`-backed store, so tabs sync as separate devices through the relay instead of sharing

@@ -106,11 +106,13 @@ export {
   queryCacheKey,
   queryKey,
   serializeClient,
+  serveBroadcastDbProxy,
   visibleChildren,
 } from "weftdb/client";
 export type {
   AsyncSyncTransport,
   BroadcastChannelLike,
+  BroadcastDbProxyServerOptions,
   BufferedRemoteEdit,
   ClientPersistence,
   CollectionFacade,
@@ -127,6 +129,7 @@ export type {
   MutationInput,
   ProxyRequest,
   ProxyResponse,
+  ProxyTarget,
   PushResult,
   QuarantinedOp,
   QueryBuilderLike,
