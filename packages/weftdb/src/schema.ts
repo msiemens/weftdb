@@ -18,6 +18,23 @@ export interface FieldDefinition {
   jsonType?: JsonTypeReference;
 }
 
+declare const jsonValue: unique symbol;
+
+/**
+ * The TypeScript type a `json` field holds, carried on the definition's type and nowhere in its
+ * value. Nothing reads this property, and nothing sets it: it exists so `FieldValue` can recover
+ * the declared type, which the generated files get from `JsonTypeReference.as` instead.
+ *
+ * Both are needed, and neither replaces the other. `as` is a string, and a string cannot become a
+ * type, so it is no use to the hand-written types that read a schema — `WeftDb`'s `MutationInput`
+ * among them. A type parameter is a type, and it is erased before the generator, which reads the
+ * schema as a runtime value, ever sees it. So `S.json<SortConfig>({ as: "SortConfig" })` says the
+ * same thing twice because the two halves are read by different things.
+ */
+export interface JsonValued<Value> {
+  readonly [jsonValue]: (value: Value) => void;
+}
+
 /** A `json` field's declared type, as the generated files have to write it down. */
 export interface JsonTypeReference {
   /** The type expression the generated files use: `Tags`, or `readonly string[]`. */
@@ -66,8 +83,24 @@ export interface SchemaDefinition {
   schemaVersion: number;
 }
 
+/**
+ * The fields a collection actually declares.
+ *
+ * `CollectionDefinition["fields"]` is `Record<string, FieldDefinition>`, and `keyof` on anything
+ * carrying an index signature is `string`. A mapped type written over it therefore collapses into
+ * an index signature of its own, and every field's type becomes the constraint rather than the one
+ * it was declared with: a json field with a declared type reads back as `WireValue`, an enum reads
+ * back as `string`. Dropping the index signature first is what keeps the declaration.
+ */
+export type DeclaredFieldNames<Collection extends CollectionDefinition> = Extract<
+  keyof {
+    [Name in keyof Collection["fields"] as string extends Name ? never : number extends Name ? never : Name]: 0;
+  },
+  string
+>;
+
 export type EntityOf<Collection extends CollectionDefinition> = {
-  readonly [Name in keyof Collection["fields"]]: FieldValue<Collection["fields"][Name]>;
+  readonly [Name in DeclaredFieldNames<Collection>]: FieldValue<Collection["fields"][Name]>;
 };
 
 export type DatabaseOf<Schema extends SchemaDefinition> = {
@@ -79,9 +112,17 @@ export type FieldValue<Field extends FieldDefinition> = Field["nullable"] extend
   ? DeclaredValue<Field> | null
   : DeclaredValue<Field>;
 
-type DeclaredValue<Field extends FieldDefinition> = Field extends { values: readonly (infer Value)[] }
-  ? Value
-  : ScalarType<Field["type"]>;
+/**
+ * A declared json type first: a field that carries one is worth exactly that type, and everything
+ * reading a schema — `WeftDb`'s `MutationInput` as much as the generated row — should say so rather
+ * than fall back to `WireValue` and make the caller assert its way out.
+ */
+type DeclaredValue<Field extends FieldDefinition> =
+  Field extends JsonValued<infer Value>
+    ? Value
+    : Field extends { values: readonly (infer Value)[] }
+      ? Value
+      : ScalarType<Field["type"]>;
 
 /** A `date` is an ISO-8601 string: what the client writes and what the column holds. */
 export type ScalarType<Type extends FieldDefinition["type"]> = Type extends "number"
@@ -144,13 +185,15 @@ export const S = {
    * can — a declared type that reduces to methods, as a `Date` or a `Map` does, has no wire form
    * and fails to compile there — but nothing here can see through a name to what it will hold.
    */
-  json: (options?: JsonFieldOptions): FieldDefinition => {
+  json: <Value = WireValue>(options?: JsonFieldOptions): FieldDefinition & JsonValued<Value> => {
     const definition = field("json", options);
-    if (options?.as === undefined) return definition;
+    // Cast because the brand is a type and not a value: nothing sets the property, nothing reads
+    // it, and it is keyed by a symbol nothing outside this module can name.
+    if (options?.as === undefined) return definition as FieldDefinition & JsonValued<Value>;
     const reference: JsonTypeReference =
       options.from === undefined ? { as: options.as } : { as: options.as, from: options.from };
     assertDeclaredJsonType(reference);
-    return { ...definition, jsonType: reference };
+    return { ...definition, jsonType: reference } as FieldDefinition & JsonValued<Value>;
   },
   date: (options?: FieldOptions) => field("date", options),
   /**

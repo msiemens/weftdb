@@ -1,11 +1,13 @@
+import type { TxnId } from "weftdb/core";
+
 export interface ProjectsMutation {
   readonly name?: string;
   readonly rank?: string;
 }
 export interface ProjectsMutators {
-  create(id: string, values: ProjectsMutation): void;
-  update(id: string, values: ProjectsMutation): void;
-  delete(id: string): void;
+  create(id: string, values: ProjectsMutation, txnId?: TxnId): void;
+  update(id: string, values: ProjectsMutation, txnId?: TxnId): void;
+  delete(id: string, txnId?: TxnId): void;
 }
 
 export interface IssuesMutation {
@@ -16,9 +18,9 @@ export interface IssuesMutation {
   readonly rank?: string;
 }
 export interface IssuesMutators {
-  create(id: string, values: IssuesMutation): void;
-  update(id: string, values: IssuesMutation): void;
-  delete(id: string): void;
+  create(id: string, values: IssuesMutation, txnId?: TxnId): void;
+  update(id: string, values: IssuesMutation, txnId?: TxnId): void;
+  delete(id: string, txnId?: TxnId): void;
 }
 
 export interface CommentsMutation {
@@ -29,5 +31,5 @@ export interface CommentsMutation {
   readonly author__device?: string;
 }
 export interface CommentsMutators {
-  create(id: string, values: CommentsMutation): void;
+  create(id: string, values: CommentsMutation, txnId?: TxnId): void;
 }

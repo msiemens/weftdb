@@ -13,7 +13,7 @@
 import assert from "node:assert/strict";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { test } from "vitest";
-import { deviceId, fieldName, rowId, scopeId } from "weftdb/core";
+import { deviceId, fieldName, rowId, scopeId, txnId } from "weftdb/core";
 import {
   createWeftDb,
   OpfsWorkerTransport,
@@ -265,3 +265,30 @@ class PortEndpoint<Incoming> {
     this.#port.removeEventListener("message", wrapped);
   }
 }
+
+test("§8.7 two collections can be written in one transaction through the generated mutators", () => {
+  // The relay applies a transaction as a unit, so a status change and the event that records it
+  // have to share one or they are two writes that can be accepted separately — leaving a history
+  // that disagrees with the row it describes. Without a `txnId` parameter the only way to say so
+  // was to drop out of the generated mutators and into the facade.
+  const client = new WeftClient(SCOPE, DEVICE, schema, () => 1_000);
+  const shared = txnId("status-and-history");
+
+  todosMutators(client).create("todo-1", ALPHA, shared);
+  todoEventsMutators(client).create("event-1", { todo_id: "todo-1", kind: "created", actor: "laptop" }, shared);
+
+  const transactions = new Set(client.outbox.map((op) => String(op.txnId)));
+  assert.deepEqual([...transactions], ["status-and-history"], "the two collections were written separately");
+});
+
+test("§8.7 a generated mutator left to itself still mints its own transaction", () => {
+  // The parameter is optional, and the default has to stay: two unrelated edits sharing a
+  // transaction would be refused together, so one rejected write would take the other with it.
+  const client = new WeftClient(SCOPE, DEVICE, schema, () => 1_000);
+  const todos = todosMutators(client);
+
+  todos.create("todo-1", ALPHA);
+  todos.create("todo-2", { ...ALPHA, rank: "a1" });
+
+  assert.equal(new Set(client.outbox.map((op) => String(op.txnId))).size, 2, "two creates shared one transaction");
+});

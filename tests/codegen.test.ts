@@ -5,6 +5,7 @@ import ts from "typescript";
 import {
   generateArtifacts,
   generateBindings,
+  generateMutators,
   generateNestedMappers,
   generateRelationshipHelpers,
   lintAdditiveEvolution,
@@ -20,6 +21,37 @@ test("the generated query builder scopes its statement and selects the id the en
   assert.match(bindings, /selectFrom\("todos"\)\.select\("id"\)\.where\("scope_id", "=", scopeId\)/u);
   assert.match(bindings, /build: TodosQueryBuilder = \(statement\) => statement/u);
   assert.match(bindings, /export function useTodosQuery\(source: WeftSqlSource/u);
+});
+
+test("the json carriability checks are exported, so a strict consumer can still compile them", () => {
+  const bindings = generateBindings(
+    defineSchema({ views: S.collection({ sort: S.json({ as: "SortConfig", from: "../types.ts" }) }) }),
+  );
+
+  // A type alias that is only ever declared is TS6196 under `noUnusedLocals`, which Vite's
+  // React-TypeScript template turns on. Left local, these assertions failed the build of the very
+  // application they were generated for, and the fix was to patch the word in after generating.
+  assert.match(bindings, /export type WeftJsonCheck1 = WeftDeclaredJson<SortConfig, WeftJsonCarriable<SortConfig>>;/u);
+  assert.doesNotMatch(bindings, /^type WeftJsonCheck/mu, "a check was emitted as a local type alias");
+});
+
+test("generated mutators take the transaction their caller wants them in", () => {
+  const mutators = generateMutators(
+    defineSchema({
+      todos: S.collection({ title: S.string() }),
+      todo_events: S.eventLog({ todo_id: S.string() }),
+    }),
+  );
+
+  // The relay applies a transaction as a unit, so two collections written together have to be able
+  // to share one. Without this the only way to say so was the facade, and an application reached
+  // for it to get atomicity and lost the generated types on the way.
+  assert.match(mutators, /create\(id: string, values: TodosMutation, txnId\?: TxnId\): void;/u);
+  assert.match(mutators, /update\(id: string, values: TodosMutation, txnId\?: TxnId\): void;/u);
+  assert.match(mutators, /delete\(id: string, txnId\?: TxnId\): void;/u);
+  // An event log has no update or delete, and its create takes one on the same terms.
+  assert.match(mutators, /create\(id: string, values: TodoEventsMutation, txnId\?: TxnId\): void;/u);
+  assert.match(mutators, /^import type \{ TxnId \} from "weftdb\/core";/mu);
 });
 
 /** The smallest executor that is really SQLite, and really one statement per call. */

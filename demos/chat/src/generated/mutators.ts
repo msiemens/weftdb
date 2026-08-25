@@ -1,10 +1,12 @@
+import type { TxnId } from "weftdb/core";
+
 export interface MessagesMutation {
   readonly body?: string;
   readonly device?: string;
   readonly author?: string;
 }
 export interface MessagesMutators {
-  create(id: string, values: MessagesMutation): void;
+  create(id: string, values: MessagesMutation, txnId?: TxnId): void;
 }
 
 export interface DevicesMutation {
@@ -12,7 +14,7 @@ export interface DevicesMutation {
   readonly last_seen?: number;
 }
 export interface DevicesMutators {
-  create(id: string, values: DevicesMutation): void;
-  update(id: string, values: DevicesMutation): void;
-  delete(id: string): void;
+  create(id: string, values: DevicesMutation, txnId?: TxnId): void;
+  update(id: string, values: DevicesMutation, txnId?: TxnId): void;
+  delete(id: string, txnId?: TxnId): void;
 }

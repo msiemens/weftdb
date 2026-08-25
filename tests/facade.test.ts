@@ -175,3 +175,47 @@ test("the facade is a view of one client, not a copy of its state", () => {
     "through the facade",
   );
 });
+
+/** An application's own type for a json field, of the shape no `WireValue` will accept as-is. */
+interface SortConfig {
+  readonly field: "title" | "weight";
+  readonly direction: "asc" | "desc";
+}
+
+const declared = defineSchema({
+  views: S.collection({
+    label: S.string(),
+    // Twice, because the two halves are read by different things: the type is for whatever reads
+    // the schema's types, and the string is for the generator, which sees only the runtime value.
+    sort: S.json<SortConfig>({ as: "SortConfig", from: "../types.ts" }),
+  }),
+});
+
+test("a declared json type is the type the facade takes, without a cast", () => {
+  const client = new WeftClient(SCOPE, deviceId("laptop"), declared, () => 1_000);
+  const views = createWeftDb(client, declared).collection("views");
+
+  // The assertion is that this compiles. `MutationInput` used to type a json field as `WireValue`,
+  // whose object case demands an index signature, so an ordinary interface needed the very cast the
+  // declaration exists to remove — and the generated mutators and the facade disagreed about the
+  // same field.
+  const sort: SortConfig = { field: "title", direction: "desc" };
+  views.create("view-1", { label: "by title", sort });
+
+  assert.deepEqual(client.getRow(tableName("views"), rowId("view-1"))?.fields.get(fieldName("sort")), sort);
+});
+
+test("a json field with nothing declared still takes what the wire can carry", () => {
+  // The default has to stay put: a schema that says nothing about a json field's shape is the
+  // honest case, and narrowing it to something would break every one of them.
+  const open = defineSchema({ notes: S.collection({ payload: S.json() }) });
+  const client = new WeftClient(SCOPE, deviceId("laptop"), open, () => 1_000);
+  createWeftDb(client, open)
+    .collection("notes")
+    .create("note-1", { payload: { tags: ["a", "b"], count: 2 } });
+
+  assert.deepEqual(client.getRow(tableName("notes"), rowId("note-1"))?.fields.get(fieldName("payload")), {
+    tags: ["a", "b"],
+    count: 2,
+  });
+});

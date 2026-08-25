@@ -1,18 +1,25 @@
 import { fieldName, rowId, tableName, type FieldName, type TxnId, type WireValue } from "weftdb/core";
-import type { CollectionDefinition, FieldValue, SchemaDefinition } from "weftdb/schema";
+import type { CollectionDefinition, DeclaredFieldNames, FieldValue, SchemaDefinition } from "weftdb/schema";
 import type { MaterializedRow } from "./index.ts";
 import type { WeftDbTarget } from "./mutation-target.ts";
 
 type CollectionNames<Schema extends SchemaDefinition> = Extract<keyof Schema["collections"], string>;
-type FieldNames<Collection extends CollectionDefinition> = Extract<keyof Collection["fields"], string>;
+/** The declared names, not `string`: see `DeclaredFieldNames` for what the index signature does. */
+type FieldNames<Collection extends CollectionDefinition> = DeclaredFieldNames<Collection>;
 type DomainFieldNames<Collection extends CollectionDefinition> = Exclude<
   FieldNames<Collection>,
   "id" | "scope_id" | "created"
 >;
 
-export type MutationInput<Collection extends CollectionDefinition> = Partial<{
-  readonly [Name in DomainFieldNames<Collection>]: FieldValue<Collection["fields"][Name]>;
-}>;
+/**
+ * `| undefined` rather than `Partial`, because `exactOptionalPropertyTypes` makes the two differ:
+ * `Partial` says a key may be absent, and a caller spreading a value it does not always have
+ * passes the key holding `undefined`. Refusing that would make the ordinary `{ ...maybe }` shape a
+ * type error for the sake of a distinction the writer path does not make either way.
+ */
+export type MutationInput<Collection extends CollectionDefinition> = {
+  readonly [Name in DomainFieldNames<Collection>]?: FieldValue<Collection["fields"][Name]> | undefined;
+};
 
 export interface CollectionFacade<Collection extends CollectionDefinition> {
   create(id: string, values: MutationInput<Collection>, txnId?: TxnId): void;

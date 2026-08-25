@@ -1,3 +1,5 @@
+import type { TxnId } from "weftdb/core";
+
 export interface TodosMutation {
   readonly title?: string;
   readonly notes?: string;
@@ -7,9 +9,9 @@ export interface TodosMutation {
   readonly auto_delete_days?: number | null;
 }
 export interface TodosMutators {
-  create(id: string, values: TodosMutation): void;
-  update(id: string, values: TodosMutation): void;
-  delete(id: string): void;
+  create(id: string, values: TodosMutation, txnId?: TxnId): void;
+  update(id: string, values: TodosMutation, txnId?: TxnId): void;
+  delete(id: string, txnId?: TxnId): void;
 }
 
 export interface TodoEventsMutation {
@@ -18,5 +20,5 @@ export interface TodoEventsMutation {
   readonly actor?: string;
 }
 export interface TodoEventsMutators {
-  create(id: string, values: TodoEventsMutation): void;
+  create(id: string, values: TodoEventsMutation, txnId?: TxnId): void;
 }
