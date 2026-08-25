@@ -943,13 +943,31 @@ export { AuthorizerDependencyRecorder, compileQuery, dependency, invalidatesQuer
 export type { CompiledQuery, QueryBuilderLike, QueryDependency, RegisteredQuery } from "./query.ts";
 export { compileOnlyKysely } from "./kysely.ts";
 export type { ScopedRowQuery } from "./kysely.ts";
-export { OpfsWorkerTransport } from "./worker.ts";
-export type { WorkerLike, WorkerRequest, WorkerRequestBody, WorkerResponse } from "./worker.ts";
+export { isWorkerPush, OpfsWorkerTransport, withRequestId } from "./worker.ts";
+export type {
+  MirrorTransport,
+  WireRow,
+  WorkerDelta,
+  WorkerLike,
+  WorkerMessage,
+  WorkerMutation,
+  WorkerPush,
+  WorkerPushHandler,
+  WorkerRequest,
+  WorkerRequestBody,
+  WorkerResponse,
+} from "./worker.ts";
+export { serveWeftWorker, WeftWorkerHost } from "./worker-host.ts";
+export type { WeftWorkerHostOptions, WorkerHostPortLike } from "./worker-host.ts";
+export { WeftClientMirror } from "./worker-mirror.ts";
+export type { WeftClientMirrorOptions } from "./worker-mirror.ts";
 export { BroadcastDbProxy, MultiTabCoordinator, serveBroadcastDbProxy } from "./multitab.ts";
 export type {
+  BroadcastDbProxyServer,
   BroadcastDbProxyServerOptions,
   LockManagerLike,
   MultiTabOptions,
+  ProxyPush,
   ProxyRequest,
   ProxyResponse,
   ProxyTarget,

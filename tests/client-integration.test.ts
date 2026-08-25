@@ -121,7 +121,9 @@ test("broadcast proxy resolves matching responses", async () => {
     const response: WorkerResponse = { id: event.data.request.id, ok: true, value: "proxied" };
     leaderChannel.postMessage({ client: event.data.client, response } satisfies ProxyResponse);
   });
-  assert.deepEqual(await proxy.request({ type: "close" }), { id: 1, ok: true, value: "proxied" });
+  // Unwrapped to the value the worker answered with, not the envelope it travelled in: that is what
+  // makes the proxy a `MirrorTransport` a follower's mirror can read as if it held the worker port.
+  assert.equal(await proxy.request({ type: "close" }), "proxied");
   proxy.dispose();
   followerChannel.close();
   leaderChannel.close();
