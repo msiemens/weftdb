@@ -1,4 +1,13 @@
 import { DummyDriver, Kysely, SqliteAdapter, SqliteIntrospector, SqliteQueryCompiler } from "kysely";
+import type { SelectQueryBuilder } from "kysely";
+
+/**
+ * A statement over one collection that is already scoped and already selects `id`, which is what
+ * the engine needs of it and what a generated query builder hands to a caller to chain onto.
+ * Named here so generated code has no import of its own from `kysely`: an application that never
+ * declared the dependency still resolves this through `weftdb`.
+ */
+export type ScopedRowQuery<DB, TB extends keyof DB & string> = SelectQueryBuilder<DB, TB, { id: string }>;
 
 /**
  * A Kysely instance that can build and `.compile()` queries but never runs one. `DummyDriver`

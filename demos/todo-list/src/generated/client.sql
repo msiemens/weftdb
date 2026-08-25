@@ -1,4 +1,4 @@
--- weft schema 1 268577037fbc7bee8827586ed068f5816ccbacc73a87dbe5f499e7a2e1513b7b
+-- weft schema 1 261e31f619a3e2c236731394340cb556636688b574542070149f3f913b62b4f1
 CREATE TABLE IF NOT EXISTS outbox (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   scope_id TEXT NOT NULL,
@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS sync_state (
   schema_hash TEXT NOT NULL,
   schema_version INTEGER NOT NULL,
   device_id TEXT NOT NULL,
-  hlc_last TEXT
+  hlc_last TEXT,
+  resync_required INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS "todos" (
@@ -71,7 +72,8 @@ CREATE TABLE IF NOT EXISTS "todos" (
   _weft_first_synced_at INTEGER,
   _weft_rev INTEGER NOT NULL DEFAULT 0,
   _weft_dirty INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (id)
+  _weft_null_fields TEXT,
+  PRIMARY KEY (scope_id, id)
 );
 
 CREATE TABLE IF NOT EXISTS "todo_events" (
@@ -90,5 +92,6 @@ CREATE TABLE IF NOT EXISTS "todo_events" (
   _weft_first_synced_at INTEGER,
   _weft_rev INTEGER NOT NULL DEFAULT 0,
   _weft_dirty INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (id)
+  _weft_null_fields TEXT,
+  PRIMARY KEY (scope_id, id)
 );

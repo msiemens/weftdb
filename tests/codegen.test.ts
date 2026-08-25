@@ -13,6 +13,15 @@ import { SqliteClientStore } from "weftdb/client/sqlite";
 import type { SqlExecutor, SqlRow } from "weftdb/shared";
 import { defineSchema, S } from "weftdb/schema";
 
+test("the generated query builder scopes its statement and selects the id the engine reads", () => {
+  const bindings = generateBindings(defineSchema({ todos: S.collection({ title: S.string() }) }));
+  // Scoping is applied before the caller's callback runs, so an application cannot write a
+  // statement that ranges past its own scope: one database file holds every scope.
+  assert.match(bindings, /selectFrom\("todos"\)\.select\("id"\)\.where\("scope_id", "=", scopeId\)/u);
+  assert.match(bindings, /build: TodosQueryBuilder = \(statement\) => statement/u);
+  assert.match(bindings, /export function useTodosQuery\(source: WeftSqlSource/u);
+});
+
 /** The smallest executor that is really SQLite, and really one statement per call. */
 function executorOver(database: DatabaseSync): SqlExecutor {
   return {

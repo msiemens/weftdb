@@ -1,4 +1,4 @@
--- weft schema 1 509edeb0411ce2e5e8b0ae65f2da9a4df21ad74be48945f92a710f6d4a9f6bfb
+-- weft schema 1 8eabe274ff6100ddcfadec05062ec7a7972b37aeab246736cc388516c762cc1b
 CREATE TABLE IF NOT EXISTS fields (
   scope_id TEXT NOT NULL,
   table_name TEXT NOT NULL,

@@ -143,6 +143,7 @@ export type {
   ReactiveSqlQueryOptions,
   RegisteredQuery,
   RetentionCandidate,
+  ScopedRowQuery,
   RetentionPolicy,
   ScopeAdvanced,
   SessionOptions,

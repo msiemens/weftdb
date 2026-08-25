@@ -22,6 +22,7 @@ export interface InternalDatabase {
     _weft_first_synced_at: number | null;
     _weft_rev: number;
     _weft_dirty: number;
+    _weft_null_fields: string | null;
   };
   todo_events: {
     id: string;
@@ -39,5 +40,6 @@ export interface InternalDatabase {
     _weft_first_synced_at: number | null;
     _weft_rev: number;
     _weft_dirty: number;
+    _weft_null_fields: string | null;
   };
 }

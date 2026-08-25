@@ -45,6 +45,7 @@ export interface InternalDatabase {
     _weft_first_synced_at: number | null;
     _weft_rev: Generated<number>;
     _weft_dirty: Generated<number>;
+    _weft_null_fields: string | null;
   };
   issues: {
     id: ColumnType<string, string, never>;
@@ -67,6 +68,7 @@ export interface InternalDatabase {
     _weft_first_synced_at: number | null;
     _weft_rev: Generated<number>;
     _weft_dirty: Generated<number>;
+    _weft_null_fields: string | null;
   };
   comments: {
     id: ColumnType<string, string, never>;
@@ -88,5 +90,6 @@ export interface InternalDatabase {
     _weft_first_synced_at: number | null;
     _weft_rev: Generated<number>;
     _weft_dirty: Generated<number>;
+    _weft_null_fields: string | null;
   };
 }

@@ -918,6 +918,7 @@ export type { RetentionCandidate, RetentionPolicy } from "./retention.ts";
 export { AuthorizerDependencyRecorder, compileQuery, dependency, invalidatesQuery, queryCacheKey } from "./query.ts";
 export type { CompiledQuery, QueryBuilderLike, QueryDependency, RegisteredQuery } from "./query.ts";
 export { compileOnlyKysely } from "./kysely.ts";
+export type { ScopedRowQuery } from "./kysely.ts";
 export { OpfsWorkerTransport } from "./worker.ts";
 export type { WorkerLike, WorkerRequest, WorkerRequestBody, WorkerResponse } from "./worker.ts";
 export { BroadcastDbProxy, MultiTabCoordinator, serveBroadcastDbProxy } from "./multitab.ts";

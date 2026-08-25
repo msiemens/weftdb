@@ -1,4 +1,4 @@
--- weft schema 1 509edeb0411ce2e5e8b0ae65f2da9a4df21ad74be48945f92a710f6d4a9f6bfb
+-- weft schema 1 8eabe274ff6100ddcfadec05062ec7a7972b37aeab246736cc388516c762cc1b
 CREATE TABLE IF NOT EXISTS outbox (
   seq INTEGER PRIMARY KEY AUTOINCREMENT,
   scope_id TEXT NOT NULL,
@@ -45,7 +45,8 @@ CREATE TABLE IF NOT EXISTS sync_state (
   schema_hash TEXT NOT NULL,
   schema_version INTEGER NOT NULL,
   device_id TEXT NOT NULL,
-  hlc_last TEXT
+  hlc_last TEXT,
+  resync_required INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS "messages" (
@@ -64,7 +65,8 @@ CREATE TABLE IF NOT EXISTS "messages" (
   _weft_first_synced_at INTEGER,
   _weft_rev INTEGER NOT NULL DEFAULT 0,
   _weft_dirty INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (id)
+  _weft_null_fields TEXT,
+  PRIMARY KEY (scope_id, id)
 );
 
 CREATE TABLE IF NOT EXISTS "devices" (
@@ -81,5 +83,6 @@ CREATE TABLE IF NOT EXISTS "devices" (
   _weft_first_synced_at INTEGER,
   _weft_rev INTEGER NOT NULL DEFAULT 0,
   _weft_dirty INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (id)
+  _weft_null_fields TEXT,
+  PRIMARY KEY (scope_id, id)
 );

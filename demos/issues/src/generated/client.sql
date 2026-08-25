@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS "projects" (
   _weft_first_synced_at INTEGER,
   _weft_rev INTEGER NOT NULL DEFAULT 0,
   _weft_dirty INTEGER NOT NULL DEFAULT 0,
+  _weft_null_fields TEXT,
   PRIMARY KEY (scope_id, id)
 );
 
@@ -73,7 +74,7 @@ CREATE TABLE IF NOT EXISTS "issues" (
   "project_id" TEXT NOT NULL,
   "title" TEXT NOT NULL,
   "body" TEXT NOT NULL,
-  "status" TEXT NOT NULL CHECK ("status" IN ('open', 'started', 'closed', '"open"', '"started"', '"closed"')),
+  "status" TEXT NOT NULL CHECK ("status" IN ('open', 'started', 'closed')),
   "rank" TEXT NOT NULL,
   "_weft_hlc_id" TEXT,
   "_weft_hlc_scope_id" TEXT,
@@ -87,6 +88,7 @@ CREATE TABLE IF NOT EXISTS "issues" (
   _weft_first_synced_at INTEGER,
   _weft_rev INTEGER NOT NULL DEFAULT 0,
   _weft_dirty INTEGER NOT NULL DEFAULT 0,
+  _weft_null_fields TEXT,
   PRIMARY KEY (scope_id, id)
 );
 
@@ -110,5 +112,6 @@ CREATE TABLE IF NOT EXISTS "comments" (
   _weft_first_synced_at INTEGER,
   _weft_rev INTEGER NOT NULL DEFAULT 0,
   _weft_dirty INTEGER NOT NULL DEFAULT 0,
+  _weft_null_fields TEXT,
   PRIMARY KEY (scope_id, id)
 );

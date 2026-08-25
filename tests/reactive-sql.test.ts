@@ -7,7 +7,13 @@ import { test } from "vitest";
 import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/core";
 import type { SqlExecutor, SqlStatement } from "weftdb/shared";
 import { defineSchema, S } from "weftdb/schema";
-import { compileOnlyKysely, reactiveSqlQuery, SubscriptionEngine, WeftClient } from "weftdb/client";
+import {
+  compileOnlyKysely,
+  reactiveSqlQuery,
+  SubscriptionEngine,
+  WeftClient,
+  type ScopedRowQuery,
+} from "weftdb/client";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
 
@@ -171,6 +177,35 @@ test("a row the statement matched but the client does not hold is dropped", () =
     query: fixture.db.selectFrom("todos").select("id").where("scope_id", "in", [SCOPE, "scope-2"]).orderBy("id"),
   });
   assert.deepEqual(fixture.ids(query), ["todo-1"], "a row from another scope reached this client's result");
+});
+
+test("a generated-shape builder scopes the statement whatever the caller chains onto it", () => {
+  using fixture = Fixture.open();
+  fixture.add("todo-1", { title: "buy milk", done: false, rank: 2 });
+  fixture.add("todo-2", { title: "walk dog", done: false, rank: 1 });
+  fixture.save();
+
+  // The shape `weft generate` emits: the scope predicate and the `id` projection are applied
+  // before the callback ever sees the statement, so a caller can only add to it. Scoping stops
+  // being something an application has to remember.
+  const todosSqlQuery = (
+    scope: string,
+    build: (statement: ScopedRowQuery<Database, "todos">) => ScopedRowQuery<Database, "todos"> = (statement) =>
+      statement,
+  ) =>
+    reactiveSqlQuery({
+      tableName: TODOS,
+      query: build(fixture.db.selectFrom("todos").select("id").where("scope_id", "=", scope)),
+    });
+
+  // A predicate over a string field is the case that matched nothing while columns held JSON.
+  const filtered = todosSqlQuery(SCOPE, (statement) => statement.where("title", "=", "buy milk"));
+  assert.deepEqual(fixture.ids(filtered), ["todo-1"], "a predicate over a string field did not match");
+  assert.match(filtered.compiled.sql, /scope_id/u, "the builder handed over an unscoped statement");
+
+  const paged = todosSqlQuery(SCOPE, (statement) => statement.orderBy("rank").limit(1));
+  assert.deepEqual(fixture.ids(paged), ["todo-2"]);
+  assert.match(paged.compiled.sql, /scope_id/u, "chaining dropped the scope predicate");
 });
 
 test("a statement that does not constrain the scope is refused", () => {

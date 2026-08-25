@@ -107,13 +107,24 @@ export function useWeftRows<Row>(
  */
 export interface SqlQuerySource extends QueryLifecycleSource {
   readonly executor: import("weftdb/shared").SqlExecutor;
+  /** The scope the client was hydrated for. Generated query builders scope their statements by it. */
+  readonly scopeId: string;
 }
 
 export function useWeftSqlSnapshot(source: SqlQuerySource, query: ReactiveSqlQuery): QuerySnapshot {
-  const subscribe = useCallback((listener: () => void) => source.engine.subscribeSql(query, listener), [source, query]);
+  // Keyed by the cache key rather than by the query object. A generated builder compiles a fresh
+  // query on every render, and two statements that compile alike are the same query, so keying on
+  // identity would tear down the subscription and re-run the statement once a pass.
+  const latest = useRef(query);
+  latest.current = query;
+  const cacheKey = query.cacheKey;
+  const subscribe = useCallback(
+    (listener: () => void) => source.engine.subscribeSql(latest.current, listener),
+    [source, cacheKey],
+  );
   const getSnapshot = useCallback(
-    () => source.engine.getSqlSnapshot(query, source.executor, source.rows),
-    [source, query],
+    () => source.engine.getSqlSnapshot(latest.current, source.executor, source.rows),
+    [source, cacheKey],
   );
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
