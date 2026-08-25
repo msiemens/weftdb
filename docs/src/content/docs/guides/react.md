@@ -182,17 +182,21 @@ A follower does not open the database itself. `BroadcastDbProxy` forwards its re
 
 ```ts
 // on the leader, after elect() has returned "leader"
-const stop = serveBroadcastDbProxy({
+const server = serveBroadcastDbProxy({
   channel: new BroadcastChannel(`weft:${scopeId}:db`),
   target: transport,
   isLeader: () => coordinator.role === "leader",
 });
 ```
 
-`target` is anything with `open`, `execute`, and `close`, which `OpfsWorkerTransport` already is.
-`isLeader` is consulted once per request, so a tab that has lost the lock stops answering before
-its successor starts. Calling `stop` detaches the responder, and a reply produced after that is
-dropped rather than posted.
+`target` is anything with a `request` method, which `OpfsWorkerTransport` already has. A follower
+speaks the whole worker protocol through it, so hydrating, mutating, and watching all cross the
+channel. `isLeader` is consulted once per request, so a tab that has lost the lock stops answering
+before its successor starts. Calling `server.stop()` detaches the responder, and a reply produced
+after that is dropped rather than posted.
+
+The leader also feeds its worker's unsolicited deltas to `server.relayPush`, or a follower's rows
+never move after the first load.
 
 Give the proxy and the responder the same channel name. `MultiTabCoordinator` opens a channel of
 its own and never posts on it, so name a channel yourself and pass it to both.

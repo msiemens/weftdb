@@ -1,6 +1,7 @@
 import { fieldName, rowId, tableName, type FieldName, type TxnId, type WireValue } from "weftdb/core";
 import type { CollectionDefinition, FieldValue, SchemaDefinition } from "weftdb/schema";
-import type { MaterializedRow, WeftClient } from "./index.ts";
+import type { MaterializedRow } from "./index.ts";
+import type { WeftDbTarget } from "./mutation-target.ts";
 
 type CollectionNames<Schema extends SchemaDefinition> = Extract<keyof Schema["collections"], string>;
 type FieldNames<Collection extends CollectionDefinition> = Extract<keyof Collection["fields"], string>;
@@ -21,11 +22,19 @@ export interface CollectionFacade<Collection extends CollectionDefinition> {
   list(): MaterializedRow[];
 }
 
+/**
+ * A schema-shaped face over a device's writes and reads.
+ *
+ * The target is structural, so this works over a `WeftClient` on the thread that renders and over a
+ * `WeftClientMirror` standing in for one that lives in a worker. Nothing below cares which: a
+ * mirror's `create` returns before the row exists, so `get` after a `create` answers only once the
+ * worker's echo has arrived, and that is the whole of the difference.
+ */
 export class WeftDb<Schema extends SchemaDefinition> {
-  readonly client: WeftClient;
+  readonly client: WeftDbTarget;
   readonly schema: Schema;
 
-  constructor(client: WeftClient, schema: Schema) {
+  constructor(client: WeftDbTarget, schema: Schema) {
     this.client = client;
     this.schema = schema;
   }
@@ -50,7 +59,7 @@ export class WeftDb<Schema extends SchemaDefinition> {
 }
 
 export function createWeftDb<const Schema extends SchemaDefinition>(
-  client: WeftClient,
+  client: WeftDbTarget,
   schema: Schema,
 ): WeftDb<Schema> {
   return new WeftDb(client, schema);

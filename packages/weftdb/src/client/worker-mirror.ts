@@ -23,7 +23,7 @@ import {
   type WireValue,
 } from "weftdb/core";
 import { SubscriptionEngine, type ReactiveSqlQuery, type RowSelect } from "./subscriptions.ts";
-import type { LocalRow } from "./index.ts";
+import type { LocalRow, MaterializedRow } from "./index.ts";
 import type { MirrorTransport, WireRow, WorkerDelta, WorkerMutation, WorkerPush, WorkerRequestBody } from "./worker.ts";
 
 export interface WeftClientMirrorOptions {
@@ -133,6 +133,22 @@ export class WeftClientMirror {
     this.#watched.delete(query.cacheKey);
     this.#results.delete(query.cacheKey);
     this.#send({ type: "unwatch", cacheKey: query.cacheKey });
+  }
+
+  /**
+   * One row as `WeftDb` hands it out, read from the last push rather than from the database. The
+   * fields are the ones the worker sent, so a row this mirror has not been told about — one outside
+   * the hydrated scope, or one whose delta is still crossing — reads as missing rather than stale.
+   */
+  getRow(tableName: TableName, rowId: RowId): MaterializedRow | undefined {
+    const row = this.rows.get(localKey(tableName, rowId));
+    return row === undefined ? undefined : materializeRow(row);
+  }
+
+  /** Every row of a collection this mirror holds, in the order the worker's pushes filled the map. */
+  listRows(tableName: TableName): MaterializedRow[] {
+    const prefix = `${tableName}\0`;
+    return [...this.rows.entries()].filter(([key]) => key.startsWith(prefix)).map(([, row]) => materializeRow(row));
   }
 
   /**
@@ -254,6 +270,19 @@ function toLocalRow(row: WireRow): LocalRow {
       diff3Base: new Map(),
     },
   };
+}
+
+/**
+ * A row in the shape `WeftDb` returns. Frozen, and over a copy of the field map, so a caller cannot
+ * write into the mirror's own row and have the next push silently undo it.
+ */
+function materializeRow(row: LocalRow): MaterializedRow {
+  return Object.freeze({
+    id: row.id,
+    scope_id: row.scopeId,
+    created: row.created,
+    fields: new Map(row.fields),
+  });
 }
 
 function asDelta(value: unknown): WorkerDelta {

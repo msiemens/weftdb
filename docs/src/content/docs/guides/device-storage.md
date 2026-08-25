@@ -1,6 +1,6 @@
 ---
 title: Storage on the device
-description: The SqlExecutor port, its SQLite implementations, and the local storage alternative for storing a device's data.
+description: The SqlExecutor port, its SQLite implementations, the worker that holds the database, and the mirror the page reads.
 sidebar:
   order: 6
 ---
@@ -51,41 +51,45 @@ SQLite is used on the device rather than IndexedDB because:
 - `transaction()` gives a batch of related writes a real commit and rollback to rest on.
 - The same compiled SQL that runs on a device runs unchanged against `node:sqlite` on the server.
 
-The cost of that choice is the worker constraint above, which shapes how a browser application is
-put together.
+## Running the database in a worker
 
-## Setting up wasm-sqlite
+`SqlExecutor` is synchronous: every method returns its result directly, not a promise. The only
+browser storage SQLite can reach synchronously is an OPFS sync access handle, one exists only
+inside a dedicated worker, and it is held exclusively, so no other context can open the same file
+while it is held.
 
-`openWebSqliteExecutor` takes an initialised `sqlite3` module rather than importing one:
+The whole `WeftClient` therefore runs in the worker, next to the database it writes through to.
+`serveWeftWorker` puts it there: it owns the client, applies each mutation the page asks for, and
+posts back the rows that moved. It knows nothing about OPFS, so the same host runs against any
+`SqlExecutor`.
 
 ```ts title="src/storage-worker.ts"
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import { openWebSqliteExecutor } from "weftdb/client/wasm-sqlite";
 import { SqliteClientStore } from "weftdb/client/sqlite";
-import { scopeId, deviceId } from "weftdb/core";
+import { serveWeftWorker, type WorkerHostPortLike } from "weftdb/client/worker-host";
 import { schema } from "./schema.ts";
 
 const sqlite3 = await sqlite3InitModule();
 const executor = await openWebSqliteExecutor(sqlite3, { path: "weft.sqlite3" });
 const store = new SqliteClientStore(executor, schema);
-const client = store.hydrate(scopeId("user-1"), deviceId("laptop"));
+store.installSchema();
+
+serveWeftWorker({ port: globalThis as unknown as WorkerHostPortLike, executor, store });
 ```
 
-The caller supplies the module, so the library keeps no SQLite runtime dependency of its own,
-and which build ships, or whether one ships at all, stays the application's decision.
+`WorkerHostPortLike` is the port the host serves on: `postMessage`, `addEventListener`, and
+`removeEventListener`. Under the DOM library `self` is typed as a `Window`, whose `postMessage`
+takes an origin, so the worker's global is cast to the port type.
 
-:::note
-This file runs inside a dedicated worker. The page opens the worker and reaches it over a
-transport such as `OpfsWorkerTransport`, because the OPFS pool this needs is unavailable
-outside one.
-:::
+The executor and the store are the host's options, so the database is open before the host is
+built, and `serveWeftWorker` hydrates the client from the store when the page asks it to. Give the
+host the same executor the store writes through, or a watched statement runs against one file while
+the rows it selects are saved into another.
 
-What follows from this holds regardless of which SQLite build is chosen:
-
-- `SqlExecutor` is synchronous. Every method returns its result directly, not a promise.
-- The only browser storage SQLite can reach synchronously is an OPFS sync access handle, and a
-  sync access handle exists only inside a dedicated worker and is held exclusively, so no other
-  context can open the same file while it is held.
+`openWebSqliteExecutor` takes an initialised `sqlite3` module rather than importing one. The caller
+supplies the module, so the library keeps no SQLite runtime dependency of its own, and which build
+ships, or whether one ships at all, stays the application's decision.
 
 A build with no `installOpfsSAHPoolVfs` is refused rather than opened against memory:
 `openWebSqliteExecutor` throws a `WasmSqliteUnavailableError`. A database backed by memory
@@ -94,5 +98,114 @@ that failure visible immediately, instead of after the data is already gone.
 `openMemorySqliteExecutor` opens an explicit in-memory database for tests, but nothing falls
 back to it on its own.
 
-A worker holding a device's database open is also a worker only one browser tab can hold at a
-time. [React](/guides/react/) covers what a second tab does about it.
+## Reading and writing from the page
+
+`OpfsWorkerTransport` wraps the `Worker` and correlates each request with its reply.
+`WeftClientMirror` holds the rows the worker last said the scope contains, applies every delta the
+worker pushes, and wakes the subscriptions that read them.
+
+```ts title="src/store.ts"
+import { OpfsWorkerTransport, WeftClientMirror } from "weftdb/client";
+import { deviceId, scopeId } from "weftdb/core";
+import { todosMutators } from "./generated/bindings.ts";
+
+const worker = new Worker(new URL("./storage-worker.ts", import.meta.url), { type: "module" });
+export const transport = new OpfsWorkerTransport(worker);
+
+export const mirror = new WeftClientMirror({
+  transport,
+  scopeId: scopeId("user-1"),
+  deviceId: deviceId("laptop"),
+  onError: (error) => {
+    console.error(error);
+  },
+});
+
+await mirror.hydrate();
+
+export const todos = todosMutators(mirror);
+```
+
+`hydrate()` loads the scope's rows out of the worker and resolves once they are on the page. It is
+the one round trip that grows with the data: hydrating 10,000 rows takes 361 ms in Firefox over
+OPFS, during which the page has no rows to render.
+
+A mutator posts and returns `void`. The worker applies the change, writes it through to SQLite, and
+pushes back the rows that moved, and only then does the mirror hold the new value. Nothing is
+applied on the page first, so nothing on the page can need undoing. A mutation the worker refuses
+rejects a promise the mutator has already returned from, which is what `onError` is for: without it
+a refused edit looks like an edit that had no effect.
+
+Generated code reads and writes through the mirror. `use<Collection>` and `use<Collection>Query`
+read it as a query source, and `<collection>Mutators` writes through it as a `MutationTarget`, the
+shape both `WeftClient` and `WeftClientMirror` have:
+
+```tsx title="src/todo-list.tsx"
+import { useTodosQuery } from "./generated/bindings.ts";
+import { mirror, todos } from "./store.ts";
+
+export function TodoList() {
+  const rows = useTodosQuery(mirror, (statement) => statement.orderBy("rank"));
+  return (
+    <ul>
+      {rows.map((todo) => (
+        <li key={todo.id}>
+          <button onClick={() => todos.update(todo.id, { done: !todo.done })}>{todo.title}</button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+```
+
+`<collection>Mutators` takes an optional `notify` callback as its second argument. Leave it out over
+a mirror: the worker's push wakes the subscriptions when the change arrives, and a callback fired
+when the mutator returns would wake them before there is anything new to read.
+
+Per-field hybrid logical clock (HLC) readings, three-way merge ancestors, and the outbox stay in
+the worker. The sync session and retention read those, and neither runs on the page, so the mirror
+carries only what a component renders from.
+
+## Reaching the worker from another tab
+
+One tab at a time may hold the OPFS access handle, so one tab at a time may hold the worker.
+[Using weftdb with React](/guides/react/) covers the election that decides which tab that is.
+
+A follower tab reaches the leader's worker over a `BroadcastChannel`. `BroadcastDbProxy` satisfies
+the same transport interface `OpfsWorkerTransport` does, so a follower's mirror is built the same
+way, with the proxy in place of the transport:
+
+```ts title="src/follower.ts"
+import { BroadcastDbProxy, WeftClientMirror } from "weftdb/client";
+import { deviceId, scopeId } from "weftdb/core";
+
+const channel = new BroadcastChannel("weft:user-1:db");
+const proxy = new BroadcastDbProxy(channel);
+
+export const mirror = new WeftClientMirror({
+  transport: proxy,
+  scopeId: scopeId("user-1"),
+  deviceId: deviceId("laptop"),
+});
+
+await mirror.hydrate();
+```
+
+The leader relays its worker's deltas onto the same channel, or a follower's mirror answers the
+first hydrate and then never moves again:
+
+```ts title="src/leader.ts"
+// on the leader, with the responder from the React guide as `server`
+const offRelay = transport.onPush((push) => {
+  server.relayPush(push);
+});
+```
+
+A follower whose leader dies stops receiving deltas. Its mirror freezes at the rows it last held
+and raises no error, and `BroadcastDbProxy.request` has no deadline, so a request in flight when
+the leader went away never settles.
+
+Dispose the mirror and the proxy from a `pagehide` handler. A `BroadcastChannel` has no liveness
+signal, so a tab that goes away without handing its registrations back leaves each statement it
+watched registered in the worker, and the worker re-runs those statements after every mutation any
+tab makes for the rest of the session.
