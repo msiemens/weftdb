@@ -45,6 +45,37 @@ suite; neither runs in a browser.
 prefixed with that namespace and the device's `scopeId` and `deviceId`, so one browser can hold
 data for more than one application, or more than one `scopeId`, without collision.
 
+## Building the source a hook reads
+
+A generated hook takes a `WeftSource` ([reading data](/guides/reading-data/)), which a client on
+the thread that renders is not on its own: it holds the rows and the scope, and the subscription
+engine and the statement selection come from beside it.
+
+A device storing through `WebStorageClientStore` has no SQLite for a statement to run against, so
+`rowMapSource` supplies a selection that says so:
+
+```ts title="src/store.ts"
+import { SubscriptionEngine, WebStorageClientStore } from "weftdb/client";
+import { deviceId, scopeId } from "weftdb/core";
+import { rowMapSource } from "weftdb-react";
+import { schema } from "./schema.ts";
+
+const store = new WebStorageClientStore(localStorage, schema, "myapp");
+const client = store.hydrate(scopeId("user-1"), deviceId("laptop"));
+const engine = new SubscriptionEngine();
+
+export const source = rowMapSource({ engine, rows: client.rows }, client.scopeId);
+```
+
+`use<Collection>` reads the row map and runs. `use<Collection>Query` raises
+`SqlQueryUnavailableError`, because a statement that answered with no rows would be
+indistinguishable from one that matched nothing.
+
+Where an executor is on the thread that renders, `executorRowSelect(executor)` fills the same
+member with a selection that runs the statement, and both read paths work. Give it the executor the
+store writes through, or a statement runs against one database while the rows it selects are saved
+into another.
+
 SQLite is used on the device rather than IndexedDB because:
 
 - The generated tables are relational.
@@ -136,9 +167,9 @@ applied on the page first, so nothing on the page can need undoing. A mutation t
 rejects a promise the mutator has already returned from, which is what `onError` is for: without it
 a refused edit looks like an edit that had no effect.
 
-Generated code reads and writes through the mirror. `use<Collection>` and `use<Collection>Query`
-read it as a query source, and `<collection>Mutators` writes through it as a `MutationTarget`, the
-shape both `WeftClient` and `WeftClientMirror` have:
+Generated code reads and writes through the mirror. It is a `WeftSource` already, so
+`use<Collection>` and `use<Collection>Query` take it unchanged, and `<collection>Mutators` writes
+through it as a `MutationTarget`, the shape both `WeftClient` and `WeftClientMirror` have:
 
 ```tsx title="src/todo-list.tsx"
 import { useTodosQuery } from "./generated/bindings.ts";

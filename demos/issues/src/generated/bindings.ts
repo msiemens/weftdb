@@ -2,7 +2,7 @@
 import { rankBetween, rankString, rowId, tableName, txnId, fieldName, type DeviceId, type FieldName, type TxnId, type WireValue } from "weftdb/core";
 import { compileOnlyKysely, reactiveSqlQuery } from "weftdb/client";
 import type { MaterializedRow, MutationTarget, ReactiveSqlQuery, ScopedRowQuery, TypedQueryKey } from "weftdb/client";
-import { useWeftRows, useWeftSqlRows, type QueryLifecycleSource, type SqlQuerySource } from "weftdb-react";
+import { useWeftRows, useWeftSqlRows, type WeftSource } from "weftdb-react";
 import type { Database } from "./database.d.ts";
 import type { ProjectsMutation, ProjectsMutators } from "./mutators.ts";
 import type { IssuesMutation, IssuesMutators } from "./mutators.ts";
@@ -11,11 +11,8 @@ import type { CommentsMutation, CommentsMutators } from "./mutators.ts";
 // Re-exported so an application has one import for everything the schema implies.
 export type { ProjectsMutation, ProjectsMutators, IssuesMutation, IssuesMutators, CommentsMutation, CommentsMutators } from "./mutators.ts";
 
-/** The client and its subscription engine — `{ engine, rows: client.rows }`. */
-export type WeftSource = QueryLifecycleSource;
-
-/** The same, plus the SQLite a statement runs against and the scope it is confined to. */
-export type WeftSqlSource = SqlQuerySource;
+/** The subscription engine, the client's row map, the scope, and the statement selection. */
+export type { WeftSource };
 
 // Builds and compiles; the engine is what runs a statement.
 const weftStatements = compileOnlyKysely<Database>();
@@ -87,7 +84,7 @@ export function projectsSqlQuery(scopeId: string, build: ProjectsQueryBuilder = 
   return reactiveSqlQuery({ tableName: projectsTable, query: build(scoped) });
 }
 
-export function useProjectsQuery(source: WeftSqlSource, build?: ProjectsQueryBuilder): readonly ProjectsRow[] {
+export function useProjectsQuery(source: WeftSource, build?: ProjectsQueryBuilder): readonly ProjectsRow[] {
   return useWeftSqlRows(source, projectsSqlQuery(source.scopeId, build), decodeProjects);
 }
 
@@ -180,7 +177,7 @@ export function issuesSqlQuery(scopeId: string, build: IssuesQueryBuilder = (sta
   return reactiveSqlQuery({ tableName: issuesTable, query: build(scoped) });
 }
 
-export function useIssuesQuery(source: WeftSqlSource, build?: IssuesQueryBuilder): readonly IssuesRow[] {
+export function useIssuesQuery(source: WeftSource, build?: IssuesQueryBuilder): readonly IssuesRow[] {
   return useWeftSqlRows(source, issuesSqlQuery(source.scopeId, build), decodeIssues);
 }
 
@@ -265,6 +262,6 @@ export function commentsSqlQuery(scopeId: string, build: CommentsQueryBuilder = 
   return reactiveSqlQuery({ tableName: commentsTable, query: build(scoped) });
 }
 
-export function useCommentsQuery(source: WeftSqlSource, build?: CommentsQueryBuilder): readonly CommentsRow[] {
+export function useCommentsQuery(source: WeftSource, build?: CommentsQueryBuilder): readonly CommentsRow[] {
   return useWeftSqlRows(source, commentsSqlQuery(source.scopeId, build), decodeComments);
 }

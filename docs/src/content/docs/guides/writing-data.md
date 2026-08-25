@@ -1,13 +1,13 @@
 ---
 title: Writing data
-description: Typed mutators, the outbox, transactions, and why there is no optimistic layer.
+description: Typed mutators, the outbox, transactions, why there is no optimistic layer, and writing a collection named at runtime.
 sidebar:
   order: 4
 ---
 
-`weft generate` writes a mutator interface per collection, alongside the query key and decoder
-[reading data](/guides/reading-data/) covers. Which methods a collection gets depends on how it
-was declared:
+Application code writes through the mutators `weft generate` writes per collection, alongside the
+query key and decoder [reading data](/guides/reading-data/) covers. Which methods a collection gets
+depends on how it was declared:
 
 | Collection kind | Generated methods            | What `create` calls |
 | --------------- | ---------------------------- | ------------------- |
@@ -107,3 +107,34 @@ todoEvents.create(`event-${crypto.randomUUID()}`, {
 Each call writes a new row rather than editing an existing one, so two devices logging an event at
 the same moment produce two rows rather than a write racing another, and there is nothing for
 either device to merge.
+
+## Writing a collection named at runtime
+
+A generated mutator names its collection when `weft generate` runs, which is what gives it a
+mutation input of its own and lets it leave out a field marked `merge: "immutable"`. Where the
+collection is picked while the code runs, there is nothing for the generator to name.
+`createWeftDb` takes a client and a schema and offers `create`, `update`, `delete`, `get`, and
+`list` over any collection the schema declares:
+
+```ts
+import { createWeftDb } from "weftdb/client";
+import { schema } from "./schema.ts";
+
+const db = createWeftDb(client, schema);
+const counts = new Map<string, number>();
+
+for (const table of ["todos", "todo_events"] as const) {
+  counts.set(table, db.collection(table).list().length);
+}
+```
+
+Values are typed from the schema, so a field the collection does not declare does not compile, and
+a field declared `S.json({ as })` carries the type it declares. `create`, `update`, and `delete`
+take the same optional `txnId` a generated mutator takes, and `create` appends where the collection
+is an event log. The name has to be one the schema declares, so a name read back out of
+`Object.keys(schema.collections)` as a `string` does not compile.
+
+It accepts a field marked `merge: "immutable"`, which the generated mutation input leaves out and
+the relay applies like any other write. It takes no `notify` callback, so a component subscribed
+through the engine has to be woken some other way. Use the generated mutators wherever the
+collection name is known when the code is written.

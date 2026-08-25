@@ -351,7 +351,7 @@ export function generateBindings(schema: SchemaDefinition): string {
     'import { rankBetween, rankString, rowId, tableName, txnId, fieldName, type DeviceId, type FieldName, type TxnId, type WireValue } from "weftdb/core";',
     'import { compileOnlyKysely, reactiveSqlQuery } from "weftdb/client";',
     'import type { MaterializedRow, MutationTarget, ReactiveSqlQuery, ScopedRowQuery, TypedQueryKey } from "weftdb/client";',
-    'import { useWeftRows, useWeftSqlRows, type QueryLifecycleSource, type SqlQuerySource } from "weftdb-react";',
+    'import { useWeftRows, useWeftSqlRows, type WeftSource } from "weftdb-react";',
     'import type { Database } from "./database.d.ts";',
     ...collections.map(
       ([name]) => `import type { ${typeName(name, "Mutation")}, ${typeName(name, "Mutators")} } from "./mutators.ts";`,
@@ -364,11 +364,11 @@ export function generateBindings(schema: SchemaDefinition): string {
       .flatMap(([name]) => [typeName(name, "Mutation"), typeName(name, "Mutators")])
       .join(", ")} } from "./mutators.ts";`,
     "",
-    "/** The client and its subscription engine — `{ engine, rows: client.rows }`. */",
-    "export type WeftSource = QueryLifecycleSource;",
-    "",
-    "/** The same, plus the SQLite a statement runs against and the scope it is confined to. */",
-    "export type WeftSqlSource = SqlQuerySource;",
+    // One name for what every hook below reads through. The narrow shape still exists in
+    // `weftdb-react` for the two hooks that genuinely need nothing more, but an application that
+    // names two source types has to work out which of them each of its components takes.
+    "/** The subscription engine, the client's row map, the scope, and the statement selection. */",
+    "export type { WeftSource };",
     "",
     "// Builds and compiles; the engine is what runs a statement.",
     "const weftStatements = compileOnlyKysely<Database>();",
@@ -452,7 +452,7 @@ export function generateBindings(schema: SchemaDefinition): string {
       `  return reactiveSqlQuery({ tableName: ${table}, query: build(scoped) });`,
       "}",
       "",
-      `export function use${typeName(name, "")}Query(source: WeftSqlSource, build?: ${builderTypeName}): readonly ${rowTypeName}[] {`,
+      `export function use${typeName(name, "")}Query(source: WeftSource, build?: ${builderTypeName}): readonly ${rowTypeName}[] {`,
       `  return useWeftSqlRows(source, ${sqlQuery}(source.scopeId, build), ${decoder});`,
       "}",
       ...reorderHelpers(name, collection),

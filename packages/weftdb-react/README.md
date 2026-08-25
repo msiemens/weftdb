@@ -10,13 +10,13 @@ Use with `react` and `weftdb`.
 
 ```tsx
 import { queryKey } from "weftdb/client";
-import { useWeftRows, type QueryLifecycleSource } from "weftdb-react";
+import { useWeftRows, type WeftSource } from "weftdb-react";
 import { decodeTasks } from "./generated/bindings.ts";
 import { schema } from "./schema.ts";
 
 const tasksQuery = queryKey(schema, "tasks", ["id", "title", "notes"]);
 
-export function TaskList({ source }: { source: QueryLifecycleSource }) {
+export function TaskList({ source }: { source: WeftSource }) {
   const tasks = useWeftRows(source, tasksQuery, decodeTasks);
 
   return (

@@ -12,15 +12,18 @@ and the decoder it reads with. The todo list demo reads its list with the genera
 const todos = useTodos(store.source, "rank").map((row) => store.view(row));
 ```
 
-`store.source` returns `{ engine, rows: client.rows }`: the subscription engine and its live row
-map, the shape every generated hook takes as its first argument. `useTodos` itself is a thin
-wrapper:
+`store.source` is a `WeftSource`, the shape every generated hook takes as its first argument.
+`useTodos` itself is a thin wrapper:
 
 ```ts
 export function useTodos(source: WeftSource, orderBy: TodosField = "id"): readonly TodosRow[] {
   return useWeftRows(source, todosQuery(orderBy), decodeTodos);
 }
 ```
+
+Hold the source rather than rebuilding it per read. `useSyncExternalStore` re-subscribes whenever
+the object it was given is a new one, so a getter returning a fresh literal every render tears down
+and reopens the subscription on every pass.
 
 `weftdb-react` also exports `useWeftQuery(source, key)` directly, for a value cached outside the
 row query engine: `source` is anything with a `getSnapshot(key)` and a `subscribe(key, listener)`,

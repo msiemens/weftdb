@@ -20,7 +20,26 @@ test("the generated query builder scopes its statement and selects the id the en
   // statement that ranges past its own scope: one database file holds every scope.
   assert.match(bindings, /selectFrom\("todos"\)\.select\("id"\)\.where\("scope_id", "=", scopeId\)/u);
   assert.match(bindings, /build: TodosQueryBuilder = \(statement\) => statement/u);
-  assert.match(bindings, /export function useTodosQuery\(source: WeftSqlSource/u);
+  assert.match(bindings, /export function useTodosQuery\(source: WeftSource/u);
+});
+
+test("the generated hooks name one source type, so a component never has to pick between two", () => {
+  const bindings = generateBindings(
+    defineSchema({ todos: S.collection({ title: S.string() }), notes: S.collection({ body: S.string() }) }),
+  );
+
+  // Both read paths take the same source. A row-map read needs less than a statement-backed one,
+  // but an application that names two types has to work out which of them each component takes,
+  // and a component whose read later grows a `where` has to be re-typed to get it.
+  assert.match(bindings, /export function useTodos\(source: WeftSource/u);
+  assert.match(bindings, /export function useTodosQuery\(source: WeftSource/u);
+  assert.match(bindings, /export function useNotes\(source: WeftSource/u);
+  assert.match(bindings, /export function useNotesQuery\(source: WeftSource/u);
+  // Re-exported rather than aliased, so the name in an application's imports is the name
+  // `weftdb-react` declares and the two cannot drift.
+  assert.match(bindings, /^import \{ useWeftRows, useWeftSqlRows, type WeftSource \} from "weftdb-react";$/mu);
+  assert.match(bindings, /^export type \{ WeftSource \};$/mu);
+  assert.doesNotMatch(bindings, /WeftSqlSource|QueryLifecycleSource|SqlQuerySource/u);
 });
 
 test("the json carriability checks are exported, so a strict consumer can still compile them", () => {

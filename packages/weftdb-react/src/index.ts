@@ -66,6 +66,11 @@ export function useWeftSuspenseQuery<Value, Key extends SubscriptionKey>(
   throw promise;
 }
 
+/**
+ * The subset of `WeftSource` a row-map read needs. `useWeftQuerySnapshot` and `useWeftRows` take
+ * this rather than the whole source, so a device that cannot run a statement can still call them
+ * directly. Application code names `WeftSource`; this is what the two hooks accept.
+ */
 export interface QueryLifecycleSource {
   readonly engine: SubscriptionEngine;
   /**
@@ -102,10 +107,13 @@ export function useWeftRows<Row>(
 }
 
 /**
- * What a SQL-backed read needs on top of the row map: the executor the statement runs against.
- * That is the device's own SQLite, so this source exists only where `SqliteClientStore` does.
+ * Everything a generated hook reads through, and the one source shape an application names.
+ *
+ * A `WeftClientMirror` is one of these already. A client on the thread that renders becomes one by
+ * being paired with a `SubscriptionEngine` and an `executorRowSelect` over the same SQLite the
+ * store writes through, or by `rowMapSource` where there is no SQLite at all.
  */
-export interface SqlQuerySource extends QueryLifecycleSource {
+export interface WeftSource extends QueryLifecycleSource {
   /**
    * Which rows a statement matched, in order. It is a function rather than an executor because
    * the database is not always on the thread that renders: on a device that holds it here this
@@ -116,7 +124,37 @@ export interface SqlQuerySource extends QueryLifecycleSource {
   readonly scopeId: string;
 }
 
-export function useWeftSqlSnapshot(source: SqlQuerySource, query: ReactiveSqlQuery): QuerySnapshot {
+/**
+ * Raised where a statement-backed read is asked of a device that keeps no SQL database.
+ */
+export class SqlQueryUnavailableError extends Error {
+  constructor(message = "this device has no SQL database, so a statement-backed query cannot run on it") {
+    super(message);
+    this.name = "SqlQueryUnavailableError";
+  }
+}
+
+/**
+ * A source for a device whose rows live somewhere other than SQLite, such as one persisting
+ * through `WebStorageClientStore` on the thread that renders.
+ *
+ * `useWeftRows` and the generated `use<Collection>` read the row map and work unchanged. A
+ * statement-backed read has nothing to run against, so `select` raises
+ * `SqlQueryUnavailableError` rather than answering with no rows, which is indistinguishable from
+ * a query that matched nothing.
+ */
+export function rowMapSource(source: QueryLifecycleSource, scopeId: string): WeftSource {
+  return {
+    engine: source.engine,
+    rows: source.rows,
+    scopeId,
+    select: () => {
+      throw new SqlQueryUnavailableError();
+    },
+  };
+}
+
+export function useWeftSqlSnapshot(source: WeftSource, query: ReactiveSqlQuery): QuerySnapshot {
   // Keyed by the cache key rather than by the query object. A generated builder compiles a fresh
   // query on every render, and two statements that compile alike are the same query, so keying on
   // identity would tear down the subscription and re-run the statement once a pass.
@@ -140,7 +178,7 @@ export function useWeftSqlSnapshot(source: SqlQuerySource, query: ReactiveSqlQue
  * the snapshot for the same reason `useWeftRows` caches its own.
  */
 export function useWeftSqlRows<Row>(
-  source: SqlQuerySource,
+  source: WeftSource,
   query: ReactiveSqlQuery,
   decode: (row: MaterializedRow) => Row,
 ): readonly Row[] {

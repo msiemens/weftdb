@@ -8,8 +8,41 @@ sidebar:
 Application code reads through the functions `weft generate` writes for each collection. A
 component reads a whole collection with `use<Collection>`, or part of one with
 `use<Collection>Query`, which takes a query builder and does the filtering, ordering, and paging
-in the database. Against the client directly, reading means `WeftClient.getRow` and
-`WeftClient.listRows`.
+in the database. Both take a `WeftSource` as their first argument. Against the client directly,
+reading means `WeftClient.getRow` and `WeftClient.listRows`.
+
+## The source a hook reads through
+
+`WeftSource` is what every generated hook subscribes to. The generated bindings re-export it, so an
+application imports it from the same file as its row types:
+
+```ts
+import type { LocalRow, RowSelect, SubscriptionEngine } from "weftdb/client";
+
+export interface WeftSource {
+  readonly engine: SubscriptionEngine;
+  readonly rows: ReadonlyMap<string, LocalRow>;
+  readonly select: RowSelect;
+  readonly scopeId: string;
+}
+```
+
+`engine` is the subscription engine a component re-renders from, `rows` is the client's live row
+map, `scopeId` is the scope the device was hydrated for, and `select` answers which rows a
+statement matched, in order.
+
+`select` is a function rather than a database because the database is not always on the thread
+that renders. A `WeftClientMirror` is a `WeftSource` already: it reads the ids the worker last
+pushed. A client on the thread that renders is paired with `executorRowSelect(executor)`, which
+runs the statement. A device that keeps no SQL database is wrapped in `rowMapSource` from
+`weftdb-react`, whose `select` raises `SqlQueryUnavailableError`. Each answers synchronously,
+which is what a snapshot read during render requires, and a component sees none of the difference.
+
+:::note
+A browser reaches SQLite through a worker, because the only synchronous handle exists inside one.
+[Storage on the device](/guides/device-storage/) covers the worker, the mirror that carries its
+rows to the page, and building a source over each backend.
+:::
 
 ## Filtering, ordering, and paging
 
@@ -18,9 +51,9 @@ in the database. Against the client directly, reading means `WeftClient.getRow` 
 
 ```tsx
 import { useTodosQuery } from "./generated/bindings.ts";
-import type { WeftSqlSource } from "./generated/bindings.ts";
+import type { WeftSource } from "./generated/bindings.ts";
 
-export function OpenTodos({ source }: { source: WeftSqlSource }) {
+export function OpenTodos({ source }: { source: WeftSource }) {
   const todos = useTodosQuery(source, (todos) => todos.where("done", "=", false).orderBy("rank").limit(20));
   return (
     <ul>
@@ -44,21 +77,6 @@ can match another scope's row and hand it back under this scope's id.
 other generated hook. The statement decides which rows and in what order; the rows themselves come
 from the client's in-memory map, so a row that did not change is the same object it was and
 `React.memo` still skips it. The statement runs once per change rather than once per render.
-
-`WeftSqlSource` is the client's engine and row map, the scope the statements are confined to, and
-`select`, which answers which rows a statement matched: `{ engine, rows, select, scopeId }`.
-
-`select` is a function rather than a database because the database is not always on the thread
-that renders. On a device holding it there, `executorRowSelect(executor)` runs the statement. On a
-device holding it in a worker, a `WeftClientMirror` reads the ids that worker last pushed and
-satisfies `WeftSqlSource` on its own. Both answer synchronously, which is what a snapshot read
-during render requires, and a component sees neither.
-
-:::note
-A browser reaches SQLite through a worker, because the only synchronous handle exists inside one.
-[Storage on the device](/guides/device-storage/) covers the worker and the mirror that carries its
-rows to the page.
-:::
 
 ## Reading a whole collection
 
@@ -88,8 +106,9 @@ the tiebreak. Values are compared as text, so a number field orders lexicographi
 
 Use `use<Collection>` for a collection a device holds all of, and `use<Collection>Query` when the
 answer is a part of one, is ordered by more than one field, or is a page. The query key path reads
-the row map alone, so it is also the path that works on a device with no SQL database, such as one
-storing through `WebStorageClientStore`.
+the row map alone and never touches `select`, so it is the only one of the two that runs on a
+device with no SQL database, such as one storing through `WebStorageClientStore`. There
+`use<Collection>Query` raises `SqlQueryUnavailableError` instead of returning no rows.
 
 The generated helper `todosQuery(orderBy)` builds the key, and `queryKey(schema, table, options)`
 builds one for a query an application assembles itself. Both validate names against the schema and

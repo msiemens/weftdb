@@ -38,7 +38,7 @@ import {
 } from "weftdb/client";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
-import type { SqlQuerySource } from "weftdb-react";
+import type { WeftSource } from "weftdb-react";
 
 const schema = defineSchema({
   todos: S.collection({
@@ -227,12 +227,12 @@ test("§8.7 a push naming a statement the page never registered is ignored", asy
   assert.equal(bridge.mirror.rows.size, 0);
 });
 
-test("§8.7 the mirror is a SQL query source as it stands", () => {
+test("§8.7 the mirror is a weft source as it stands", () => {
   using bridge = Bridge.open();
   // The point of the mirror is that a component reads it the same way it reads a client that has
   // the database on this thread: a row map, a `select`, and a scope. If this stops compiling, the
   // hooks and the worker path have drifted apart and every generated component on OPFS is broken.
-  const source: SqlQuerySource = bridge.mirror;
+  const source: WeftSource = bridge.mirror;
   assert.equal(typeof source.select, "function");
   assert.equal(source.scopeId, SCOPE);
 });

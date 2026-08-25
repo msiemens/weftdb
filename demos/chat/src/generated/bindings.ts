@@ -2,7 +2,7 @@
 import { rankBetween, rankString, rowId, tableName, txnId, fieldName, type DeviceId, type FieldName, type TxnId, type WireValue } from "weftdb/core";
 import { compileOnlyKysely, reactiveSqlQuery } from "weftdb/client";
 import type { MaterializedRow, MutationTarget, ReactiveSqlQuery, ScopedRowQuery, TypedQueryKey } from "weftdb/client";
-import { useWeftRows, useWeftSqlRows, type QueryLifecycleSource, type SqlQuerySource } from "weftdb-react";
+import { useWeftRows, useWeftSqlRows, type WeftSource } from "weftdb-react";
 import type { Database } from "./database.d.ts";
 import type { MessagesMutation, MessagesMutators } from "./mutators.ts";
 import type { DevicesMutation, DevicesMutators } from "./mutators.ts";
@@ -10,11 +10,8 @@ import type { DevicesMutation, DevicesMutators } from "./mutators.ts";
 // Re-exported so an application has one import for everything the schema implies.
 export type { MessagesMutation, MessagesMutators, DevicesMutation, DevicesMutators } from "./mutators.ts";
 
-/** The client and its subscription engine — `{ engine, rows: client.rows }`. */
-export type WeftSource = QueryLifecycleSource;
-
-/** The same, plus the SQLite a statement runs against and the scope it is confined to. */
-export type WeftSqlSource = SqlQuerySource;
+/** The subscription engine, the client's row map, the scope, and the statement selection. */
+export type { WeftSource };
 
 // Builds and compiles; the engine is what runs a statement.
 const weftStatements = compileOnlyKysely<Database>();
@@ -79,7 +76,7 @@ export function messagesSqlQuery(scopeId: string, build: MessagesQueryBuilder = 
   return reactiveSqlQuery({ tableName: messagesTable, query: build(scoped) });
 }
 
-export function useMessagesQuery(source: WeftSqlSource, build?: MessagesQueryBuilder): readonly MessagesRow[] {
+export function useMessagesQuery(source: WeftSource, build?: MessagesQueryBuilder): readonly MessagesRow[] {
   return useWeftSqlRows(source, messagesSqlQuery(source.scopeId, build), decodeMessages);
 }
 // --- devices ---------------------------------------------------------------
@@ -141,6 +138,6 @@ export function devicesSqlQuery(scopeId: string, build: DevicesQueryBuilder = (s
   return reactiveSqlQuery({ tableName: devicesTable, query: build(scoped) });
 }
 
-export function useDevicesQuery(source: WeftSqlSource, build?: DevicesQueryBuilder): readonly DevicesRow[] {
+export function useDevicesQuery(source: WeftSource, build?: DevicesQueryBuilder): readonly DevicesRow[] {
   return useWeftSqlRows(source, devicesSqlQuery(source.scopeId, build), decodeDevices);
 }

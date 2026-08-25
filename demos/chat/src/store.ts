@@ -17,6 +17,7 @@ import {
   type WeftClient,
 } from "weftdb/client";
 import { schemaHash } from "weftdb/schema";
+import { rowMapSource } from "weftdb-react";
 import { tabIdentity, type TabIdentity } from "weftdb-demo-shared/identity";
 import { schema } from "./schema.ts";
 import { DEMO } from "./scope.ts";
@@ -82,6 +83,13 @@ export class ChatStore {
   readonly identity: TabIdentity;
   readonly client: WeftClient;
   readonly engine = new SubscriptionEngine();
+  /**
+   * What the React hooks read from. Storage here is `localStorage`, so there is no SQLite for a
+   * statement-backed read to run against and `use<Collection>Query` raises rather than quietly
+   * matching nothing. Held rather than rebuilt per read, so a component's subscription survives
+   * a render.
+   */
+  readonly source: WeftSource;
   readonly messages: MessagesMutators;
   readonly devices: DevicesMutators;
   readonly session: WeftSession;
@@ -90,6 +98,7 @@ export class ChatStore {
   constructor(options: ChatStoreOptions) {
     this.identity = options.identity;
     this.client = options.client;
+    this.source = rowMapSource({ engine: this.engine, rows: options.client.rows }, options.client.scopeId);
     this.now = options.now ?? (() => Date.now());
     this.session = new WeftSession({
       client: options.client,
@@ -137,11 +146,6 @@ export class ChatStore {
       channel:
         typeof BroadcastChannel === "undefined" ? undefined : new BroadcastChannel(`weftdb-demo/${identity.scopeId}`),
     });
-  }
-
-  /** What the React hooks read from. */
-  get source(): WeftSource {
-    return { engine: this.engine, rows: this.client.rows };
   }
 
   /** Starts the session and the heartbeat that puts this tab on the device strip. */

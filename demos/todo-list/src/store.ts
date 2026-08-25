@@ -17,6 +17,7 @@ import {
   type WeftClient,
 } from "weftdb/client";
 import { schemaHash } from "weftdb/schema";
+import { rowMapSource } from "weftdb-react";
 import { tabIdentity, type TabIdentity } from "weftdb-demo-shared/identity";
 import { schema } from "./schema.ts";
 import { DEMO } from "./scope.ts";
@@ -112,6 +113,13 @@ export class TodoStore {
   readonly identity: TabIdentity;
   readonly client: WeftClient;
   readonly engine = new SubscriptionEngine();
+  /**
+   * What the React hooks read from. Storage here is `localStorage`, so there is no SQLite for a
+   * statement-backed read to run against and `use<Collection>Query` raises rather than quietly
+   * matching nothing. Held rather than rebuilt per read, so a component's subscription survives
+   * a render.
+   */
+  readonly source: WeftSource;
   readonly todos: TodosMutators;
   readonly todoEvents: TodoEventsMutators;
   readonly session: WeftSession;
@@ -120,6 +128,7 @@ export class TodoStore {
   constructor(options: TodoStoreOptions) {
     this.identity = options.identity;
     this.client = options.client;
+    this.source = rowMapSource({ engine: this.engine, rows: options.client.rows }, options.client.scopeId);
     this.#seedStorage = options.seedStorage;
     this.session = new WeftSession({
       client: options.client,
@@ -166,11 +175,6 @@ export class TodoStore {
       channel:
         typeof BroadcastChannel === "undefined" ? undefined : new BroadcastChannel(`weftdb-demo/${identity.scopeId}`),
     });
-  }
-
-  /** What the React hooks read from. */
-  get source(): WeftSource {
-    return { engine: this.engine, rows: this.client.rows };
   }
 
   start(): () => void {
