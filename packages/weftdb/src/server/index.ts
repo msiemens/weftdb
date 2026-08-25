@@ -359,14 +359,18 @@ export class WeftServer {
   private applyField(op: SetOp): void {
     const key = fieldKey(op);
     const current = this.fields.get(key);
-    // A write carrying a base hash was checked against the value it claims to follow, so it is
-    // a certified successor of what is stored and applies whatever its stamp says. Comparing
-    // stamps as well could only discard a write this server has already accepted, and the
-    // client is told the push succeeded — the one outcome it cannot recover from. The two
-    // checks genuinely disagree: matching content is not the same as having seen the stamp,
-    // because two devices can hold identical text under different stamps (§5.4).
-    const certified =
-      op.baseHash !== undefined && current !== undefined && stableHash(current.value) !== stableHash(op.value);
+    // A write carrying a base hash has already been compared against the value it claims to
+    // follow, during validation, and a mismatch never reaches here: it went back as
+    // `merge_required`. So it is a certified successor of what is stored and fast-forwards
+    // whatever its stamp says (§5.4). Comparing stamps as well could only discard a write this
+    // server has already accepted, and the client is told the push succeeded — the one outcome
+    // it cannot recover from.
+    //
+    // Whether the merged value happens to equal the stored one decides nothing. The write still
+    // has to land, because what it carries is a stamp as well as a value: leaving the older
+    // stamp in place makes every later write between the two lose a comparison it should win,
+    // and those losses are silent.
+    const certified = op.baseHash !== undefined;
     if (!current || certified || compareHlc(op.hlc, current.hlc) > 0) {
       this.touchedFields.add(key);
       this.fields.set(key, {
