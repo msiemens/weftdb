@@ -9,10 +9,23 @@ import {
 
 export type TabRole = "leader" | "follower" | "degraded";
 
+/**
+ * The subset of `LockOptions` this module uses. `ifAvailable` is how an election asks without
+ * waiting; `signal` is how a tab that is closing leaves the queue it stood in.
+ *
+ * Both are optional because the absence of `ifAvailable` is the whole liveness mechanism: a request
+ * made without it is not answered until the lock is free, which — since the browser owns the lock
+ * and releases it when the holding tab dies, crashes or is killed — is exactly "the leader is gone".
+ */
+export interface LockRequestOptionsLike {
+  readonly ifAvailable?: boolean;
+  readonly signal?: AbortSignal;
+}
+
 export interface LockManagerLike {
   request<T>(
     name: string,
-    options: { readonly ifAvailable: true },
+    options: LockRequestOptionsLike,
     callback: (lock: object | null) => T | Promise<T>,
   ): Promise<T>;
 }
@@ -23,6 +36,22 @@ export interface MultiTabOptions {
   readonly channel?: BroadcastChannel;
 }
 
+/** Told to every tab of a scope by whichever one has just taken the lock. See `#announce`. */
+export interface LeadershipAnnouncement {
+  readonly weft: "leader";
+  readonly scopeId: string;
+}
+
+/**
+ * What a tab is told when leadership moves: the part this tab is playing now.
+ *
+ * A successor hears `"leader"`. Every other tab of the scope hears `"follower"` — the same role it
+ * already had, and that is not a redundant call: the leader it was talking to has gone, so whatever
+ * it had in flight is never going to be answered and whatever it had registered no longer exists.
+ * `"degraded"` is never announced; a tab reaches it only by closing.
+ */
+export type LeadershipListener = (role: TabRole) => void;
+
 export class MultiTabCoordinator {
   readonly scopeId: string;
   readonly locks: LockManagerLike | undefined;
@@ -30,11 +59,16 @@ export class MultiTabCoordinator {
   role: TabRole = "degraded";
   /** Resolved to hand the lock back; held for as long as this tab is the leader. */
   #release: (() => void) | undefined;
+  /** Aborts the queued succession request, so a tab that closes stops standing in line. */
+  #standby: AbortController | undefined;
+  readonly #listeners = new Set<LeadershipListener>();
+  #closed = false;
 
   constructor(options: MultiTabOptions) {
     this.scopeId = options.scopeId;
     this.locks = options.locks;
     this.channel = options.channel ?? new BroadcastChannel(`weft:${options.scopeId}`);
+    this.channel.addEventListener("message", this.#onMessage);
   }
 
   /**
@@ -42,6 +76,9 @@ export class MultiTabCoordinator {
    * a callback that returns immediately gives the lock straight back and leaves every tab in
    * turn believing it leads. The callback here returns a promise that stays pending until
    * `close`, and election waits on being told which way it went rather than on the request.
+   *
+   * A tab that comes back a follower learns nothing more from this call. `watchLeader` is what
+   * turns "somebody else has it" into "and this tab will be told when they no longer do".
    */
   async elect(): Promise<TabRole> {
     if (this.locks === undefined) {
@@ -57,6 +94,9 @@ export class MultiTabCoordinator {
           resolveRole(this.role);
           return undefined;
         }
+        // Nothing is announced. An election is this tab asking who leads, and the answer is what
+        // it returns; the tabs that would hear an announcement are each getting their own answer
+        // from their own election, and there is no incumbent whose followers need re-pointing.
         this.role = "leader";
         resolveRole(this.role);
         return new Promise<void>((releaseLock) => {
@@ -69,12 +109,121 @@ export class MultiTabCoordinator {
     });
   }
 
+  /**
+   * Registers a listener for leadership moving, and returns a way to stop listening.
+   *
+   * Register before calling `watchLeader`: succession can be granted in the same turn the previous
+   * leader lets go, and a listener attached afterwards would miss the one event it exists for.
+   */
+  onLeadershipChange(listener: LeadershipListener): () => void {
+    this.#listeners.add(listener);
+    return () => {
+      this.#listeners.delete(listener);
+    };
+  }
+
+  /**
+   * Stands this tab in line behind the leader, so that it is told — and takes over — when the
+   * leader is gone.
+   *
+   * The whole mechanism is one Web Lock request made *without* `ifAvailable`. The browser answers
+   * it when the lock is free and not before, and the browser releases the lock when the holding tab
+   * closes, crashes, is killed for memory, or is discarded from the bfcache. So being granted this
+   * request is a browser-guaranteed statement that the previous leader is gone, and there is no
+   * timeout to tune and nothing to mistake a slow tab for.
+   *
+   * That is why it is a queued lock rather than a heartbeat on the channel. A heartbeat needs an
+   * interval longer than the slowest SQLite commit and shorter than a person's patience, and no
+   * such interval exists: a tab throttled in the background misses beats for minutes while being
+   * perfectly alive, and concluding it had died would put two workers on one OPFS access handle.
+   * Leadership is therefore only ever concluded from holding the lock — never from a message,
+   * never from silence.
+   *
+   * Being granted the lock is also what makes succession exclusive without any agreement between
+   * tabs: the queue is the browser's, it hands the lock to one waiter at a time, and every other
+   * waiter simply stays in line for the next death.
+   *
+   * Idempotent, and a no-op for a tab that already leads or that has no Web Locks to wait on.
+   */
+  watchLeader(): void {
+    if (this.locks === undefined || this.#closed) return;
+    if (this.role !== "follower") return;
+    if (this.#standby !== undefined) return;
+    const controller = new AbortController();
+    this.#standby = controller;
+    const locks = this.locks;
+    const held = locks.request(`weft:${this.scopeId}:opfs`, { signal: controller.signal }, (lock) => {
+      // A queued request is granted or it is not. `null` is what `ifAvailable` answers with, so an
+      // implementation that returned it here is saying the lock was busy — and taking that for a
+      // grant is precisely the second leader this class exists to prevent.
+      if (lock === null) return undefined;
+      this.#standby = undefined;
+      // Handed back immediately if this tab closed while it was in the queue, so the lock goes to
+      // whoever is behind it rather than to a coordinator nobody is holding any more.
+      if (this.#closed || controller.signal.aborted) return undefined;
+      this.#succeed();
+      return new Promise<void>((releaseLock) => {
+        this.#release = releaseLock;
+      });
+    });
+    // An aborted request rejects, and so does one the manager refuses. Neither is leadership, so
+    // neither is announced — the queue is simply no longer being stood in.
+    held.catch(() => {
+      if (this.#standby === controller) this.#standby = undefined;
+    });
+  }
+
   close(): void {
+    this.#closed = true;
+    // Before the lock is handed back, so the queue this tab was standing in is left before the
+    // lock it was standing in line for becomes free.
+    this.#standby?.abort();
+    this.#standby = undefined;
     this.#release?.();
     this.#release = undefined;
     if (this.role === "leader") this.role = "degraded";
+    // Nothing is announced. A tab that is closing has no use for its own listeners, and telling
+    // them leadership had moved would have the page rebuild itself on the way out.
+    this.#listeners.clear();
+    this.channel.removeEventListener("message", this.#onMessage);
     this.channel.close();
   }
+
+  /**
+   * Takes over from a leader that has gone, and says so.
+   *
+   * The announcement is the only part of this that is not the lock, and it exists for the tabs the
+   * lock will never reach: the other followers, who are still in the queue behind this tab and
+   * would otherwise never learn that the leader they were talking to has died. It is posted only
+   * by a tab that is holding the lock at the moment it posts, and no tab ever concludes from
+   * hearing one that *it* leads — see `#onMessage`. A spurious announcement therefore costs a
+   * follower a re-hydrate; a spurious grant would cost a second worker, and only the browser can
+   * issue one of those.
+   */
+  #succeed(): void {
+    this.role = "leader";
+    this.channel.postMessage({ weft: "leader", scopeId: this.scopeId } satisfies LeadershipAnnouncement);
+    this.#announce("leader");
+  }
+
+  #announce(role: TabRole): void {
+    for (const listener of [...this.#listeners]) listener(role);
+  }
+
+  readonly #onMessage = (event: MessageEvent<unknown>): void => {
+    if (this.#closed || this.role !== "follower") return;
+    const message = event.data;
+    if (!isLeadershipAnnouncement(message) || message.scopeId !== this.scopeId) return;
+    // Still a follower — of somebody else. Said out loud because the leader this tab was talking to
+    // has gone, so its in-flight requests and its registered watches went with it.
+    this.#announce("follower");
+  };
+}
+
+function isLeadershipAnnouncement(value: unknown): value is LeadershipAnnouncement {
+  if (typeof value !== "object" || value === null) return false;
+  const message = value as { readonly weft?: unknown; readonly scopeId?: unknown };
+  return message.weft === "leader" && typeof message.scopeId === "string";
 }
 
 /**
@@ -108,15 +257,30 @@ export interface ProxyPush {
   readonly broadcast: WorkerPush;
 }
 
+export interface BroadcastDbProxyOptions {
+  /**
+   * A deadline on every request, in milliseconds. Off by default, and deliberately so.
+   *
+   * The leader going away is answered by `failInFlight`, driven by the Web Lock, which cannot
+   * produce a false positive — so a timer here is not the liveness mechanism and must not be
+   * mistaken for one. What it covers is the case the lock cannot see: a leader that is alive and
+   * holding the lock while its worker is wedged. Any value chosen for that has to exceed the
+   * slowest commit an application can produce, which is why the library will not choose one.
+   */
+  readonly requestTimeoutMs?: number;
+}
+
 export class BroadcastDbProxy {
   readonly channel: BroadcastChannel;
   readonly #client = crypto.randomUUID();
+  readonly #requestTimeoutMs: number | undefined;
   #nextId = 1;
   readonly #pending = new Map<
     number,
     {
       readonly resolve: (value: unknown) => void;
       readonly reject: (error: Error) => void;
+      readonly timer: ReturnType<typeof setTimeout> | undefined;
     }
   >();
   readonly #pushHandlers = new Set<WorkerPushHandler>();
@@ -128,8 +292,9 @@ export class BroadcastDbProxy {
    */
   readonly #watching = new Map<string, number>();
 
-  constructor(channel: BroadcastChannel) {
+  constructor(channel: BroadcastChannel, options: BroadcastDbProxyOptions = {}) {
     this.channel = channel;
+    this.#requestTimeoutMs = options.requestTimeoutMs;
     this.channel.addEventListener("message", this.#onMessage);
   }
 
@@ -148,7 +313,17 @@ export class BroadcastDbProxy {
     const id = this.#nextId;
     this.#nextId += 1;
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      const timeoutMs = this.#requestTimeoutMs;
+      const timer =
+        timeoutMs === undefined
+          ? undefined
+          : setTimeout(() => {
+              this.#settle(id)?.reject(new Error(`the leader did not answer within ${timeoutMs}ms`));
+            }, timeoutMs);
+      // Node keeps its loop alive for a pending timer, and a page waiting on a database is not a
+      // reason to keep a process running; a browser has no `unref` and does not care.
+      (timer as { unref?: () => void } | undefined)?.unref?.();
+      this.#pending.set(id, { resolve, reject, timer });
       const envelope: ProxyRequest = { client: this.#client, request: withRequestId(id, message) };
       this.channel.postMessage(envelope);
     });
@@ -184,6 +359,28 @@ export class BroadcastDbProxy {
    * has no liveness signal to notice it by. That leak is real and is left standing; the cost is a
    * SQLite query per mutation per abandoned statement, not incorrect results.
    */
+  /**
+   * Settles everything in flight, because the leader they were addressed to is gone.
+   *
+   * This is the other half of `MultiTabCoordinator.watchLeader`: a `BroadcastChannel` post is not a
+   * connection, so nothing about a request tells the proxy that the tab it was posted to has died,
+   * and without this a request issued a moment before the leader vanished stays pending for the
+   * life of the page. Called with what the coordinator learned — never on a guess.
+   *
+   * The proxy stays usable. Leadership moving does not close the channel, and a successor is
+   * already serving on it by the time this runs, so the tab re-hydrates through this same proxy
+   * rather than building another.
+   *
+   * The watch counts go with the requests. They were references held by a host that no longer
+   * exists; handing them back to the successor would decrement registrations it never made, and
+   * keeping them would have a later `dispose` do exactly that.
+   */
+  failInFlight(reason = "the leader tab went away"): void {
+    this.#watching.clear();
+    const pending = [...this.#pending.keys()];
+    for (const id of pending) this.#settle(id)?.reject(new Error(reason));
+  }
+
   dispose(): void {
     for (const [cacheKey, count] of this.#watching) {
       // Once per outstanding watch, because the host counts them: a tab that watched a statement
@@ -194,9 +391,25 @@ export class BroadcastDbProxy {
     this.#watching.clear();
     this.channel.removeEventListener("message", this.#onMessage);
     this.#pushHandlers.clear();
-    const pending = [...this.#pending.values()];
-    this.#pending.clear();
-    for (const entry of pending) entry.reject(new Error("the database proxy was disposed"));
+    const pending = [...this.#pending.keys()];
+    for (const id of pending) this.#settle(id)?.reject(new Error("the database proxy was disposed"));
+  }
+
+  /**
+   * Takes a request out of the pending table and stops its deadline, if it is still there.
+   *
+   * Every path that settles a request goes through here, and that is what keeps a timer from
+   * rejecting a request that was answered — and, under Node, from holding the loop open past the
+   * answer it was waiting for.
+   */
+  #settle(
+    id: number,
+  ): { readonly resolve: (value: unknown) => void; readonly reject: (error: Error) => void } | undefined {
+    const entry = this.#pending.get(id);
+    if (entry === undefined) return undefined;
+    this.#pending.delete(id);
+    if (entry.timer !== undefined) clearTimeout(entry.timer);
+    return entry;
   }
 
   /** Posts a request nobody is waiting on an answer to. Used only by `dispose`. */
@@ -225,9 +438,8 @@ export class BroadcastDbProxy {
     }
     if (!isProxyResponse(message) || message.client !== this.#client) return;
     const { response } = message;
-    const pending = this.#pending.get(response.id);
+    const pending = this.#settle(response.id);
     if (pending === undefined) return;
-    this.#pending.delete(response.id);
     // The error crossed as text, because an `Error` does not survive a structured clone with its
     // prototype intact. Rebuilt here, so a caller sees the same rejection it would from a worker on
     // this thread.
