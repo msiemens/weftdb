@@ -519,6 +519,12 @@ export class WeftClient {
     // stamped below one a device holds, and a device that refused it on that basis would never
     // converge. Once the outbox has drained, everything the relay sends applies.
     if (this.hasQueuedWrite(field.tableName, field.rowId, field.field)) return;
+    // A write set aside in quarantine is unsent for good, and the value it left in the row is the
+    // divergence the person is the one who has to decide about (§5.5) — so the relay's copy does
+    // not get to settle it either. It is the row's own copy that is protected, and only that: a
+    // field the row no longer holds belongs to a life of the row that has already ended, and
+    // withholding it would leave the life that replaced it missing the field altogether.
+    if (row.fields.has(field.field) && this.hasQuarantinedWrite(field.tableName, field.rowId, field.field)) return;
     this.touch(key);
     row.fields.set(field.field, field.value);
     // `created` is held twice: in the field map a decoder reads, and on the row itself, which
@@ -748,6 +754,17 @@ export class WeftClient {
   private hasQueuedWrite(tableName: TableName, rowId: RowId, field: FieldName): boolean {
     if (this.queuedForRow(tableName, rowId) === 0) return false;
     return this.outbox.some(
+      (op) => op.kind === "set" && op.tableName === tableName && op.rowId === rowId && op.field === field,
+    );
+  }
+
+  /**
+   * Whether this field has a write of its own set aside for the person to decide about. As unsent
+   * as one in the outbox and counted the same way by the dirty flag (§5.8) — a row cannot read as
+   * dirty for a write whose value nothing on the device still shows.
+   */
+  private hasQuarantinedWrite(tableName: TableName, rowId: RowId, field: FieldName): boolean {
+    return this.quarantine.some(
       (op) => op.kind === "set" && op.tableName === tableName && op.rowId === rowId && op.field === field,
     );
   }

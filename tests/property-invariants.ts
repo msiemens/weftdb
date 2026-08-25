@@ -21,6 +21,7 @@ import {
   type RowId,
   type TableName,
   type WeftOp,
+  type WireValue,
 } from "weftdb/core";
 import { planRetentionDeletes } from "weftdb/client";
 import {
@@ -295,7 +296,8 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
     check: (world) => {
       // What a pull carries cannot include a write the relay has not been given, so applying it
       // over an unsent local edit replaces what the person typed with the value they typed over
-      // — while their own edit waits its turn in the outbox.
+      // — while their own edit waits its turn in the outbox, or sits in quarantine as a
+      // divergence only the person can resolve (§5.5).
       for (const device of [...world.devices, world.neighbour]) {
         for (const [key, row] of device.client.rows) {
           const { tableName: table, rowId: id } = parseLocalKey(key);
@@ -305,17 +307,45 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
           // replaced — another device creating the same id hands this one a row whose values
           // were never what the queued writes said.
           if (pending.some((op) => op.kind !== "set")) continue;
-          const queued = pending.filter((op) => op.kind === "set");
-          // The last write queued for a field is the one the field ends on locally: `update`
-          // supersedes an earlier unsent write to the same field rather than queueing both.
-          const lastByField = new Map<FieldName, WeftOp>();
-          for (const op of queued) if (op.kind === "set") lastByField.set(op.field, op);
-          for (const [field, op] of lastByField) {
+          // The outbox answers for every field it holds an entry for: it is ordered, and
+          // `update` supersedes an earlier unsent write to the same field rather than queueing
+          // both, so its last entry for a field is the value that field ends on locally.
+          const lastQueued = new Map<FieldName, WeftOp>();
+          for (const op of device.client.outbox) {
+            if (op.kind === "set" && op.tableName === table && op.rowId === id) lastQueued.set(op.field, op);
+          }
+          for (const [field, op] of lastQueued) {
             if (op.kind !== "set") continue;
             assert.deepEqual(
               row.fields.get(field),
               op.value,
               `${device.client.deviceId} shows ${key}.${field} as something other than its own unsent write`,
+            );
+          }
+          // Quarantined work is unsent for good, and the value it left in the row is what the
+          // person is being asked to decide about — so a pull must not quietly settle it either.
+          //
+          // This is a different assertion rather than a weaker one, and the difference is not
+          // optional: `update` supersedes an unsent write only in the outbox, because a
+          // quarantined transaction is the person's to retry or discard whole (§5.5). So a
+          // later edit to the same field leaves the quarantined op behind holding the older
+          // text, and demanding the row show that text would be demanding it resurrect what the
+          // person has since typed over. What the scope says is still excluded: the value has to
+          // be one this device produced — its latest write, or the rebase that replaced that
+          // write before the op was set aside.
+          const quarantinedByField = new Map<FieldName, WireValue[]>();
+          for (const op of device.client.quarantine) {
+            if (op.kind !== "set" || op.tableName !== table || op.rowId !== id) continue;
+            if (lastQueued.has(op.field)) continue;
+            quarantinedByField.set(op.field, [...(quarantinedByField.get(op.field) ?? []), op.value]);
+          }
+          for (const [field, quarantined] of quarantinedByField) {
+            const wrote = world.trace.lastWrites.get(`${device.client.deviceId}\0${writeKey(table, id, field)}`);
+            const held = JSON.stringify(row.fields.get(field));
+            assert.equal(
+              [...quarantined, ...(wrote === undefined ? [] : [wrote])].some((value) => JSON.stringify(value) === held),
+              true,
+              `${device.client.deviceId} shows ${key}.${field} as ${held}, which is neither its quarantined write nor the write it made instead`,
             );
           }
         }

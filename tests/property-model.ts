@@ -144,6 +144,13 @@ export interface WorldTrace {
   readonly acked: Set<TxnId>;
   /** `table\0row\0field` for every field the application explicitly wrote. */
   readonly written: Set<string>;
+  /**
+   * The value each device's application last put in a field, keyed `device\0table\0row\0field`.
+   * The client's own queues cannot answer this once a write has been set aside: quarantined ops
+   * are never superseded by a later edit (§5.5 makes them the person's to decide about), so the
+   * op still holds the value the field had before that edit, not the one it ends on.
+   */
+  readonly lastWrites: Map<string, WireValue>;
   /** Base-field values as first observed, for the immutability invariant. */
   readonly baseFields: Map<string, WireValue>;
   /** Highest schema version the scope has reached, for the monotonicity invariant. */
@@ -176,6 +183,7 @@ export function createWorld(deviceCount = 3, makeServer: ServerFactory = (now) =
     accepted: [],
     acked: new Set(),
     written: new Set(),
+    lastWrites: new Map(),
     baseFields: new Map(),
     highestSchemaVersion: 0,
     revHighWater: new Map(),
@@ -300,6 +308,15 @@ function instrument(device: PropertyDevice, trace: WorldTrace): PropertyDevice {
       const fields = name === "update" ? Object.keys(values) : [...Object.keys(values), "id", "scope_id", "created"];
       for (const field of fields) trace.written.add(writeKey(table, row, fieldName(field)));
       original(table, row, values, txn);
+      // Read back rather than recorded from the call: `create` fills in `created` itself, and
+      // what the row ends up holding is what the application asked for either way.
+      const written = device.client.getRow(table, row)?.fields;
+      for (const field of fields) {
+        const value = written?.get(fieldName(field));
+        if (value !== undefined) {
+          trace.lastWrites.set(`${device.client.deviceId}\0${writeKey(table, row, fieldName(field))}`, value);
+        }
+      }
     };
   }
   return device;
