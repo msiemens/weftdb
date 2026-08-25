@@ -16,6 +16,11 @@ export default tseslint.config(
       ".weft-durability-*",
       "packages/*/src/generated",
       "demos/*/src/generated",
+      // A mutation run's sandboxes and backups hold instrumented copies of the whole workspace,
+      // and its vitest runner writes a setup file per worker into the root. None of it is ours.
+      ".stryker-*",
+      "reports",
+      "stryker-setup-*.js",
       // Astro's generated ambient types. Flat config does not skip dot-directories on its own,
       // and these are written by `astro sync`, not by hand.
       "docs/.astro",
@@ -30,7 +35,7 @@ export default tseslint.config(
       parserOptions: {
         projectService: {
           // Not covered by tsconfig.json's `include`, but still worth linting.
-          allowDefaultProject: ["vite.config.ts", "vitest.config.ts"],
+          allowDefaultProject: ["vite.config.ts", "vitest.config.ts", "vitest.mutation.config.ts"],
         },
         tsconfigRootDir: import.meta.dirname,
       },

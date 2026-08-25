@@ -16,11 +16,10 @@ states/
 .weft-durability-*
 .weft-crash-*
 
-# Stryker's backups of the files it mutates in place, and its report.
-.stryker-tmp/
+# Stryker's sandboxes and backups, its report, and the setup file its vitest runner writes once
+# per worker into the repository root.
+.stryker-*
 reports/
+stryker-setup-*.js
 
 pnpm-lock.yaml
-
-# Written by the Stryker vitest runner, one per worker
-stryker-setup-*.js

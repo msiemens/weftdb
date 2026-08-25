@@ -453,10 +453,7 @@ async function waitFor(condition: () => boolean, message: string, timeoutMs = 4_
   throw new Error(message);
 }
 
-async function listen(
-  t: import("vitest").TestContext,
-  overrides: Partial<ServeOptions> = {},
-): Promise<RunningServer> {
+async function listen(t: import("vitest").TestContext, overrides: Partial<ServeOptions> = {}): Promise<RunningServer> {
   const relay = await startRelay({
     host: "127.0.0.1",
     port: 0,
