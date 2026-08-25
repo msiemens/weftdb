@@ -929,6 +929,8 @@ export {
   RowIdentityCache,
   SubscriptionEngine,
 } from "./subscriptions.ts";
+export { rowMapSource, SqlQueryUnavailableError } from "./source.ts";
+export type { QueryLifecycleSource, WeftSource } from "./source.ts";
 export type {
   CollectionName,
   FieldOf,
