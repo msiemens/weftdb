@@ -223,6 +223,46 @@ test("a create transaction may refine a diff3 field before it is pushed", () => 
   );
 });
 
+test("prose written before the relay was ever heard from does not come back marked", () => {
+  // The ancestor a rebase merges against used to be recorded only when a pull's value was
+  // applied. A device that wrote the field before it ever received one — a row made offline, or
+  // one whose every pull is shadowed by the unsent write sitting on top of it — therefore reached
+  // `rebase` with no ancestor, and `diff3("", mine, theirs)` matches neither side and returns a
+  // conflict block. The markers are the signal that two writers contended (§6), so producing them
+  // where the relay's copy is the very text this edit was made from makes the signal a lie.
+  const prose = "alpha\nbravo\ncharlie\ndelta";
+  const server = new WeftServer();
+
+  const first = new WeftClient(SCOPE, deviceId("tab-1"), schema);
+  first.create(
+    TODOS,
+    ROW,
+    values({ title: "plan", notes: prose, done: false, rank: "a0", due_at: null, auto_delete_days: null }),
+    txnId("create-first"),
+  );
+  first.sync(server, HASH);
+
+  // The second device makes the same row offline, so its create is refused and set aside. That
+  // leaves it holding the row with a quarantined write on `notes`, which is what shadows every
+  // pull that would otherwise have told it what the relay holds.
+  const second = new WeftClient(SCOPE, deviceId("tab-2"), schema);
+  second.create(
+    TODOS,
+    ROW,
+    values({ title: "plan", notes: prose, done: false, rank: "a0", due_at: null, auto_delete_days: null }),
+    txnId("create-second"),
+  );
+  second.sync(server, HASH);
+
+  // Only now does it edit one line, of prose the relay's copy still agrees with word for word.
+  second.update(TODOS, ROW, values({ notes: prose.replace("alpha", "revised") }), txnId("edit-second"));
+  for (let attempt = 0; attempt < 4; attempt += 1) second.sync(server, HASH);
+
+  const local = wireText(second.getRow(TODOS, ROW)?.fields.get(NOTES) ?? "");
+  assert.doesNotMatch(local, /WEFT_LOCAL/u, `an uncontended edit came back marked: ${JSON.stringify(local)}`);
+  assert.equal(local.split("\n")[0], "revised", "the edit was lost rather than kept");
+});
+
 test("the same rhythm on a last-writer-wins field is unaffected", () => {
   const { server, client } = seeded();
   for (const [index, text] of ["p", "pl", "pla", "plan"].entries()) {

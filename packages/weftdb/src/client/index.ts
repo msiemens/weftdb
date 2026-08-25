@@ -508,6 +508,15 @@ export class WeftClient {
       internals: emptyInternals(0, this.isDirty(field.tableName, field.rowId) ? 1 : 0),
     };
     if (!this.rows.has(key)) this.rows.set(key, row);
+    // The diff3 ancestor is a fact about the relay's copy, not about this device's, so it is
+    // recorded whether or not the value below is applied. A field written here before the relay
+    // was ever heard from — a row made offline, or one whose every pull has been shadowed by an
+    // unsent write — otherwise reaches `rebase` with no ancestor at all, and `diff3("", …)` can
+    // match neither side and marks up prose that never contended (§6). What is recorded is
+    // exactly what the relay will compare the next push against (§5.4).
+    if (this.schema.collections[field.tableName]?.fields[field.field]?.merge === "diff3") {
+      row.internals.diff3Base.set(field.field, field.value);
+    }
     // A field this device has written and not yet sent keeps the value it was written with. What
     // a pull carries is what the relay holds, which cannot include a write it has not been given:
     // an edit refused for skew, one made offline, one still queued behind a slow push. Applying
@@ -533,9 +542,6 @@ export class WeftClient {
     // column and the value would be gone on the next hydrate.
     if (field.field === CREATED && typeof field.value === "string") row.created = field.value;
     row.internals.hlc.set(field.field, field.hlc);
-    if (this.schema.collections[field.tableName]?.fields[field.field]?.merge === "diff3") {
-      row.internals.diff3Base.set(field.field, field.value);
-    }
     row.internals._weft_rev += 1;
     this.recomputeDirty(field.tableName, field.rowId);
   }
