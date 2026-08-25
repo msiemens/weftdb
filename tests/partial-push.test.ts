@@ -126,6 +126,39 @@ test("what a half-successful push applied is durable, not just in memory", async
   }
 });
 
+test("a wholly successful async push does not drain edits queued while it was in flight", async () => {
+  // The same hazard as the partly-acknowledged case below, on the path that succeeds outright.
+  // Draining by anything other than what was actually sent takes the edit with it, and the
+  // device is told the push worked, so nothing ever asks after it again.
+  const { server, client } = skewedPair();
+  client.create(
+    TODOS,
+    ROW,
+    values({ title: "plan", notes: "first", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
+    txnId("create"),
+  );
+
+  let injected = false;
+  const transport: Pick<AsyncSyncTransport, "push"> = {
+    push: async (scope, ops) => {
+      if (!injected) {
+        injected = true;
+        client.update(TODOS, ROW, values({ title: "typed while the push was in flight" }), txnId("edit"));
+      }
+      return server.push(scope, ops);
+    },
+  };
+
+  await client.flushWith(transport as AsyncSyncTransport);
+
+  assert.equal(client.outbox.length, 0, "the retry loop left sendable work behind");
+  assert.equal(
+    server.snapshot(SCOPE).fields.find((record) => record.field === TITLE)?.value,
+    "typed while the push was in flight",
+    "the edit queued during a successful push was dropped instead of sent",
+  );
+});
+
 test("a partly acknowledged async push does not drain edits queued while it was in flight", async () => {
   const { server, client, skew } = skewedPair();
   client.create(
