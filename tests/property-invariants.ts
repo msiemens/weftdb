@@ -318,6 +318,37 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
     },
   },
   {
+    id: "§8.2.rev",
+    title: "a row's revision never runs backwards while the row stays put",
+    check: (world) => {
+      // Subscriptions treat the revision as the row's identity, so one that decrements can land
+      // on a number the row already had — and a subscriber diffing on it sees no change at all.
+      for (const device of [...world.devices, world.neighbour]) {
+        const seen = new Set<string>();
+        for (const [key, row] of device.client.rows) {
+          const trackingKey = `${device.client.deviceId}\0${key}`;
+          seen.add(trackingKey);
+          const highest = world.trace.revHighWater.get(trackingKey);
+          if (highest !== undefined) {
+            assert.equal(
+              row.internals._weft_rev >= highest,
+              true,
+              `${device.client.deviceId} rolled ${key} back from revision ${highest} to ${row.internals._weft_rev}`,
+            );
+          }
+          world.trace.revHighWater.set(trackingKey, row.internals._weft_rev);
+        }
+        // A row that has left this device is forgotten: the next life of that id starts over,
+        // and holding the old high-water mark against it would be comparing two different rows.
+        for (const trackingKey of [...world.trace.revHighWater.keys()]) {
+          if (trackingKey.startsWith(`${device.client.deviceId}\0`) && !seen.has(trackingKey)) {
+            world.trace.revHighWater.delete(trackingKey);
+          }
+        }
+      }
+    },
+  },
+  {
     id: "§9.43",
     title: "a scope's schema version never decreases",
     check: (world) => {

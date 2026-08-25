@@ -148,6 +148,11 @@ export interface WorldTrace {
   readonly baseFields: Map<string, WireValue>;
   /** Highest schema version the scope has reached, for the monotonicity invariant. */
   highestSchemaVersion: number;
+  /**
+   * Highest `_weft_rev` seen per device and row, for the monotonicity invariant. Dropped when
+   * the row leaves a device, because the next life of a row starts its revisions again.
+   */
+  readonly revHighWater: Map<string, number>;
 }
 
 export interface PropertyWorld {
@@ -173,6 +178,7 @@ export function createWorld(deviceCount = 3, makeServer: ServerFactory = (now) =
     written: new Set(),
     baseFields: new Map(),
     highestSchemaVersion: 0,
+    revHighWater: new Map(),
   };
   const server = recordPushes(makeServer(clock), trace);
   const devices = Array.from({ length: deviceCount }, (_, index) =>
