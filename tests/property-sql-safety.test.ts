@@ -6,7 +6,7 @@
 // escapes to work around — but "correct as far as I can reason" is not the same as "checked",
 // so the SQL is executed and the database is asked what happened to it.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import { rehydrateSnapshotNdjson, setSchemaHashSql } from "weftdb-cli";
 import { generateClientDdl, generateServerDdl } from "weftdb/codegen";

@@ -5,7 +5,7 @@
 // Suspense must resolve, and conflicts must surface from a marker scan. None of that is
 // observable without a renderer, so this file installs a DOM and mounts components.
 import assert from "node:assert/strict";
-import test, { before } from "node:test";
+import { beforeAll, test } from "vitest";
 import { JSDOM } from "jsdom";
 import { createElement, memo, useEffect, type ReactNode } from "react";
 import {
@@ -27,7 +27,7 @@ const NOTES = fieldName("notes");
 
 let render: (element: ReactNode) => Promise<{ readonly text: () => string; readonly unmount: () => Promise<void> }>;
 
-before(async () => {
+beforeAll(async () => {
   // React needs a document before `react-dom/client` is imported.
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: "https://weft.test" });
   // `navigator` is a getter on the Node global, so these go on by definition rather than

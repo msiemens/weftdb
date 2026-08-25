@@ -1,0 +1,34 @@
+{
+  "$schema": "./node_modules/@stryker-mutator/core/schema/stryker-schema.json",
+  "packageManager": "pnpm",
+  "testRunner": "vitest",
+  "plugins_comment": "pnpm's node_modules is not the flat tree Stryker scans, so a plugin it is not told about is not found.",
+  "plugins": ["@stryker-mutator/vitest-runner"],
+  "reporters": ["html", "clear-text", "progress"],
+  "related_comment": "`vitest --related` picks test files by walking the module graph from the mutated path, which finds nothing in a sandbox. Off, so coverage does the selecting instead.",
+  "mutate_comment": "Narrow a run with `--mutate <file>`; the mutation workflow builds one job per entry.",
+  "mutate": [
+    "packages/weftdb/src/shared/index.ts",
+    "packages/weftdb/src/client/index.ts",
+    "packages/weftdb/src/server/index.ts",
+    "packages/weftdb/src/schema/index.ts",
+    "packages/weftdb/src/codegen/index.ts",
+    "packages/weftdb/src/client/sqlite.ts",
+    "packages/weftdb/src/client/subscriptions.ts",
+    "packages/weftdb/src/client/multitab.ts",
+    "packages/weftdb/src/server/relay.ts",
+    "packages/weftdb/src/server/serve.ts",
+    "packages/weftdb/src/server/jwt.ts",
+    "packages/weftdb/src/server/snapshot.ts",
+    "packages/weftdb/src/server/websocket.ts",
+    "packages/weftdb/src/server/websocket-frames.ts"
+  ],
+  "coverageAnalysis_comment": "Sound only because the property suites are seeded: coverage recorded on one run is reused on the next, which needs a test to reach the same lines both times.",
+  "coverageAnalysis": "perTest",
+  "concurrency": 4,
+  "timeoutMS": 120000,
+  "vitest": {
+    "configFile": "vitest.mutation.config.ts",
+    "related": false
+  }
+}

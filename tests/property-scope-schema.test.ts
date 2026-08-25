@@ -2,7 +2,7 @@
 // a specific arrangement. §9.30 (a client database only holds its own scope) and §9.31
 // (row ids never collide across scopes) are checked continuously by the world model.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import {
   deviceId,

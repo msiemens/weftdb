@@ -3,7 +3,7 @@
 // reach the request that asked for it, and nothing may be left pending when a tab dies — so
 // they are checked against generated interleavings rather than one happy path each.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import {
   BroadcastDbProxy,

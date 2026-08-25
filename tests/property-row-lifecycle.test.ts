@@ -2,7 +2,7 @@
 // specific arrangement. §9.20, §9.21, §9.23f, §9.24 and §9.25 are checked continuously by
 // the world model instead (property-invariants.ts).
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import {
   deviceId,

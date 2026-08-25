@@ -1,7 +1,7 @@
 // The model-based half of the DESIGN.md §9 suite: fast-check generates histories over the
 // world model in property-model.ts, and every invariant in property-invariants.ts is
 // asserted after each command and again once the history has settled.
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import { disagreements, quiesce, runWorld, WORLD_RUNS, worldCommands } from "./property-model.ts";
 import { assertSettledInvariants, STEP_INVARIANTS, SETTLED_INVARIANTS } from "./property-invariants.ts";

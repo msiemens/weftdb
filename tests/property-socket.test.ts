@@ -11,7 +11,7 @@
 // a push, between a push and a pull, during a snapshot, and everywhere else the schedule can
 // put them.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import {
   deviceId,

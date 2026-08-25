@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { TestContext } from "node:test";
+import type { TestContext } from "vitest";
 import { artifactFiles, loadSchema, main, rehydrateSnapshotNdjson, setSchemaHashSql } from "weftdb-cli";
 
 const SCHEMA_MODULE = `import { defineSchema, S } from "weftdb/schema";
@@ -139,6 +139,6 @@ test("rehydrate materializes snapshot fields into table inserts", () => {
  */
 async function projectDirectory(t: TestContext): Promise<string> {
   const directory = await mkdtemp(join(process.cwd(), ".weftdb-cli-test-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  t.onTestFinished(() => rm(directory, { recursive: true, force: true }));
   return directory;
 }

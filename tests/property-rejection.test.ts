@@ -2,7 +2,7 @@
 // transaction never leaves outbox entries behind) is checked continuously by the world
 // model instead.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import {
   encodeHlc,

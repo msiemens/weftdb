@@ -3,7 +3,7 @@
 // collection once, take values the schema declares, and pass them down unchanged. What it must
 // not do is lose a value, invent one, or let a write reach a field the schema has no idea about.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/shared";
 import { createWeftDb, WeftClient, WeftDb } from "weftdb/client";

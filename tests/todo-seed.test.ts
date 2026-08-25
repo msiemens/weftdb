@@ -3,7 +3,7 @@
 // reads: a scope shared by every tab of a browser, a device per tab, and a list that stays as the
 // visitor left it.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { httpTransport, WebStorageClientStore, type FetchLike, type StorageLike } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { createRelayHandler } from "weftdb/server/relay";

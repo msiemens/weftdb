@@ -3,7 +3,7 @@
 // independence and stale-client safety. §9.3, §9.4, §9.8, §9.8a, §9.8b and §9.15 are
 // checked continuously by the world model instead (property-invariants.ts).
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import { fieldName, rowId, txnId, type RowId, type WeftOp } from "weftdb/shared";
 import { defineSchema, S, schemaHash } from "weftdb/schema";

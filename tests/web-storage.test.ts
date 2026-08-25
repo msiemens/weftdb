@@ -3,7 +3,7 @@
 // same work — not just the same rows. A store that restored rows but dropped the outbox would
 // look perfectly healthy right up until someone's edit quietly never happened.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import {
   compareHlc,

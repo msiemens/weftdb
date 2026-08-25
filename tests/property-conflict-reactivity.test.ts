@@ -1,6 +1,6 @@
 // DESIGN.md §9 "Conflict handling" and "Reactivity" — invariants 34 to 42.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import {
   deviceId,

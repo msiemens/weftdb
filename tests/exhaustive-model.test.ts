@@ -7,7 +7,7 @@
 // that needs only a handful of steps to go wrong is found here deterministically, on every
 // run, with the shortest sequence that produces it.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { rowId, txnId, wireText, type DeviceId, type RowId } from "weftdb/shared";
 import { WeftClient } from "weftdb/client";
 import { WeftServer, type Snapshot } from "weftdb/server";
@@ -66,7 +66,7 @@ interface Universe {
   steps: number;
 }
 
-test("every reachable state of a two-device, two-row world upholds the sync invariants", (t) => {
+test("every reachable state of a two-device, two-row world upholds the sync invariants", async (t) => {
   const start = replay([]);
   const seen = new Set([fingerprint(start)]);
   const queue: (readonly Action[])[] = [[]];
@@ -96,8 +96,8 @@ test("every reachable state of a two-device, two-row world upholds the sync inva
     }
   }
 
-  t.diagnostic(`explored ${explored} transitions over ${seen.size} distinct states, to depth ${deepest}`);
-  t.diagnostic(`${stranded} of those states left a device below the tombstone floor`);
+  await t.annotate(`explored ${explored} transitions over ${seen.size} distinct states, to depth ${deepest}`);
+  await t.annotate(`${stranded} of those states left a device below the tombstone floor`);
   // A guard against the search silently collapsing to nothing if the model changes, and
   // against the state cap quietly truncating it if the model grows.
   assert.equal(deepest, DEPTH, `the search stopped at depth ${deepest}`);

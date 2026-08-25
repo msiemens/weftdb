@@ -2,7 +2,7 @@
 // end to end against Node's built-in WebSocket client — which is the same implementation a
 // browser would use, so a handshake or framing mistake shows up here rather than in a tab.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { connect, type Socket } from "node:net";
 import fc from "fast-check";
 import { deviceId, scopeId, fieldName, rowId, tableName, txnId, type FieldName, type WireValue } from "weftdb/shared";
@@ -191,7 +191,7 @@ function nextWake(): {
 
 test("a push by one device wakes another, which then pulls it", async (t) => {
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
 
   const wakes: (ScopeAdvanced | undefined)[] = [];
   const connected = nextWake();
@@ -205,7 +205,7 @@ test("a push by one device wakes another, which then pulls it", async (t) => {
       else pending.wake(advanced);
     },
   });
-  t.after(() => connection.close());
+  t.onTestFinished(() => connection.close());
   await connected.promise;
   assert.equal(connection.connected, true, "the socket never reported itself connected");
 
@@ -243,7 +243,7 @@ test("a change nobody pushed still wakes the devices it affects", async (t) => {
   // hear about — below the floor it can no longer be caught up incrementally at all. Nothing
   // was pushed, so a relay that only broadcasts from its push route says nothing.
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
 
   const connected = nextWake();
   const pending = nextWake();
@@ -252,7 +252,7 @@ test("a change nobody pushed still wakes the devices it affects", async (t) => {
     token: "token-beta",
     onWake: (advanced) => (advanced === undefined ? connected.wake(undefined) : pending.wake(advanced)),
   });
-  t.after(() => connection.close());
+  t.onTestFinished(() => connection.close());
   await connected.promise;
 
   // Something to prune: a row deleted long enough ago to be past the retention window.
@@ -275,7 +275,7 @@ test("a change nobody pushed still wakes the devices it affects", async (t) => {
       if (advanced !== undefined) afterPush.wake(advanced);
     },
   });
-  t.after(() => listener.close());
+  t.onTestFinished(() => listener.close());
   await new Promise((resolve) => setTimeout(resolve, 100));
 
   // No client asked for this; a maintenance job did.
@@ -292,7 +292,7 @@ test("a socket that stops answering is dropped rather than kept forever", async 
     // Driven by hand below rather than by waiting for a real interval.
     keepaliveMs: 0,
   });
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
   const socketUrl = `${running.url.replace(/^http/u, "ws")}/sync`;
 
   const socket = new WebSocket(socketUrl, ["weft.v1", "weft.token.token-beta"]);
@@ -322,7 +322,7 @@ test("a socket that stops answering is dropped rather than kept forever", async 
 
 test("a wake-up never reaches a scope the token does not name", async (t) => {
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
 
   const woken: (ScopeAdvanced | undefined)[] = [];
   const connected = nextWake();
@@ -334,7 +334,7 @@ test("a wake-up never reaches a scope the token does not name", async (t) => {
       if (advanced === undefined) connected.wake(undefined);
     },
   });
-  t.after(() => connection.close());
+  t.onTestFinished(() => connection.close());
   await connected.promise;
 
   const alpha = client("alpha");
@@ -352,7 +352,7 @@ test("a wake-up never reaches a scope the token does not name", async (t) => {
 
 test("a socket without a valid token is refused", async (t) => {
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
 
   const closed = new Promise<void>((resolve) => {
     const socket = new WebSocket(running.socketUrl, ["weft.v1", "weft.token.not-a-token"]);
@@ -365,7 +365,7 @@ test("a socket without a valid token is refused", async (t) => {
 
 test("a dropped socket comes back and asks for a catch-up", async (t) => {
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
 
   let connects = 0;
   const reconnected = nextWake();
@@ -379,7 +379,7 @@ test("a dropped socket comes back and asks for a catch-up", async (t) => {
       if (connects === 2) reconnected.wake(undefined);
     },
   });
-  t.after(() => connection.close());
+  t.onTestFinished(() => connection.close());
 
   await new Promise((resolve) => setTimeout(resolve, 150));
   assert.equal(running.relay.sockets.subscribers(SCOPE), 1);
@@ -395,7 +395,7 @@ test("a change in one tab reaches another with nobody polling for it", async (t)
   // arrives inside a second or two arrived because the relay said so.
   const { TodoStore } = await import("weftdb-demo-todo");
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
 
   const open = (device: string, token: string): InstanceType<typeof TodoStore> =>
     new TodoStore({
@@ -407,8 +407,8 @@ test("a change in one tab reaches another with nobody polling for it", async (t)
 
   const writer = open("alpha", "token-alpha");
   const reader = open("beta", "token-beta");
-  t.after(writer.start());
-  t.after(reader.start());
+  t.onTestFinished(writer.start());
+  t.onTestFinished(reader.start());
 
   // Both sockets up before anything is written, so the wake-up is the only way across.
   await waitFor(() => reader.status().live && writer.status().live, "the sockets never connected");
@@ -447,10 +447,10 @@ async function connected(running: Running, token: string): Promise<SocketTranspo
 
 test("a whole sync session runs over the socket", async (t) => {
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
   const alpha = await connected(running, "token-alpha");
   const beta = await connected(running, "token-beta");
-  t.after(() => {
+  t.onTestFinished(() => {
     alpha.close();
     beta.close();
   });
@@ -481,9 +481,9 @@ test("the socket transport ends where the HTTP one does", async (t) => {
   // The two carry the same four calls, so a history run over each has to land in the same
   // place. Anything else means the transport is doing something of its own.
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
   const socket = await connected(running, "token-alpha");
-  t.after(() => socket.close());
+  t.onTestFinished(() => socket.close());
 
   const overSocket = client("alpha");
   const overHttp = client("beta");
@@ -536,9 +536,9 @@ test("the socket transport ends where the HTTP one does", async (t) => {
 
 test("a rejection comes back over the socket as a rejection, not an error", async (t) => {
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
   const socket = await connected(running, "token-alpha");
-  t.after(() => socket.close());
+  t.onTestFinished(() => socket.close());
 
   const alpha = client("alpha");
   alpha.create(
@@ -559,7 +559,7 @@ test("a rejection comes back over the socket as a rejection, not an error", asyn
     txnId("clash"),
   );
   const beta = await connected(running, "token-beta");
-  t.after(() => beta.close());
+  t.onTestFinished(() => beta.close());
   await other.syncWith(beta, HASH);
 
   const quarantined = other.listQuarantine();
@@ -578,10 +578,10 @@ test("a large answer does not hold up everything behind it", async (t) => {
   // pieces; this checks that something sent during one actually arrives in the middle of it
   // rather than after the whole thing.
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
 
   const writer = await connected(running, "token-alpha");
-  t.after(() => writer.close());
+  t.onTestFinished(() => writer.close());
   const seed = client("alpha");
   seed.create(
     TODOS,
@@ -627,7 +627,7 @@ test("a request the relay cannot carry out is refused, and the connection carrie
   // "no such operation" and "that operation needs an argument you did not send". Neither may
   // take the connection down: everything else a device has in flight is on it.
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
 
   const socket = new WebSocket(running.socketUrl, ["weft.v1", "weft.token.token-alpha"]);
   const answers: { readonly type?: string; readonly id?: string; readonly reason?: string }[] = [];
@@ -656,7 +656,7 @@ test("a subscribed client is sent what changed, not a note saying something did"
   // is gets the records instead — the same batch `/pull` would have answered with, applied by
   // the same code, so nothing about merging changes.
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
 
   const reader = client("beta");
   const batches: number[] = [];
@@ -669,7 +669,7 @@ test("a subscribed client is sent what changed, not a note saying something did"
       reader.applyPull(batch);
     },
   });
-  t.after(() => transport.close());
+  t.onTestFinished(() => transport.close());
   await waitFor(() => transport.connected, "the socket never connected");
 
   const writer = client("alpha");
@@ -694,7 +694,7 @@ test("a subscribed client is sent what changed, not a note saying something did"
 
 test("a subscribed socket cannot advance itself with a non-finite cursor", async (t) => {
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
 
   const socket = new WebSocket(running.socketUrl, ["weft.v1", "weft.token.token-beta"]);
   const batches: Array<{ readonly fields?: readonly unknown[] }> = [];
@@ -705,7 +705,7 @@ test("a subscribed socket cannot advance itself with a non-finite cursor", async
     };
     if (message.type === "batch") batches.push(message.batch ?? {});
   });
-  t.after(() => socket.close());
+  t.onTestFinished(() => socket.close());
   await new Promise<void>((resolve) => socket.addEventListener("open", () => resolve()));
 
   // `JSON.stringify(Infinity)` becomes null, but a peer is not obliged to use that encoder.
@@ -728,7 +728,7 @@ test("a subscribed socket cannot advance itself with a non-finite cursor", async
 
 test("a subscribed socket cannot advance itself with a future cursor", async (t) => {
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
 
   const socket = new WebSocket(running.socketUrl, ["weft.v1", "weft.token.token-beta"]);
   const batches: Array<{ readonly fields?: readonly unknown[] }> = [];
@@ -739,7 +739,7 @@ test("a subscribed socket cannot advance itself with a future cursor", async (t)
     };
     if (message.type === "batch") batches.push(message.batch ?? {});
   });
-  t.after(() => socket.close());
+  t.onTestFinished(() => socket.close());
   await new Promise<void>((resolve) => socket.addEventListener("open", () => resolve()));
 
   socket.send(JSON.stringify({ type: "subscribe", lastServerSeq: 999_999 }));
@@ -761,9 +761,13 @@ test("a subscribed socket cannot advance itself with a future cursor", async (t)
 
 test("a fragmented websocket request is answered or rejected instead of ignored", async (t) => {
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
   const socket = await rawWebSocket(running.socketUrl, "token-alpha");
-  t.after(() => socket.destroy());
+  // A block body, not an expression one: `destroy()` answers with the socket, and a cleanup
+  // callback is typed as returning nothing or a promise.
+  t.onTestFinished(() => {
+    socket.destroy();
+  });
 
   const request = Buffer.from(JSON.stringify({ id: "fragmented", op: "pull", lastServerSeq: 0 }), "utf8");
   const split = Math.floor(request.length / 2);
@@ -779,7 +783,7 @@ test("a fragmented websocket request is answered or rejected instead of ignored"
 
 test("a subscribed client that reconnects is sent what it missed", async (t) => {
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
 
   const reader = client("beta");
   const transport = connectSocketTransport({
@@ -788,7 +792,7 @@ test("a subscribed client that reconnects is sent what it missed", async (t) => 
     cursor: () => reader.lastServerSeq,
     onBatch: (batch) => reader.applyPull(batch),
   });
-  t.after(() => transport.close());
+  t.onTestFinished(() => transport.close());
   await waitFor(() => transport.connected, "the socket never connected");
 
   // The connection dies, and the change happens while it is down.
@@ -812,9 +816,9 @@ test("a subscribed client that reconnects is sent what it missed", async (t) => 
 
 test("a socket the relay refuses does not become a transport", async (t) => {
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
   const transport = connectSocketTransport({ url: running.socketUrl, token: "not-a-token" });
-  t.after(() => transport.close());
+  t.onTestFinished(() => transport.close());
 
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(transport.connected, false);
@@ -824,9 +828,9 @@ test("a socket the relay refuses does not become a transport", async (t) => {
 
 test("a request in flight when the socket drops fails rather than hanging", async (t) => {
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
   const transport = await connected(running, "token-alpha");
-  t.after(() => transport.close());
+  t.onTestFinished(() => transport.close());
 
   const inFlight = transport.pull(SCOPE, 0);
   running.relay.sockets.close();
@@ -835,7 +839,7 @@ test("a request in flight when the socket drops fails rather than hanging", asyn
 
 test("closing the connection stops it reconnecting", async (t) => {
   const running = await relay();
-  t.after(() => running.close());
+  t.onTestFinished(() => running.close());
 
   const connected = nextWake();
   let wakes = 0;

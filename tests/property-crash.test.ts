@@ -5,7 +5,7 @@
 // server. The existing durability tests pick particular instants to die at; this generates both
 // the work and the instant.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

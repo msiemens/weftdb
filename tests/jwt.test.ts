@@ -2,7 +2,7 @@
 // token decides comes down to which `AuthContext` it resolves to — and every way of getting a
 // token accepted that should not be is a way into somebody else's scope.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { createHmac, generateKeyPairSync, createSign } from "node:crypto";
 import { scopeId, deviceId } from "weftdb/shared";
 import { claimsToContext, jwtVerifier, type JwtClaims } from "weftdb/server/jwt";

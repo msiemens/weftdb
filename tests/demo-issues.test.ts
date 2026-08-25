@@ -2,9 +2,8 @@
 // not is the part of the schema the todo list has no use for: relationships resolved against
 // rows the client already holds, an append-only collection, a nested mapper, and the seed a
 // first visit opens on.
-import "./tsx-hook.ts";
 import assert from "node:assert/strict";
-import test, { before } from "node:test";
+import { beforeAll, test } from "vitest";
 import { JSDOM } from "jsdom";
 import { createElement, type ReactNode } from "react";
 import { httpTransport, WebStorageClientStore, type FetchLike, type StorageLike } from "weftdb/client";
@@ -130,7 +129,7 @@ test("deleting a project leaves its issues and does not quarantine anything", as
 
 let page: () => Promise<void>;
 
-before(async () => {
+beforeAll(async () => {
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: "https://weft.test" });
   for (const [name, value] of [
     ["window", dom.window],

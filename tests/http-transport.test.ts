@@ -2,7 +2,7 @@
 // rejection, ack and snapshot crosses a Request/Response boundary here rather than being handed
 // between two objects in the same heap.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import {
   deviceId,
   fieldName,

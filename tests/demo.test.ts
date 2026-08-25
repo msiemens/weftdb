@@ -1,9 +1,8 @@
 // The demo page, driven through its own buttons by two tabs at once. A page that builds is not
 // the same as a page that works, so this mounts the real component tree against the real relay
 // handler and clicks through the scenarios the page invites people to try.
-import "./tsx-hook.ts";
 import assert from "node:assert/strict";
-import test, { before } from "node:test";
+import { beforeAll, test } from "vitest";
 import { JSDOM } from "jsdom";
 import { createElement, type ReactNode } from "react";
 import { httpTransport, WebStorageClientStore, type FetchLike, type StorageLike } from "weftdb/client";
@@ -49,7 +48,7 @@ function memoryStorage(): StorageLike {
   };
 }
 
-before(async () => {
+beforeAll(async () => {
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: "https://weft.test" });
   for (const [name, value] of [
     ["window", dom.window],
@@ -184,7 +183,7 @@ async function addTodo(tab: Tab, title: string): Promise<void> {
 
 test("the page mounts empty and names the device this tab is", async (t) => {
   const world = await openWorld();
-  t.after(() => world.closeAll());
+  t.onTestFinished(() => world.closeAll());
   const tab = await world.open("first");
   assert.match(tab.text(), /Nothing on the list/u);
   assert.match(tab.badges(), /tab 1/u, "the tab does not say which device it is");
@@ -222,7 +221,7 @@ test("a tab's token can travel as a WebSocket subprotocol", () => {
 
 test("a todo added in one tab reaches the other", async (t) => {
   const world = await openWorld();
-  t.after(() => world.closeAll());
+  t.onTestFinished(() => world.closeAll());
   const first = await world.open("first");
   const second = await world.open("second");
 
@@ -236,7 +235,7 @@ test("a todo added in one tab reaches the other", async (t) => {
 
 test("an offline tab keeps working, and drains when it comes back", async (t) => {
   const world = await openWorld();
-  t.after(() => world.closeAll());
+  t.onTestFinished(() => world.closeAll());
   const first = await world.open("first");
   const second = await world.open("second");
 
@@ -264,7 +263,7 @@ test("an offline tab keeps working, and drains when it comes back", async (t) =>
 
 test("two tabs editing the same note line surface both versions, and resolving clears them", async (t) => {
   const world = await openWorld();
-  t.after(() => world.closeAll());
+  t.onTestFinished(() => world.closeAll());
   const first = await world.open("first");
   const second = await world.open("second");
 
@@ -303,7 +302,7 @@ test("two tabs editing the same note line surface both versions, and resolving c
 
 test("edits to different fields both survive", async (t) => {
   const world = await openWorld();
-  t.after(() => world.closeAll());
+  t.onTestFinished(() => world.closeAll());
   const first = await world.open("first");
   const second = await world.open("second");
 
@@ -332,13 +331,13 @@ test("a tab that is started twice keeps working, and reordering moves a row", as
   // BroadcastChannel, so every nudge after it threw and the other tabs stopped hearing about
   // anything this one did — and reordering wrote a rank the list then ignored.
   const world = await openWorld();
-  t.after(() => world.closeAll());
+  t.onTestFinished(() => world.closeAll());
   const tab = await world.open("first");
 
   const stop = tab.store.start();
   stop();
   const restart = tab.store.start();
-  t.after(() => restart());
+  t.onTestFinished(() => restart());
 
   for (const title of ["first", "second", "third"]) {
     await tab.type("input[aria-label='New todo']", title);
@@ -369,7 +368,7 @@ test("a tab that is started twice keeps working, and reordering moves a row", as
 
 test("a reload keeps unsent work: local storage is the state, not a cache", async (t) => {
   const world = await openWorld();
-  t.after(() => world.closeAll());
+  t.onTestFinished(() => world.closeAll());
   const first = await world.open("first");
 
   await first.click("online");

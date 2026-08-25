@@ -8,7 +8,7 @@
 // SQL that SQLite accepts and that produces the columns the types promise, the emitted names
 // have to be unambiguous, and generating twice has to produce the same bytes.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import ts from "typescript";
 import {

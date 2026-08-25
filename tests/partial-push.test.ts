@@ -4,7 +4,7 @@
 // second copy with `row_exists` for a create and `merge_required` for a prose edit — a device
 // manufacturing conflicts with itself out of a push that partly worked.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { deviceId, fieldName, rowId, scopeId, tableName, txnId, type FieldName, type WireValue } from "weftdb/shared";
 import { WeftClient, type AsyncSyncTransport } from "weftdb/client";
 import { WeftServer } from "weftdb/server";

@@ -6,7 +6,7 @@
 // The properties are therefore differential: the same generated history is saved through both
 // executors, and any disagreement between them is a defect in the new one.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

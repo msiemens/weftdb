@@ -2,7 +2,7 @@
 // `@ts-expect-error` below fails the build if the line it marks stops being an error — this
 // file is checked by `tsc --noEmit` along with everything else, so these are assertions.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { fieldName, tableName } from "weftdb/shared";
 import { queryKey, type MaterializedRow, type TypedQueryKey } from "weftdb/client";
 import { useWeftQuery, useWeftRows, type SubscriptionSource } from "weftdb-react";

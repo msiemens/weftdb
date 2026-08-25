@@ -9,7 +9,7 @@
 // with nothing skipped over, nothing arriving out of order, and nothing belonging to a scope
 // this connection has no claim to.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import {
   deviceId,

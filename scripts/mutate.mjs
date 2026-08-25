@@ -132,6 +132,9 @@ const TEST_WAVES = [
 ];
 const TEST_FILES = TEST_WAVES.flat();
 
+// Resolved rather than shelled out to, so a wave costs one process and no shell.
+const VITEST_BIN = path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs");
+
 // Small run counts keep a mutant under a few seconds; the seed is pinned so a survivor list is
 // reproducible rather than a function of whichever histories fast-check happened to draw.
 const TEST_ENV = {
@@ -255,11 +258,17 @@ function collectMutants(file) {
   return { source, mutants };
 }
 
-function runTestFile(testFile, signal) {
+/**
+ * One runner process per wave rather than one per file. Vitest runs the files it is given
+ * concurrently itself, so spawning a process each only pays for a second startup per file, and
+ * `--bail=1` reproduces what the old per-file `AbortController` did: the first failure ends the
+ * wave instead of waiting the rest out.
+ */
+function runWave(wave, signal) {
   return new Promise((resolve) => {
-    // One process per test file, no per-file fork: the harness is already running the files
-    // concurrently, so the runner's own isolation only adds a process and a startup.
-    const child = spawn(process.execPath, ["--test", "--experimental-test-isolation=none", testFile], {
+    // `--silent=true` rather than a bare `--silent`: the flag takes an optional value, so the
+    // bare form swallows the first test path after it as its argument.
+    const child = spawn(process.execPath, [VITEST_BIN, "run", "--bail=1", "--silent=true", ...wave], {
       env: { ...process.env, ...TEST_ENV },
       stdio: "ignore",
       signal,
@@ -269,27 +278,19 @@ function runTestFile(testFile, signal) {
   });
 }
 
-/** Resolves as soon as one test file fails; the rest are aborted rather than waited out. */
+/** Resolves as soon as one wave fails; the waves behind it are never started. */
 async function runSuite() {
   const start = Date.now();
-  for (const wave of TEST_WAVES) {
-    // One controller per wave, so the first file to fail takes its siblings down with it rather
-    // than leaving them running behind the next wave.
+  for (const [index, wave] of TEST_WAVES.entries()) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), WAVE_TIMEOUT_MS);
     const waveStart = Date.now();
     try {
-      await Promise.all(
-        wave.map(async (testFile) => {
-          const code = await runTestFile(testFile, controller.signal);
-          if (code !== 0) throw new Error(testFile);
-          return testFile;
-        }),
-      );
-    } catch (error) {
-      const timedOut = Date.now() - waveStart >= WAVE_TIMEOUT_MS;
-      controller.abort();
-      return { killedBy: error instanceof Error ? error.message : "unknown", timedOut, ms: Date.now() - start };
+      const code = await runWave(wave, controller.signal);
+      if (code !== 0) {
+        const timedOut = Date.now() - waveStart >= WAVE_TIMEOUT_MS;
+        return { killedBy: `wave ${index + 1}`, timedOut, ms: Date.now() - start };
+      }
     } finally {
       clearTimeout(timer);
     }

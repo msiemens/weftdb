@@ -4,7 +4,7 @@
 // it was the latter, a single device typing into a note could not push at all: every op after
 // the first was rejected as `merge_required` against a value only it had written.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import {
   deviceId,

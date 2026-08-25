@@ -10,7 +10,7 @@
 // something the protocol does not allow, or the specification does not describe the protocol
 // that was built.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -83,7 +83,7 @@ const actionArb: fc.Arbitrary<Action> = fc.record({
   row: fc.integer({ min: 0, max: ROWS.length - 1 }),
 });
 
-test("recorded implementation behaviour is behaviour the specification allows", { timeout: 600_000 }, (t) => {
+test("recorded implementation behaviour is behaviour the specification allows", { timeout: 600_000 }, async (t) => {
   let checked = 0;
   if (!hasTlc()) {
     t.skip("TLC is not on PATH; set WEFT_TLC to its path to run trace validation");
@@ -96,7 +96,7 @@ test("recorded implementation behaviour is behaviour the specification allows", 
   mkdirSync(traceDirectory, { recursive: true });
   // WEFT_KEEP_TRACES=1 leaves the generated modules behind, which is the only practical way
   // to re-run TLC by hand on a failing trace.
-  t.after(() => {
+  t.onTestFinished(() => {
     if (process.env["WEFT_KEEP_TRACES"] === "1") return;
     for (const file of readdirSync(traceDirectory)) {
       if (/^WeftTrace\d/u.test(file)) rmSync(join(traceDirectory, file), { force: true });
@@ -131,7 +131,7 @@ test("recorded implementation behaviour is behaviour the specification allows", 
     checked += trace.length;
   }
 
-  t.diagnostic(`checked ${checked} recorded states across ${histories.length} histories against the specification`);
+  await t.annotate(`checked ${checked} recorded states across ${histories.length} histories against the specification`);
   assert.equal(checked > 40, true, `only ${checked} states were checked; the histories are too thin to be meaningful`);
 });
 

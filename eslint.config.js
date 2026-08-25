@@ -30,7 +30,7 @@ export default tseslint.config(
       parserOptions: {
         projectService: {
           // Not covered by tsconfig.json's `include`, but still worth linting.
-          allowDefaultProject: ["vite.config.ts"],
+          allowDefaultProject: ["vite.config.ts", "vitest.config.ts"],
         },
         tsconfigRootDir: import.meta.dirname,
       },
@@ -50,16 +50,16 @@ export default tseslint.config(
       // Interfaces the runtime hands us are frequently `void`-returning, and passing a
       // promise-returning handler to one is idiomatic rather than a mistake.
       "@typescript-eslint/no-misused-promises": ["error", { checksVoidReturn: false }],
-      // `node:test` collects the promise a top-level `test(...)` returns and reports on it, so
-      // those calls are not the unattended promises the rule is looking for.
+      // Vitest collects the promise a top-level `test(...)` returns and reports on it, so those
+      // calls are not the unattended promises the rule is looking for.
       "@typescript-eslint/no-floating-promises": [
         "error",
         {
           allowForKnownSafeCalls: [
             {
               from: "package",
-              package: "node:test",
-              name: ["after", "afterEach", "before", "beforeEach", "describe", "it", "suite", "test"],
+              package: "vitest",
+              name: ["afterAll", "afterEach", "beforeAll", "beforeEach", "describe", "it", "suite", "test"],
             },
           ],
         },

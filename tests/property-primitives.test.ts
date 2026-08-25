@@ -4,7 +4,7 @@
 // explain. The property suite exercises them constantly as machinery — this is the file that
 // says what they are supposed to be.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import {
   compareHlc,

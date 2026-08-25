@@ -16,4 +16,11 @@ states/
 .weft-durability-*
 .weft-crash-*
 
+# Stryker's backups of the files it mutates in place, and its report.
+.stryker-tmp/
+reports/
+
 pnpm-lock.yaml
+
+# Written by the Stryker vitest runner, one per worker
+stryker-setup-*.js

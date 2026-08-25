@@ -7,9 +7,8 @@
 // So: mount the page, drive generated sequences of the things a person can do, and hold it to a
 // budget. A loop blows the budget immediately; a merely wasteful render shows up as a number
 // that climbs when it should not.
-import "./tsx-hook.ts";
 import assert from "node:assert/strict";
-import test, { before } from "node:test";
+import { beforeAll, test } from "vitest";
 import fc from "fast-check";
 import { JSDOM } from "jsdom";
 import { createElement, Profiler, type ReactNode } from "react";
@@ -90,7 +89,7 @@ function memoryStorage(): StorageLike {
   };
 }
 
-before(async () => {
+beforeAll(async () => {
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: "https://weft.test" });
   for (const [name, value] of [
     ["window", dom.window],

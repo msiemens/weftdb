@@ -1,7 +1,7 @@
 // Storage and wire-format fidelity: whatever a generated history produced has to survive a
 // reload, a save/hydrate cycle, and a trip through the snapshot format unchanged.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

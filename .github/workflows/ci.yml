@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+# A second push to the same branch makes the first one's answer stale, so it is cancelled rather
+# than raced. The default branch is exempt: its runs are what the badge reports.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/master' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the Node the workspace is developed against. It is not a free choice: the
+          # durability and crash tests write a .ts file and run it with `process.execPath` and no
+          # flags, so they depend on native type stripping, and the server binds `node:sqlite`.
+          node-version: 26
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Ordered cheapest-first, and each one runs even if an earlier step failed: a red build
+      # should report everything that is wrong in one go rather than one problem per push.
+      - name: Formatting
+        if: ${{ !cancelled() }}
+        run: pnpm format:check
+
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: pnpm lint
+
+      - name: Types
+        if: ${{ !cancelled() }}
+        run: pnpm typecheck
+
+      - name: Package entry points
+        if: ${{ !cancelled() }}
+        run: pnpm build
+
+      - name: Tests
+        if: ${{ !cancelled() }}
+        run: pnpm test

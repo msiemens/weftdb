@@ -1,7 +1,7 @@
 // The runnable relay: environment configuration and the Node HTTP adapter around the
 // fetch-style handler.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import fc from "fast-check";
 import { deviceId, encodeHlc, rowId, scopeId, tableName, txnId, type WeftOp } from "weftdb/shared";
 import {
@@ -454,7 +454,7 @@ async function waitFor(condition: () => boolean, message: string, timeoutMs = 4_
 }
 
 async function listen(
-  t: import("node:test").TestContext,
+  t: import("vitest").TestContext,
   overrides: Partial<ServeOptions> = {},
 ): Promise<RunningServer> {
   const relay = await startRelay({
@@ -465,6 +465,6 @@ async function listen(
     ]),
     ...overrides,
   });
-  t.after(() => relay.close());
+  t.onTestFinished(() => relay.close());
   return relay;
 }

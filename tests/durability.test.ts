@@ -5,7 +5,7 @@
 // server acknowledges a push only after committing it, and the client drains its outbox on
 // that acknowledgement, so an acknowledged transaction has to survive a crash too.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -155,8 +155,8 @@ process.kill(process.pid, "SIGKILL");
  * Inside the workspace rather than the system temp directory: the crash test spawns a child
  * that imports the packages, so it has to sit somewhere they resolve from.
  */
-function temporaryDirectory(t: import("node:test").TestContext): string {
+function temporaryDirectory(t: import("vitest").TestContext): string {
   const directory = mkdtempSync(join(process.cwd(), ".weft-durability-"));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  t.onTestFinished(() => rmSync(directory, { recursive: true, force: true }));
   return directory;
 }

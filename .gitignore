@@ -18,8 +18,15 @@ demos/*/shot*.png
 # says a mutation run owns this checkout; removed when it finishes
 .mutate-lock
 
+# Stryker's backup of the files it mutates in place, and its HTML report
+.stryker-tmp/
+reports/
+
 # TLC model-checking output
 spec/WeftSync_TTrace_*
 spec/states/
 
 TODO.md
+
+# Written by the Stryker vitest runner, one per worker
+stryker-setup-*.js

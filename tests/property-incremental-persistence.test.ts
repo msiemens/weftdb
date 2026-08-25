@@ -7,7 +7,7 @@
 // that the database and the server's own memory agree, record for record, after every history.
 // A full rewrite would satisfy that by construction; an incremental one has to earn it.
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
