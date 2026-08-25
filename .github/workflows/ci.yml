@@ -32,6 +32,13 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # `astro:content` is a virtual module whose types Astro generates into docs/.astro, which is
+      # not committed. Without this the docs config lints against an unresolvable import, and the
+      # type-aware rules report it as an error-typed value — a failure that cannot happen on a
+      # machine that has ever run the docs.
+      - name: Generate Astro types
+        run: pnpm --filter weft-docs exec astro sync
+
       # Ordered cheapest-first, and each one runs even if an earlier step failed: a red build
       # should report everything that is wrong in one go rather than one problem per push.
       - name: Formatting
