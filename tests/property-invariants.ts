@@ -480,7 +480,18 @@ export const SETTLED_INVARIANTS: readonly WorldInvariant[] = [
       for (const op of applied) {
         if (op.kind !== "set") {
           // A row created again is a different row: whatever a purged one held is not
-          // something the server can still be holding.
+          // something the server can still be holding. Only `create` and `append` start a
+          // life, and only they can — both are refused against a row that is present at all
+          // (§5.9), so an accepted one proves the id was purged and took every field with it.
+          //
+          // `delete` and `restore` are deliberately not a new life. They move one row-level
+          // register on an axis of their own and leave every field value in place (§5.9), which
+          // is the whole reason a restored row "returns with every field it had at deletion,
+          // not a subset" (§9.23c). Forgetting the field history here would demand that a
+          // restore's opening writes beat concurrent writes they lose the stamp comparison to —
+          // a rule that reads differently depending on which of the two reached the relay
+          // first, and so contradicts commutativity (§9.1) rather than testing it.
+          if (op.kind !== "create" && op.kind !== "append") continue;
           for (const key of [...winners.keys()]) {
             if (key.startsWith(`${op.scopeId}\0${op.tableName}\0${op.rowId}\0`)) winners.delete(key);
           }

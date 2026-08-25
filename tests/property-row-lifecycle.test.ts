@@ -547,6 +547,189 @@ test("§9.23c restoring a diff3 field value sends that value with the restore", 
   );
 });
 
+test("§9.23c a restore does not reset a field: its opening writes are resolved by HLC like any other", () => {
+  // The failure this pins: a restore's opening `set` is accepted, the pushing device is told
+  // the push succeeded, and the field still ends on somebody else's value. That looks like
+  // silent loss, and §5.1.acked read it as one for three separate generated histories — but it
+  // is what §5.9 asks for. A restore moves the liveness register and nothing else; "a delete
+  // does not remove fields", so the row it revives is the same row with the same field history,
+  // which is the only way §9.23c's "every field it had at deletion, not a subset" can hold.
+  //
+  // The alternative — a restore's own writes winning outright because the row is "new again" —
+  // is not a stricter rule, it is an incoherent one. It has no stamp to decide by, so the
+  // answer would depend on which transaction reached the relay first, and §9.1 requires any
+  // delivery order of the same op set to give byte-identical state. Both orders are pushed
+  // here for exactly that reason.
+  const row = rowId("revived-against-concurrent");
+  const restorer = deviceId("device-restorer");
+  const writer = deviceId("device-writer");
+  const deleteAt = BASE_TIME + 1_000;
+  // One wall millisecond holds every op that competes, so the comparison lands on the counter
+  // and the arrangement does not depend on how fast the clocks happen to run.
+  const contested = BASE_TIME + 2_000;
+  const restoreTxn = txnId("restore-txn");
+
+  const restoreOps: readonly WeftOp[] = [
+    {
+      scopeId: propertyScope,
+      tableName: TASKS,
+      rowId: row,
+      kind: "restore",
+      hlc: encodeHlc({ wallMs: contested, counter: 0, deviceId: restorer }),
+      txnId: restoreTxn,
+    },
+    {
+      scopeId: propertyScope,
+      tableName: TASKS,
+      rowId: row,
+      kind: "set",
+      field: TITLE,
+      value: "title-restored",
+      hlc: encodeHlc({ wallMs: contested, counter: 1, deviceId: restorer }),
+      txnId: restoreTxn,
+    },
+  ];
+  // Strictly above the restore's write, and concurrent with it: this device never saw the
+  // delete or the restore, so it had nothing to stamp itself after.
+  const concurrentOps: readonly WeftOp[] = [
+    {
+      scopeId: propertyScope,
+      tableName: TASKS,
+      rowId: row,
+      kind: "set",
+      field: TITLE,
+      value: "title-concurrent",
+      hlc: encodeHlc({ wallMs: contested, counter: 2, deviceId: writer }),
+      txnId: txnId("concurrent-txn"),
+    },
+  ];
+
+  for (const [first, second] of [
+    [restoreOps, concurrentOps],
+    [concurrentOps, restoreOps],
+  ] as const) {
+    const server = new WeftServer(() => contested + 60 * 60 * 1000);
+    const creation = txnId("create-txn");
+    server.push(propertyScope, [
+      {
+        scopeId: propertyScope,
+        tableName: TASKS,
+        rowId: row,
+        kind: "create",
+        hlc: encodeHlc({ wallMs: BASE_TIME, counter: 0, deviceId: restorer }),
+        txnId: creation,
+      },
+      {
+        scopeId: propertyScope,
+        tableName: TASKS,
+        rowId: row,
+        kind: "set",
+        field: TITLE,
+        value: "title-original",
+        hlc: encodeHlc({ wallMs: BASE_TIME, counter: 1, deviceId: restorer }),
+        txnId: creation,
+      },
+    ]);
+    server.push(propertyScope, [
+      {
+        scopeId: propertyScope,
+        tableName: TASKS,
+        rowId: row,
+        kind: "delete",
+        hlc: encodeHlc({ wallMs: deleteAt, counter: 0, deviceId: restorer }),
+        txnId: txnId("delete-txn"),
+      },
+    ]);
+
+    // Both are accepted. Acceptance is about validity, not about winning the field-wise
+    // comparison the write then goes through (§5.3 step 6) — a losing `set` is not a rejected
+    // one, and reporting it as rejected is what would leave a client retrying forever.
+    for (const batch of [first, second]) {
+      assert.equal(server.push(propertyScope, [...batch]).ok, true, "a valid transaction was rejected");
+    }
+
+    const snapshot = server.snapshot(propertyScope);
+    assert.equal(
+      snapshot.rows.find((record) => record.rowId === row)?.deletedHlc,
+      null,
+      "the restore did not win the liveness register",
+    );
+    assert.equal(
+      snapshot.fields.find((record) => record.rowId === row && record.field === TITLE)?.value,
+      "title-concurrent",
+      "the restore reset a field it is only supposed to leave alone",
+    );
+  }
+});
+
+test("§9.23c a restore's opening write still wins when its stamp is the highest", () => {
+  // The other half of the rule above, so narrowing it cannot be mistaken for dropping it: a
+  // restore's `set` is an ordinary write, which means it takes the field whenever it is the
+  // later one. Losing to *nothing* would be the real silent loss.
+  const row = rowId("revived-uncontested");
+  const device = deviceId("device-restorer");
+  const server = new WeftServer(() => BASE_TIME + 60 * 60 * 1000);
+  const creation = txnId("create-txn");
+  server.push(propertyScope, [
+    {
+      scopeId: propertyScope,
+      tableName: TASKS,
+      rowId: row,
+      kind: "create",
+      hlc: encodeHlc({ wallMs: BASE_TIME, counter: 0, deviceId: device }),
+      txnId: creation,
+    },
+    {
+      scopeId: propertyScope,
+      tableName: TASKS,
+      rowId: row,
+      kind: "set",
+      field: TITLE,
+      value: "title-original",
+      hlc: encodeHlc({ wallMs: BASE_TIME, counter: 1, deviceId: device }),
+      txnId: creation,
+    },
+  ]);
+  server.push(propertyScope, [
+    {
+      scopeId: propertyScope,
+      tableName: TASKS,
+      rowId: row,
+      kind: "delete",
+      hlc: encodeHlc({ wallMs: BASE_TIME + 1_000, counter: 0, deviceId: device }),
+      txnId: txnId("delete-txn"),
+    },
+  ]);
+  const restoreTxn = txnId("restore-txn");
+  server.push(propertyScope, [
+    {
+      scopeId: propertyScope,
+      tableName: TASKS,
+      rowId: row,
+      kind: "restore",
+      hlc: encodeHlc({ wallMs: BASE_TIME + 2_000, counter: 0, deviceId: device }),
+      txnId: restoreTxn,
+    },
+    {
+      scopeId: propertyScope,
+      tableName: TASKS,
+      rowId: row,
+      kind: "set",
+      field: TITLE,
+      value: "title-restored",
+      hlc: encodeHlc({ wallMs: BASE_TIME + 2_000, counter: 1, deviceId: device }),
+      txnId: restoreTxn,
+    },
+  ]);
+
+  const snapshot = server.snapshot(propertyScope);
+  assert.equal(
+    snapshot.fields.find((record) => record.rowId === row && record.field === TITLE)?.value,
+    "title-restored",
+    "a restore's own write lost the field to a stamp below it",
+  );
+});
+
 test("§9.23d a set against an absent row is rejected, and only a create brings the id back", () => {
   type AbsentOpKind = Extract<WeftOp["kind"], "set" | "delete" | "restore">;
   fc.assert(

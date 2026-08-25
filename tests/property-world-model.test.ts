@@ -3,7 +3,25 @@
 // asserted after each command and again once the history has settled.
 import { test } from "vitest";
 import fc from "fast-check";
-import { disagreements, quiesce, runWorld, WORLD_RUNS, worldCommands } from "./property-model.ts";
+import { rowId, txnId } from "weftdb/core";
+import {
+  AUTO_DELETE_DAYS,
+  BASE_NOTES,
+  CONSUMED_AT,
+  createWorld,
+  deviceAt,
+  disagreements,
+  NOTES,
+  propertySchemaHash,
+  quiesce,
+  RANK,
+  runWorld,
+  STATUS,
+  TASKS,
+  TITLE,
+  WORLD_RUNS,
+  worldCommands,
+} from "./property-model.ts";
 import { assertSettledInvariants, STEP_INVARIANTS, SETTLED_INVARIANTS } from "./property-invariants.ts";
 
 test("generated histories uphold every continuously-checked §9 invariant", () => {
@@ -55,6 +73,45 @@ test("the invariant registry covers the world-checkable §9 invariants", () => {
   for (const id of expected) {
     if (!covered.has(id)) throw new Error(`the world model no longer checks ${id}`);
   }
+});
+
+test("a restore competing with an independent create of the same id settles without a false alarm", () => {
+  // The arrangement three generated histories shrank to, written out so it does not depend on
+  // a seed. Two devices make the same id independently; only the first push wins the id, and
+  // the loser's create is quarantined as `row_exists` (§5.5). Its queued delete and restore are
+  // separate transactions, so they go on to apply to the row that did win — and the restore's
+  // opening title arrives concurrent with, and stamped below, the title the winning create
+  // gave the row.
+  //
+  // The server keeps the higher-stamped value, which is §5.9: a restore moves the liveness
+  // register and leaves field values in place, so the id's field history survives the round
+  // trip rather than starting over. §5.1.acked read that as a write accepted and then lost,
+  // because its replay treated every row op as a new life of the row. Only `create` and
+  // `append` are, and this history is here to keep the two apart.
+  const world = createWorld(5);
+  const row = rowId("row-0");
+  const loser = deviceAt(world, 3).client;
+  const winner = deviceAt(world, 0).client;
+  const values = (title: string, rank: string) => ({
+    [TITLE]: title,
+    [STATUS]: "open",
+    [NOTES]: BASE_NOTES,
+    [RANK]: rank,
+    [CONSUMED_AT]: world.now,
+    [AUTO_DELETE_DAYS]: 30,
+  });
+
+  loser.create(TASKS, row, values("loser-title", "a:loser"), txnId("create-loser"));
+  // Enough for the two creates to be told apart by their stamps, and no more: the restore that
+  // follows is emitted in this same millisecond, which is what puts it under the winning create.
+  world.now += 1;
+  winner.create(TASKS, row, values("winner-title", "a:winner"), txnId("create-winner"));
+  loser.delete(TASKS, row, txnId("delete-loser"));
+  loser.restore(TASKS, row, { [TITLE]: "restored-title" }, txnId("restore-loser"));
+  winner.sync(world.server, propertySchemaHash);
+
+  quiesce(world);
+  assertSettledInvariants(world);
 });
 
 test("a settled world reports no disagreements for a trivially empty history", () => {
