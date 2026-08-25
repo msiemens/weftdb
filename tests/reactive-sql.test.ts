@@ -9,6 +9,7 @@ import type { SqlExecutor, SqlStatement } from "weftdb/shared";
 import { defineSchema, S } from "weftdb/schema";
 import {
   compileOnlyKysely,
+  executorRowSelect,
   reactiveSqlQuery,
   SubscriptionEngine,
   WeftClient,
@@ -308,7 +309,7 @@ class Fixture {
   }
 
   snapshot(query: ReturnType<typeof reactiveSqlQuery>) {
-    return this.engine.getSqlSnapshot(query, this.counting, this.client.rows);
+    return this.engine.getSqlSnapshot(query, executorRowSelect(this.counting), this.client.rows);
   }
 
   ids(query: ReturnType<typeof reactiveSqlQuery>): readonly string[] {

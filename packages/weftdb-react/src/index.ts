@@ -106,7 +106,12 @@ export function useWeftRows<Row>(
  * That is the device's own SQLite, so this source exists only where `SqliteClientStore` does.
  */
 export interface SqlQuerySource extends QueryLifecycleSource {
-  readonly executor: import("weftdb/shared").SqlExecutor;
+  /**
+   * Which rows a statement matched, in order. It is a function rather than an executor because
+   * the database is not always on the thread that renders: on a device that holds it here this
+   * runs the statement, and on one that holds it in a worker this reads what the worker pushed.
+   */
+  readonly select: import("weftdb/client").RowSelect;
   /** The scope the client was hydrated for. Generated query builders scope their statements by it. */
   readonly scopeId: string;
 }
@@ -123,7 +128,7 @@ export function useWeftSqlSnapshot(source: SqlQuerySource, query: ReactiveSqlQue
     [source, cacheKey],
   );
   const getSnapshot = useCallback(
-    () => source.engine.getSqlSnapshot(latest.current, source.executor, source.rows),
+    () => source.engine.getSqlSnapshot(latest.current, source.select, source.rows),
     [source, cacheKey],
   );
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);

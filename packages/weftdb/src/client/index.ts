@@ -899,7 +899,13 @@ export { WeftSession } from "./session.ts";
 export type { BroadcastChannelLike, SessionOptions, SessionStatus, SocketHandlers } from "./session.ts";
 export { serializeClient, WebStorageClientStore } from "./web-storage.ts";
 export type { StorageLike, StoredClient, StoredValue } from "./web-storage.ts";
-export { queryKey, reactiveSqlQuery, RowIdentityCache, SubscriptionEngine } from "./subscriptions.ts";
+export {
+  executorRowSelect,
+  queryKey,
+  reactiveSqlQuery,
+  RowIdentityCache,
+  SubscriptionEngine,
+} from "./subscriptions.ts";
 export type {
   CollectionName,
   FieldOf,
@@ -909,6 +915,7 @@ export type {
   QuerySnapshot,
   ReactiveSqlQuery,
   ReactiveSqlQueryOptions,
+  RowSelect,
   TypedQueryKey,
 } from "./subscriptions.ts";
 export { createWeftDb, WeftDb } from "./facade.ts";

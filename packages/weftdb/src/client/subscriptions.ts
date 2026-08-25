@@ -176,22 +176,27 @@ export class SubscriptionEngine {
   }
 
   /**
-   * The snapshot of a compiled SQL query, against the SQLite mirror `SqliteClientStore` keeps
-   * current. The statement answers which rows and in what order; `client.rows` answers what a row
-   * is, so a row that did not change is the same object it was and `React.memo` still holds.
+   * The snapshot of a compiled SQL query. `select` answers which rows matched and in what order;
+   * `rows` answers what a row is, so a row that did not change is the same object it was and
+   * `React.memo` still holds.
+   *
+   * `select` rather than an executor, because the database is not always on the thread that
+   * renders. Where it is, `executorRowSelect` runs the statement directly. Where it is in a
+   * worker, the page reads the ids that worker last pushed. Both are synchronous, which is what
+   * `useSyncExternalStore` requires of a snapshot, and neither is visible to a component.
    */
-  getSqlSnapshot(query: ReactiveSqlQuery, executor: SqlExecutor, rows: ReadonlyMap<string, LocalRow>): QuerySnapshot {
+  getSqlSnapshot(query: ReactiveSqlQuery, select: RowSelect, rows: ReadonlyMap<string, LocalRow>): QuerySnapshot {
     const cacheKey = `sql\0${query.cacheKey}`;
     const cached = this.#snapshots.get(cacheKey);
-    // React calls `getSnapshot` more than once for one render pass, and running the statement
-    // again per call would put a SQLite query in the render path. Nothing can have changed
-    // without a `notify`, so one run per generation is both enough and what keeps two calls in
-    // one pass tearing-free.
+    // React calls `getSnapshot` more than once for one render pass, and selecting again per call
+    // would put a SQLite query in the render path. Nothing can have changed without a `notify`,
+    // so one selection per generation is both enough and what keeps two calls in one pass
+    // tearing-free.
     if (cached !== undefined && this.#sqlRuns.get(cacheKey) === this.#generation) return cached;
     this.#sqlRuns.set(cacheKey, this.#generation);
 
     const nextRows: MaterializedRow[] = [];
-    for (const id of executor.all(selectMatchingIds(query))) {
+    for (const id of select(query)) {
       const row = rows.get(`${query.tableName}\0${id}`);
       // A row the statement matched that this client does not hold is dropped rather than
       // reported: the database outlives any one hydrate, and a scope holds only its own rows.
@@ -236,6 +241,16 @@ export class SubscriptionEngine {
       }
     });
   }
+}
+
+/**
+ * Which rows a query matched, in order. Synchronous, because a snapshot is read during render.
+ */
+export type RowSelect = (query: ReactiveSqlQuery) => readonly RowId[];
+
+/** The selection for a database on this thread: run the statement. */
+export function executorRowSelect(executor: SqlExecutor): RowSelect {
+  return (query) => executor.all(selectMatchingIds(query));
 }
 
 function selectMatchingIds(query: ReactiveSqlQuery): SqlStatement<RowId> {
