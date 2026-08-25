@@ -1,3 +1,5 @@
+import type { Database } from "./database.d.ts";
+
 export function projects_issuesRelation() {
   return {
     sourceTable: "projects",
@@ -7,7 +9,7 @@ export function projects_issuesRelation() {
     many: true,
   } satisfies { readonly sourceTable: string; readonly targetTable: string; readonly localField: string; readonly foreignField: string; readonly many: boolean };
 }
-export type ProjectsIssuesResult = readonly unknown[];
+export type ProjectsIssuesResult = readonly Database["issues"][];
 
 export function issues_projectRelation() {
   return {
@@ -18,7 +20,7 @@ export function issues_projectRelation() {
     many: false,
   } satisfies { readonly sourceTable: string; readonly targetTable: string; readonly localField: string; readonly foreignField: string; readonly many: boolean };
 }
-export type IssuesProjectResult = unknown | null;
+export type IssuesProjectResult = Database["projects"] | null;
 
 export function issues_commentsRelation() {
   return {
@@ -29,7 +31,7 @@ export function issues_commentsRelation() {
     many: true,
   } satisfies { readonly sourceTable: string; readonly targetTable: string; readonly localField: string; readonly foreignField: string; readonly many: boolean };
 }
-export type IssuesCommentsResult = readonly unknown[];
+export type IssuesCommentsResult = readonly Database["comments"][];
 
 export function comments_issueRelation() {
   return {
@@ -40,4 +42,4 @@ export function comments_issueRelation() {
     many: false,
   } satisfies { readonly sourceTable: string; readonly targetTable: string; readonly localField: string; readonly foreignField: string; readonly many: boolean };
 }
-export type CommentsIssueResult = unknown | null;
+export type CommentsIssueResult = Database["issues"] | null;

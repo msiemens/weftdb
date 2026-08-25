@@ -4,7 +4,14 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TestContext } from "vitest";
-import { artifactFiles, loadSchema, main, rehydrateSnapshotNdjson, setSchemaHashSql } from "weftdb-cli";
+import {
+  artifactFiles,
+  doctorUserProject,
+  loadSchema,
+  main,
+  rehydrateSnapshotNdjson,
+  setSchemaHashSql,
+} from "weftdb-cli";
 
 const SCHEMA_MODULE = `import { defineSchema, S } from "weftdb/schema";
 
@@ -96,6 +103,53 @@ test("JSON schemas accept enum fields with their allowed values", async () => {
 
   assert.equal(loaded.ok, true, loaded.ok ? "" : loaded.errors.join());
   assert.deepEqual(loaded.ok ? loaded.schema.collections["tasks"]?.fields["status"]?.values : [], ["open", "done"]);
+});
+
+test("doctor still checks the joins in a JSON schema, which never sees defineSchema", async () => {
+  // `defineSchema` refuses all three of these, at compile time and again at run time — but a
+  // `.json` schema is loaded for pipelines that would rather not execute project code, and that
+  // value is cast to a `SchemaDefinition` without passing through the DSL at all. Here the
+  // duplicated check is the only check.
+  const directory = await mkdtemp(join(tmpdir(), "weftdb-cli-"));
+  const schemaPath = join(directory, "schema.json");
+  const base = {
+    id: { type: "string", merge: "immutable", nullable: false },
+    scope_id: { type: "string", merge: "immutable", nullable: false },
+    created: { type: "date", merge: "immutable", nullable: false },
+  };
+  await writeFile(
+    schemaPath,
+    JSON.stringify({
+      schemaVersion: 1,
+      collections: {
+        projects: {
+          kind: "collection",
+          fields: base,
+          relationships: {
+            absent: { table: "nowhere", localField: "id", foreignField: "project_id", many: true },
+            local: { table: "issues", localField: "idd", foreignField: "project_id", many: true },
+            foreign: { table: "issues", localField: "id", foreignField: "projct_id", many: true },
+            fine: { table: "issues", localField: "id", foreignField: "project_id", many: true },
+          },
+        },
+        issues: {
+          kind: "collection",
+          fields: { ...base, project_id: { type: "string", merge: "lww", nullable: false } },
+          relationships: {},
+        },
+      },
+    }),
+  );
+
+  const result = await doctorUserProject(["--schema", schemaPath]);
+  await rm(directory, { recursive: true, force: true });
+
+  const warnings = result.messages.filter((message) => message.includes("warning"));
+  assert.deepEqual(warnings, [
+    "weft doctor: warning: projects.absent references missing table nowhere",
+    "weft doctor: warning: projects.local references missing field projects.idd",
+    "weft doctor: warning: projects.foreign references missing field issues.projct_id",
+  ]);
 });
 
 test("generate writes every artifact the codegen produces", async (t) => {

@@ -262,6 +262,19 @@ function validateSchemaJson(value: unknown): SchemaJsonValidation {
       } else if (field["values"] !== undefined) {
         errors.push(`${collectionName}.${fieldName}.values is only valid on an enum field`);
       }
+      // A declared TypeScript type is only meaningful where the generator would otherwise write
+      // `unknown`, and it is written verbatim into an import and a type position, so a shape the
+      // schema DSL would have refused has to be refused here too rather than emitted.
+      const jsonType = field["jsonType"];
+      if (jsonType !== undefined) {
+        if (field["type"] !== "json") {
+          errors.push(`${collectionName}.${fieldName}.jsonType is only valid on a json field`);
+        } else if (!isRecord(jsonType) || typeof jsonType["as"] !== "string" || jsonType["as"].trim().length === 0) {
+          errors.push(`${collectionName}.${fieldName}.jsonType.as must be a non-empty string`);
+        } else if (jsonType["from"] !== undefined && typeof jsonType["from"] !== "string") {
+          errors.push(`${collectionName}.${fieldName}.jsonType.from must be a string`);
+        }
+      }
     }
     // The framework owns these three: the server refuses a write to any of them, the client
     // fills them in, and the generated table keys on `(scope_id, id)`. A JSON schema that leaves
@@ -278,12 +291,29 @@ function validateSchemaJson(value: unknown): SchemaJsonValidation {
     : { ok: false, errors };
 }
 
+/**
+ * Kept, though `defineSchema` now throws on all three of these before a schema can be built.
+ * `loadSchema` accepts a `.json` file for pipelines that would rather not execute project code,
+ * and that value never passes through the DSL: it is cast to a `SchemaDefinition` after
+ * `validateSchemaJson`, so this is the only thing standing between such a schema and a generated
+ * join that matches no row. What was a duplicated check for a `.ts` schema is the whole check for
+ * a `.json` one — and it now looks at the two field names as well, which nothing ever did.
+ */
 function validateRelationshipReferences(schema: import("weftdb/schema").SchemaDefinition): readonly string[] {
   const warnings: string[] = [];
   for (const [collectionName, collection] of Object.entries(schema.collections)) {
-    for (const [relationshipName, relationship] of Object.entries(collection.relationships)) {
-      if (schema.collections[relationship.table] === undefined) {
-        warnings.push(`${collectionName}.${relationshipName} references missing table ${relationship.table}`);
+    for (const [relationshipName, relationship] of Object.entries(collection.relationships ?? {})) {
+      const path = `${collectionName}.${relationshipName}`;
+      const target = schema.collections[relationship.table];
+      if (target === undefined) {
+        warnings.push(`${path} references missing table ${relationship.table}`);
+        continue;
+      }
+      if (!Object.hasOwn(collection.fields, relationship.localField)) {
+        warnings.push(`${path} references missing field ${collectionName}.${relationship.localField}`);
+      }
+      if (!Object.hasOwn(target.fields, relationship.foreignField)) {
+        warnings.push(`${path} references missing field ${relationship.table}.${relationship.foreignField}`);
       }
     }
   }

@@ -1,5 +1,5 @@
 import { schemaHash } from "weftdb/schema";
-import type { CollectionDefinition, FieldDefinition, SchemaDefinition } from "weftdb/schema";
+import type { CollectionDefinition, FieldDefinition, JsonTypeReference, SchemaDefinition } from "weftdb/schema";
 import { fieldStorage } from "weftdb/shared";
 
 export interface GeneratedArtifactSet {
@@ -263,7 +263,9 @@ function generateDatabaseTypes(schema: SchemaDefinition, internal: boolean): str
   const tables = Object.entries(schema.collections)
     .map(([tableName, collection]) => `  ${propertyName(tableName)}: {\n${typeFields(collection, internal)}\n  };`)
     .join("\n");
-  return `export interface ${internal ? "InternalDatabase" : "Database"} {\n${tables}\n}\n`;
+  const imports = jsonTypeImports(schema);
+  const header = imports.length === 0 ? "" : `${imports.join("\n")}\n\n`;
+  return `${header}export interface ${internal ? "InternalDatabase" : "Database"} {\n${tables}\n}\n`;
 }
 
 export function generateKyselyDatabaseTypes(schema: SchemaDefinition): string {
@@ -275,6 +277,7 @@ export function generateKyselyDatabaseTypes(schema: SchemaDefinition): string {
     .join("\n");
   return [
     "import type { ColumnType, Generated } from 'kysely';",
+    ...jsonTypeImports(schema),
     "",
     `export interface Database {\n${tables}\n}`,
     "",
@@ -306,6 +309,7 @@ function assertDistinctGeneratedNames(schema: SchemaDefinition): void {
 
 export function generateMutators(schema: SchemaDefinition): string {
   assertDistinctGeneratedNames(schema);
+  const imports = jsonTypeImports(schema);
   const methods = Object.entries(schema.collections)
     .map(([tableName, collection]) => {
       const inputName = typeName(tableName, "Mutation");
@@ -328,7 +332,7 @@ export function generateMutators(schema: SchemaDefinition): string {
         .join("\n");
     })
     .join("\n\n");
-  return `${methods}\n`;
+  return `${imports.length === 0 ? "" : `${imports.join("\n")}\n\n`}${methods}\n`;
 }
 
 /**
@@ -351,7 +355,9 @@ export function generateBindings(schema: SchemaDefinition): string {
     ...collections.map(
       ([name]) => `import type { ${typeName(name, "Mutation")}, ${typeName(name, "Mutators")} } from "./mutators.ts";`,
     ),
+    ...jsonTypeImports(schema),
     "",
+    ...jsonTypeGuard(schema),
     "// Re-exported so an application has one import for everything the schema implies.",
     `export type { ${collections
       .flatMap(([name]) => [typeName(name, "Mutation"), typeName(name, "Mutators")])
@@ -518,7 +524,14 @@ function decodeExpression(field: string, definition: FieldDefinition): string {
     case "boolean":
       return `${read} === true${definition.nullable ? ` ? true : ${read} === false ? false : null` : ""}`;
     case "json":
-      return `(${read} ?? ${fallback}) as ${tsType(definition)}`;
+      // The wire carries a `WireValue` and the schema says the field holds a `Tags`; neither is
+      // assignable to the other, because an interface has no index signature, so the declared
+      // type is asserted through `unknown` rather than pretended to overlap. That assertion is
+      // the whole content of declaring the type: it is the author's word, taken here once, so
+      // that no read of the field has to take it again.
+      return definition.jsonType === undefined
+        ? `(${read} ?? ${fallback}) as ${tsType(definition)}`
+        : `(${read} ?? ${fallback}) as unknown as ${tsType(definition)}`;
     default:
       return `typeof ${read} === "string" ? ${read} as string : ${fallback}`;
   }
@@ -555,12 +568,21 @@ function assertDistinctRelationshipNames(schema: SchemaDefinition): void {
 
 export function generateRelationshipHelpers(schema: SchemaDefinition): string {
   assertDistinctRelationshipNames(schema);
+  let namesDatabase = false;
   const helpers = Object.entries(schema.collections)
     .flatMap(([tableName, collection]) =>
       Object.entries(collection.relationships).map(([relationshipName, relationship]) => {
+        // The schema already says which collection is on the far side, so the result is that
+        // collection's row rather than `unknown` — the whole point of declaring the relationship.
+        // A relationship may still name a table this schema does not define, which `weft doctor`
+        // warns about and generation tolerates; `Database["absent"]` would be an error rather
+        // than a warning, so that one stays `unknown`.
+        const target = schema.collections[relationship.table];
+        if (target !== undefined) namesDatabase = true;
+        const row = target === undefined ? "unknown" : `Database[${JSON.stringify(relationship.table)}]`;
         // `readonly` is a type modifier for arrays and tuples only; a nullable single result is
         // just a union, and writing `readonly unknown | null` does not compile.
-        const result = relationship.many ? "readonly unknown[]" : "unknown | null";
+        const result = relationship.many ? `readonly ${row}[]` : `${row} | null`;
         return [
           `export function ${tableName}_${relationshipName}Relation() {`,
           "  return {",
@@ -576,7 +598,10 @@ export function generateRelationshipHelpers(schema: SchemaDefinition): string {
       }),
     )
     .join("\n\n");
-  return helpers.length === 0 ? "export {};\n" : `${helpers}\n`;
+  if (helpers.length === 0) return "export {};\n";
+  // The same `Database` the bindings import, and from the same place: `weft generate` writes both
+  // files into one directory.
+  return namesDatabase ? `import type { Database } from "./database.d.ts";\n\n${helpers}\n` : `${helpers}\n`;
 }
 
 export function generateNestedMappers(schema: SchemaDefinition): string {
@@ -660,9 +685,90 @@ function tsType(field: FieldDefinition): string {
         : field.type === "boolean"
           ? "boolean"
           : field.type === "json"
-            ? "unknown"
+            ? // A json field the schema says nothing more about really is unknown; one that
+              // declares a type is worth that type, in the row, in the mutation, and in the
+              // decoder, so neither reading it nor writing it costs the application a cast.
+              (field.jsonType?.as ?? "unknown")
             : "string";
   return field.nullable ? `${base} | null` : base;
+}
+
+/**
+ * Every declared json type in the schema, once each, in the order the schema names them.
+ *
+ * Two fields may share a type — a `Tags` on three collections is one import — but two different
+ * types cannot share a name, because the generated file has one namespace and would import the
+ * second over the first. That is reported by name here rather than left to fail as a redeclared
+ * import in machine-written code.
+ */
+function declaredJsonTypes(schema: SchemaDefinition): readonly JsonTypeReference[] {
+  const claimed = new Map<string, { readonly reference: JsonTypeReference; readonly path: string }>();
+  for (const [tableName, collection] of Object.entries(schema.collections)) {
+    for (const [fieldName, field] of Object.entries(collection.fields)) {
+      if (field.type !== "json" || field.jsonType === undefined) continue;
+      const path = `${tableName}.${fieldName}`;
+      const existing = claimed.get(field.jsonType.as);
+      if (existing === undefined) {
+        claimed.set(field.jsonType.as, { reference: field.jsonType, path });
+        continue;
+      }
+      if (existing.reference.from !== field.jsonType.from) {
+        throw new Error(
+          `json types on ${existing.path} and ${path} are both named ${JSON.stringify(field.jsonType.as)} but come ` +
+            "from different modules; rename one of them so the generated code can tell them apart",
+        );
+      }
+    }
+  }
+  return [...claimed.values()].map((entry) => entry.reference);
+}
+
+/** `import type { … }` for the declared json types, one line per module they come from. */
+function jsonTypeImports(schema: SchemaDefinition): readonly string[] {
+  const byModule = new Map<string, string[]>();
+  for (const reference of declaredJsonTypes(schema)) {
+    if (reference.from === undefined) continue;
+    const names = byModule.get(reference.from);
+    if (names === undefined) byModule.set(reference.from, [reference.as]);
+    else names.push(reference.as);
+  }
+  return [...byModule].map(([from, names]) => `import type { ${names.join(", ")} } from ${JSON.stringify(from)};`);
+}
+
+/**
+ * What the schema cannot check about a declared json type, the generated bindings can. The value
+ * is stored with `encodeWireValue`, so a type JSON cannot carry describes a field that throws on
+ * its first write; instantiating the check below with such a type is a compile error in the
+ * generated file, which is as close to the declaration as a name alone can be caught.
+ */
+function jsonTypeGuard(schema: SchemaDefinition): readonly string[] {
+  const declared = declaredJsonTypes(schema);
+  if (declared.length === 0) return [];
+  return [
+    "/**",
+    " * A json field is stored as JSON, so a type declared for one has to be a type JSON can carry.",
+    " * Assignability to `WireValue` alone is the wrong test: an `interface` has no implicit index",
+    " * signature however plain its properties are, so it would refuse most of what an application",
+    " * declares. This walks the type instead — an array of carriable elements, or an object whose",
+    " * every property is carriable — and stops at a method, which is what a `Date` or a `Map`",
+    " * reduces to and what has no wire form at all.",
+    " */",
+    "type WeftJsonCarriable<Value> = Value extends WireValue",
+    "  ? Value",
+    "  : Value extends (...args: never[]) => unknown",
+    "    ? never",
+    "    : Value extends readonly (infer Element)[]",
+    "      ? readonly WeftJsonCarriable<Element>[]",
+    "      : Value extends object",
+    "        ? { readonly [Key in keyof Value]: WeftJsonCarriable<Value[Key]> }",
+    "        : never;",
+    "type WeftDeclaredJson<Value extends Carriable, Carriable> = Value;",
+    ...declared.map(
+      (reference, index) =>
+        `type WeftJsonCheck${index + 1} = WeftDeclaredJson<${reference.as}, WeftJsonCarriable<${reference.as}>>;`,
+    ),
+    "",
+  ];
 }
 
 function insertType(field: FieldDefinition): string {

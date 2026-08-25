@@ -62,6 +62,26 @@ constraint, and narrows the row type to that union instead of the general `strin
 above accepts only `"open"` or `"done"`. Every builder also accepts `nullable`, which adds `null`
 to both the row type and the column; `priority`, `due_at`, and `metadata` above are nullable.
 
+### Typing a json field
+
+A `json` field with nothing more said about it reads as `unknown`, because the schema does not fix
+its shape. Where an application does have a type for it, `as` names that type and `from` says where
+to import it:
+
+```ts
+metadata: S.json({ as: "TaskMetadata", from: "../metadata.ts", nullable: true }),
+```
+
+The generated row type, mutation type, Kysely column, and decoder all say `TaskMetadata` where they
+would otherwise say `unknown`, so neither reading the field nor writing a typed value to it costs a
+cast. `from` is written the way the generated files import it, relative to the `--out` directory
+and next to `bindings.ts`. Leave it off for a type expression that needs no import, such as
+`S.json({ as: "readonly string[]" })`. Keeping the declared type JSON-serialisable is the author's
+job: a value is stored the way sync moves it, and the generated bindings refuse a declared type
+that reduces to methods, as `Date` and `Map` do. The type name is a local concern of the generated
+code and does not enter the schema hash, so declaring one on a field that already exists is not a
+change other devices have to agree to.
+
 ## Annotating fields
 
 ### Merge strategy
