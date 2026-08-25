@@ -41,6 +41,7 @@ import { relayDurable } from "./cases/relay-durable.ts";
 import { relayThroughput } from "./cases/relay-throughput.ts";
 import { snapshot } from "./cases/snapshot.ts";
 import { syncLatency } from "./cases/sync-latency.ts";
+import { workerBoundary } from "./cases/worker-boundary.ts";
 import { renderMarkdown } from "./report.ts";
 import type { BenchConfig, BenchGroup, BenchResults, CaseResult, Machine } from "./harness.ts";
 
@@ -51,6 +52,7 @@ const GROUPS: readonly BenchGroup[] = [
   merge,
   snapshot,
   persistence,
+  workerBoundary,
   syncLatency,
   relayThroughput,
   relayDurable,
