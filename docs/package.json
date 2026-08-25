@@ -1,0 +1,23 @@
+{
+  "name": "weft-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/react": "^6.0.4",
+    "@astrojs/starlight": "^0.41.8",
+    "astro": "^7.2.6",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "sharp": "^0.35.3",
+    "weftdb-demo-chat": "workspace:*",
+    "weftdb-demo-issues": "workspace:*",
+    "weftdb-demo-shared": "workspace:*",
+    "weftdb-demo-todo": "workspace:*"
+  }
+}

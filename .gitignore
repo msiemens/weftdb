@@ -1,0 +1,25 @@
+node_modules/
+dist/
+
+# Astro's generated types and build cache
+docs/.astro/
+
+# the demo relay's database, and what rendering a screenshot of the page leaves behind. The relay
+# writes relative to whichever demo started it, so this covers every one of them.
+demos/*/*.sqlite*
+demos/*/shot*.png
+.chrome-shot/
+
+# scratch directories the suite makes in the working tree and removes again
+.weftdb-cli-test-*
+.weft-durability-*
+.weft-crash-*
+
+# says a mutation run owns this checkout; removed when it finishes
+.mutate-lock
+
+# TLC model-checking output
+spec/WeftSync_TTrace_*
+spec/states/
+
+TODO.md

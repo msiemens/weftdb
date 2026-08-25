@@ -1,0 +1,15 @@
+{
+  "name": "weftdb-cli",
+  "version": "0.0.0",
+  "license": "MPL-2.0",
+  "type": "module",
+  "dependencies": {
+    "weftdb": "workspace:*"
+  },
+  "bin": {
+    "weft": "./src/index.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

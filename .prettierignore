@@ -1,0 +1,19 @@
+# Kept in step with eslint.config.js's `ignores` and with .gitignore.
+node_modules/
+**/dist/
+docs/.astro/
+
+# Written by the code generator, not by hand.
+packages/*/src/generated/
+demos/*/src/generated/
+
+# TLA+ sources and TLC's output; Prettier has nothing to say about either.
+spec/
+states/
+
+# Scratch directories the suite makes in the working tree and removes again.
+.weftdb-cli-test-*
+.weft-durability-*
+.weft-crash-*
+
+pnpm-lock.yaml

@@ -1,0 +1,9 @@
+packages:
+  - "packages/*"
+  - "demos/*"
+  - "docs"
+
+# Astro's toolchain ships prebuilt binaries that its install scripts unpack.
+onlyBuiltDependencies:
+  - esbuild
+  - sharp

@@ -1,0 +1,23 @@
+{
+  "name": "weftdb-demo-shared",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MPL-2.0",
+  "type": "module",
+  "scripts": {
+    "relay": "node src/relay-main.ts"
+  },
+  "dependencies": {
+    "weftdb": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^8.2.2"
+  },
+  "exports": {
+    "./auth": "./src/auth.ts",
+    "./identity": "./src/identity.ts",
+    "./relay": "./src/relay.ts",
+    "./dev": "./src/dev.ts",
+    "./tokens.css": "./src/tokens.css"
+  }
+}

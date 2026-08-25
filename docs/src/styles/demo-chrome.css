@@ -1,0 +1,44 @@
+/*
+ * The one piece of chrome a demo route adds: a way back to the documentation.
+ *
+ * A real stylesheet rather than a scoped `<style>` block in the route. The demo pages render
+ * their own `<html>` document and their only other stylesheet arrives with a `client:only`
+ * island, which leaves scoped styles resolving differently in `astro dev` than in a build. An
+ * imported file has one ordinary place in the cascade in both.
+ *
+ * The palette comes from `weftdb-demo-todo/style.css`, which the island brings with it. That
+ * stylesheet lands a moment after this one, so every token here carries the light-theme literal
+ * as its fallback — the link is never unstyled, it only stops following the theme for that
+ * moment.
+ */
+
+.demo-back {
+  /*
+   * The demo's own `main` measure, so the link's left edge lands on the app's rather than
+   * somewhere inside it. Demos do not share a measure — a two-column app is wider than a list —
+   * so each declares `--demo-measure` beside its `main` rule and this follows it. The fallback
+   * is the narrow measure the single-column demos use.
+   */
+  max-width: var(--demo-measure, 46rem);
+  margin: 0 auto clamp(16px, 2.5vw, 24px);
+}
+
+.demo-back a {
+  display: inline-block;
+  font: 500 12px/1.35 var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  letter-spacing: -0.01em;
+  /* Quiet, and no surface of its own: the demo already has one raised thing on screen. */
+  color: var(--ink-2, #5a554a);
+  text-decoration: none;
+}
+
+.demo-back a:hover {
+  color: var(--accent, #2e3a8e);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.demo-back a:focus-visible {
+  outline: 2px solid var(--accent, #2e3a8e);
+  outline-offset: 2px;
+}

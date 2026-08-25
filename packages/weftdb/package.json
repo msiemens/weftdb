@@ -1,0 +1,28 @@
+{
+  "name": "weftdb",
+  "version": "0.0.0",
+  "license": "MPL-2.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./shared": "./src/shared/index.ts",
+    "./schema": "./src/schema/index.ts",
+    "./client": "./src/client/index.ts",
+    "./client/sqlite": "./src/client/sqlite.ts",
+    "./client/wasm-sqlite": "./src/client/wasm-sqlite.ts",
+    "./server": "./src/server/index.ts",
+    "./server/sqlite": "./src/server/sqlite.ts",
+    "./server/node-sqlite": "./src/server/node-sqlite.ts",
+    "./server/snapshot": "./src/server/snapshot.ts",
+    "./server/relay": "./src/server/relay.ts",
+    "./server/serve": "./src/server/serve.ts",
+    "./server/websocket": "./src/server/websocket.ts",
+    "./server/websocket-frames": "./src/server/websocket-frames.ts",
+    "./server/jwt": "./src/server/jwt.ts",
+    "./codegen": "./src/codegen/index.ts"
+  },
+  "dependencies": {
+    "kysely": "^0.29.5"
+  }
+}

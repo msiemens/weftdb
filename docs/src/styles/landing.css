@@ -1,0 +1,793 @@
+/*
+ * The landing page, carried over from `site/style.css` unchanged apart from what moved.
+ *
+ * What moved: the palette, the ground and its weave, the reduced-motion rule and the focus ring
+ * now live in `loom.css`, because the documentation wears them too. What is left here is the
+ * page's own furniture — masthead, chips, tabs, figures, comparison table — which nothing else
+ * uses, so it loads on this route and no other.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: clamp(20px, 4vw, 48px) clamp(16px, 5vw, 40px) clamp(48px, 8vw, 96px);
+  font: 400 16px/1.6 var(--sans);
+  color: var(--ink);
+}
+
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+}
+
+.skip:focus {
+  left: 8px;
+  top: 8px;
+  z-index: 2;
+  padding: 8px 14px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+}
+
+.page {
+  max-width: var(--page);
+  margin: 0 auto;
+}
+
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: var(--accent-hover);
+}
+
+code {
+  font: 500 0.9em/1.4 var(--mono);
+  color: var(--ink);
+}
+
+p code,
+li code,
+td code,
+th code,
+dd code {
+  padding: 1px 4px;
+  background: var(--sunken);
+  border-radius: var(--radius-chip);
+}
+
+/* --- masthead ------------------------------------------------------------------------ */
+
+.masthead {
+  padding-bottom: clamp(22px, 4vw, 34px);
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.wordmark {
+  margin: 0;
+  font: 600 clamp(30px, 6vw, 40px)/1 var(--mono);
+  letter-spacing: -0.035em;
+}
+
+/* The one decorative use of the accent: the thread the product is named after. */
+.wordmark span {
+  color: var(--accent);
+}
+
+.lede {
+  max-width: var(--measure);
+  margin: 18px 0 0;
+  font-size: clamp(17px, 2.2vw, 19px);
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.sub {
+  max-width: var(--measure);
+  margin: 14px 0 0;
+  font-size: 15px;
+  color: var(--ink-2);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 22px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/*
+ * Square-cornered and monospace, like the demo's status chips: these are readouts about the
+ * machine, not labels somebody wrote.
+ */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-chip);
+  background: var(--surface);
+  font: 500 12px/1.35 var(--mono);
+  letter-spacing: -0.01em;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.chip.lead {
+  color: var(--ink);
+  background: var(--accent-wash);
+  border-color: transparent;
+}
+
+.chip.lead::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 24px 0 0;
+}
+
+/*
+ * Every colour a link-button resolves is a custom property and the state rules only ever read
+ * them — the same discipline as the demo's buttons, and for the same reason: a state rule that
+ * names a colour outright out-specifies the variant and repaints a filled label into its fill.
+ */
+.button {
+  --btn-fg: var(--ink);
+  --btn-fg-hover: var(--btn-fg);
+  --btn-bg: var(--surface);
+  --btn-bg-hover: var(--sunken);
+  --btn-border: var(--rule-strong);
+  --btn-border-hover: var(--btn-border);
+
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 16px;
+  font: 500 14px/1.4 var(--sans);
+  color: var(--btn-fg);
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.button:hover,
+.button:active {
+  color: var(--btn-fg-hover);
+  background: var(--btn-bg-hover);
+  border-color: var(--btn-border-hover);
+}
+
+.button.primary {
+  --btn-fg: var(--accent-ink);
+  --btn-fg-hover: var(--accent-ink);
+  --btn-bg: var(--accent);
+  --btn-bg-hover: var(--accent-hover);
+  --btn-border: var(--accent);
+  --btn-border-hover: var(--accent-hover);
+
+  font-weight: 600;
+}
+
+/* --- sections ------------------------------------------------------------------------ */
+
+section {
+  margin-top: clamp(38px, 6vw, 64px);
+}
+
+/*
+ * `--ink-2`, not `--ink-3`. The demo's faintest ink clears 4.8:1 on `--surface`, but an eyebrow
+ * sits on the bare ground, where the same colour is 3.9:1 — and 11px bold is nowhere near the
+ * size that relaxes to 3:1. Every measured pair on this page is at 4.5:1 or better.
+ */
+.eyebrow {
+  margin: 0 0 16px;
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+h2.title {
+  margin: 0 0 12px;
+  font-size: clamp(21px, 3vw, 25px);
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+}
+
+.section-note {
+  max-width: var(--measure);
+  margin: 0 0 24px;
+  color: var(--ink-2);
+  font-size: 15px;
+}
+
+.section-note:last-child {
+  margin-bottom: 0;
+}
+
+/* --- the pipeline -------------------------------------------------------------------- */
+
+/*
+ * Four stages, ruled rather than boxed, with the arrow carried by a border on the leading edge
+ * of each stage after the first. It is one path, so it is drawn as one strip.
+ */
+.pipeline {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0;
+  margin: 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.stage {
+  padding: 16px 18px;
+  border-left: 1px solid var(--rule);
+}
+
+.stage:first-child {
+  border-left: none;
+}
+
+.stage dt {
+  font: 600 12.5px/1.3 var(--mono);
+  letter-spacing: -0.01em;
+  color: var(--accent);
+}
+
+.stage dd {
+  margin: 8px 0 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+@media (max-width: 780px) {
+  .pipeline {
+    grid-template-columns: 1fr;
+  }
+
+  .stage {
+    border-left: none;
+    border-top: 1px solid var(--rule);
+  }
+
+  .stage:first-child {
+    border-top: none;
+  }
+}
+
+/* --- properties list ----------------------------------------------------------------- */
+
+.properties {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0 28px;
+  margin: 26px 0 0;
+}
+
+.properties div {
+  padding: 14px 0;
+  border-top: 1px solid var(--rule);
+}
+
+.properties dt {
+  font: 600 12.5px/1.3 var(--mono);
+  color: var(--ink);
+}
+
+.properties dd {
+  margin: 6px 0 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+/* --- tabs ---------------------------------------------------------------------------- */
+
+.examples {
+  background: var(--surface);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+[role="tablist"] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  padding: 0 6px;
+  background: var(--sunken);
+  border-bottom: 1px solid var(--rule);
+}
+
+[role="tab"] {
+  appearance: none;
+  padding: 12px 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  font: 500 13px/1.4 var(--mono);
+  letter-spacing: -0.01em;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+[role="tab"]:hover {
+  color: var(--ink);
+}
+
+/* The selected tab is the one thing here you cannot work out from the content, so it carries
+   the accent — as a thread under the label rather than a filled pill. */
+[role="tab"][aria-selected="true"] {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+[role="tab"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
+}
+
+[role="tabpanel"] {
+  padding: 20px clamp(16px, 3vw, 22px) 22px;
+}
+
+[role="tabpanel"][hidden] {
+  display: none;
+}
+
+.panel-note {
+  max-width: var(--measure);
+  margin: 0 0 16px;
+  font-size: 14.5px;
+  color: var(--ink-2);
+}
+
+.panel-note strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.panel-foot {
+  max-width: var(--measure);
+  margin: 14px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+/* --- code ---------------------------------------------------------------------------- */
+
+.code {
+  position: relative;
+  margin: 0;
+}
+
+.code + .code {
+  margin-top: 14px;
+}
+
+.code pre {
+  margin: 0;
+  padding: 16px 18px;
+  overflow-x: auto;
+  background: var(--sunken);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  font: 400 13px/1.65 var(--mono);
+  color: var(--ink);
+  tab-size: 2;
+}
+
+.code pre code {
+  font: inherit;
+  padding: 0;
+  background: none;
+}
+
+/*
+ * Highlighting, in the colours the page already has: indigo for keywords, the same green and
+ * amber the demo uses for its ok/warn readouts for strings and numbers. Six colours would be a
+ * different design from the one this page is; these four sit on `--sunken` at 5.5:1 or better in
+ * both themes, which is the whole reason they are palette tokens rather than editor-theme colours.
+ */
+.tok-comment {
+  color: var(--ink-2);
+  font-style: italic;
+}
+
+.tok-string {
+  color: var(--ok);
+}
+
+.tok-number {
+  color: var(--warn);
+}
+
+.tok-keyword {
+  color: var(--accent);
+}
+
+/* Types and constructors are marked by weight rather than a fifth colour. */
+.tok-type {
+  font-weight: 600;
+}
+
+.code-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 8px;
+}
+
+.code-name {
+  font: 500 11.5px/1.4 var(--mono);
+  letter-spacing: 0.02em;
+  color: var(--ink-2);
+}
+
+.copy {
+  --btn-fg: var(--ink-2);
+  --btn-fg-hover: var(--accent);
+  --btn-bg: transparent;
+  --btn-bg-hover: var(--accent-wash);
+  --btn-border: transparent;
+  --btn-border-hover: color-mix(in srgb, var(--accent) 40%, transparent);
+
+  padding: 4px 9px;
+  font: 500 11.5px/1.4 var(--mono);
+  color: var(--btn-fg);
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: var(--radius-chip);
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+
+.copy:hover {
+  color: var(--btn-fg-hover);
+  background: var(--btn-bg-hover);
+  border-color: var(--btn-border-hover);
+}
+
+/* --- numbers ------------------------------------------------------------------------- */
+
+.numbers {
+  display: grid;
+  /* A fixed count rather than auto-fit: six figures across an auto-fit grid land as four and a
+     stranded two, and the dividers below are drawn per position, which needs a known one. */
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.metric {
+  padding: 18px 20px;
+  border-left: 1px solid var(--rule);
+  border-top: 1px solid var(--rule);
+}
+
+/* The outer edges are the panel's own border, so the first column and the first row drop theirs. */
+.metric:nth-child(3n + 1) {
+  border-left: none;
+}
+
+.metric:nth-child(-n + 3) {
+  border-top: none;
+}
+
+.metric .value {
+  font: 600 clamp(22px, 3.4vw, 28px)/1.1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.metric .value.pending {
+  color: var(--ink-3);
+}
+
+.metric .unit {
+  font-size: 0.55em;
+  font-weight: 500;
+  color: var(--ink-2);
+  margin-left: 4px;
+}
+
+.metric .label {
+  margin: 10px 0 0;
+  font: 500 12px/1.35 var(--mono);
+  color: var(--ink);
+}
+
+.metric .metric-note {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+@media (max-width: 900px) {
+  .numbers {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .metric:nth-child(n) {
+    border-left: 1px solid var(--rule);
+    border-top: 1px solid var(--rule);
+  }
+
+  .metric:nth-child(odd) {
+    border-left: none;
+  }
+
+  .metric:nth-child(-n + 2) {
+    border-top: none;
+  }
+}
+
+@media (max-width: 560px) {
+  .numbers {
+    grid-template-columns: 1fr;
+  }
+
+  .metric:nth-child(n) {
+    border-left: none;
+    border-top: 1px solid var(--rule);
+  }
+
+  .metric:first-child {
+    border-top: none;
+  }
+}
+
+/*
+ * The caveat sits with the figures, not underneath the fold: a number without the conditions it
+ * was taken under is a marketing claim rather than a measurement.
+ */
+.caveat {
+  max-width: var(--measure);
+  margin: 18px 0 0;
+  padding: 14px 16px;
+  background: var(--warn-wash);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-sm);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--ink);
+}
+
+.caveat strong {
+  color: var(--warn);
+}
+
+/* --- comparison ---------------------------------------------------------------------- */
+
+/* The table is wider than the page on a phone, so it scrolls inside its own box rather than
+   dragging the document sideways. */
+.table-scroll {
+  /* The same gap under a heading that `.properties` leaves, so both sections sit alike. */
+  margin: 26px 0 0;
+  overflow-x: auto;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  min-width: 48rem;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+caption {
+  padding: 14px 16px;
+  text-align: left;
+  font-size: 13px;
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--rule);
+}
+
+th,
+td {
+  padding: 10px 14px;
+  text-align: left;
+  vertical-align: top;
+  border-top: 1px solid var(--rule);
+}
+
+thead th {
+  position: sticky;
+  top: 0;
+  background: var(--sunken);
+  border-top: none;
+  border-bottom: 1px solid var(--rule-strong);
+  font: 600 11px/1.3 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+tbody th {
+  font: 600 13px/1.4 var(--mono);
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+tbody tr:hover {
+  background: color-mix(in srgb, var(--sunken) 55%, var(--surface));
+}
+
+/* The row for the product whose page this is, marked so it can be found rather than made to
+   look better than its neighbours. */
+tbody tr.self th {
+  color: var(--accent);
+}
+
+tbody tr.self {
+  background: var(--accent-wash);
+}
+
+tbody tr.self:hover {
+  background: var(--accent-wash);
+}
+
+/* A parenthetical inside a row heading — a version, a caveat — set apart from the name it
+   qualifies without a second colour. */
+tbody th .note {
+  font-weight: 400;
+  color: var(--ink-2);
+}
+
+/*
+ * Two different quiet cells, and they have to stay tellable apart: `.none` is a capability the
+ * project does not have, `.unverified` is one nobody checked. Both are set in the muted ink —
+ * still 6:1, because a cell quiet enough to overlook is not the aim — and the unverified ones
+ * carry a dotted underline on top of it, which is what the note under the table names.
+ */
+td.none,
+td.unverified {
+  color: var(--ink-2);
+  font-style: italic;
+}
+
+td.unverified {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.table-foot {
+  max-width: var(--measure);
+  margin: 14px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+/* --- getting started ----------------------------------------------------------------- */
+
+.start {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: clamp(20px, 4vw, 40px);
+  align-items: start;
+}
+
+@media (max-width: 780px) {
+  .start {
+    grid-template-columns: 1fr;
+  }
+}
+
+.start ol {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.start li {
+  margin-bottom: 10px;
+}
+
+.start li strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.links {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--rule);
+}
+
+.links li {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.links a {
+  font: 500 13.5px/1.4 var(--mono);
+}
+
+.links p {
+  margin: 5px 0 0;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+/* --- footer -------------------------------------------------------------------------- */
+
+.page > footer {
+  margin-top: clamp(40px, 6vw, 68px);
+  padding-top: 20px;
+  border-top: 1px solid var(--rule-strong);
+  font-size: 13px;
+  color: var(--ink-2);
+  text-align: center;
+}
+
+/* Centred text in a measure-width block still needs the block itself centred. */
+.page > footer p {
+  max-width: var(--measure);
+  margin: 0 auto 8px;
+}
+
+.page > footer .made {
+  color: var(--ink-3);
+}
+
+/* The one warm mark on the page, at the size the surrounding text is set in. */
+.page > footer .heart {
+  color: var(--bad);
+  font-style: normal;
+}

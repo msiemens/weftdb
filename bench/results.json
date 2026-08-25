@@ -1,0 +1,857 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-24T21:56:32.736Z",
+  "mode": "full",
+  "runDurationMs": 67984,
+  "machine": {
+    "node": "v24.9.0",
+    "v8": "13.6.233.10-node.27",
+    "platform": "win32",
+    "arch": "x64",
+    "cpu": "Intel(R) Core(TM) Ultra 7 265H",
+    "cores": 16,
+    "memoryBytes": 33751728128
+  },
+  "cases": [
+    {
+      "id": "bench.timerOverhead",
+      "group": "Harness",
+      "label": "Cost of one empty timed region",
+      "unit": "ms",
+      "median": 0.00008348,
+      "p95": 0.0000888,
+      "iterations": 25,
+      "note": "two performance.now() calls and a subtraction, averaged over 100,000 per sample"
+    },
+    {
+      "id": "local.create",
+      "group": "Local writes",
+      "label": "Local create (row with six fields)",
+      "unit": "ops/s",
+      "median": 138900,
+      "p95": 111700,
+      "iterations": 25,
+      "note": "500 creates per sample into a fresh in-memory client; each create enqueues 10 protocol ops"
+    },
+    {
+      "id": "local.update.lww",
+      "group": "Local writes",
+      "label": "Local update, last-writer-wins field",
+      "unit": "ops/s",
+      "median": 368400,
+      "p95": 202600,
+      "iterations": 25,
+      "note": "200 updates per sample across distinct rows of a 1000-row client with a drained outbox"
+    },
+    {
+      "id": "local.update.diff3",
+      "group": "Local writes",
+      "label": "Local update, diff3 prose field",
+      "unit": "ops/s",
+      "median": 148900,
+      "p95": 65760,
+      "iterations": 25,
+      "note": "200 updates per sample across distinct rows of a 1000-row client with a drained outbox"
+    },
+    {
+      "id": "local.update.offline.0ops",
+      "group": "Local writes",
+      "label": "Local update with 0 unsent ops queued",
+      "unit": "ops/s",
+      "median": 377900,
+      "p95": 287900,
+      "iterations": 25,
+      "note": "50 updates per sample to one field of a synced row, behind 0 unsent ops"
+    },
+    {
+      "id": "local.update.offline.1000ops",
+      "group": "Local writes",
+      "label": "Local update with 1,000 unsent ops queued",
+      "unit": "ops/s",
+      "median": 330300,
+      "p95": 119200,
+      "iterations": 25,
+      "note": "50 updates per sample to one field of a synced row, behind 1000 unsent ops"
+    },
+    {
+      "id": "local.update.offline.10000ops",
+      "group": "Local writes",
+      "label": "Local update with 10,000 unsent ops queued",
+      "unit": "ops/s",
+      "median": 296700,
+      "p95": 179200,
+      "iterations": 25,
+      "note": "50 updates per sample to one field of a synced row, behind 10000 unsent ops"
+    },
+    {
+      "id": "read.query.warm.100",
+      "group": "Local reads",
+      "label": "Query 100 rows, unchanged (cached result)",
+      "unit": "ms",
+      "median": 0.0172,
+      "p95": 0.0377,
+      "iterations": 25,
+      "note": "the subscription engine still filters and sorts every row before it can tell the result is unchanged"
+    },
+    {
+      "id": "read.query.cold.100",
+      "group": "Local reads",
+      "label": "Query 100 rows, cold engine",
+      "unit": "ms",
+      "median": 0.0572,
+      "p95": 0.0731,
+      "iterations": 25,
+      "note": "a fresh subscription engine per sample, so every row is filtered, sorted and materialized"
+    },
+    {
+      "id": "read.query.afterEdit.100",
+      "group": "Local reads",
+      "label": "Re-query 100 rows after one row changed",
+      "unit": "ms",
+      "median": 0.0265,
+      "p95": 0.0637,
+      "iterations": 25,
+      "note": "the cached result no longer matches, so the engine rebuilds the result and computes the delta against it"
+    },
+    {
+      "id": "read.listRows.100",
+      "group": "Local reads",
+      "label": "listRows over 100 rows",
+      "unit": "ms",
+      "median": 0.0404,
+      "p95": 0.0649,
+      "iterations": 25,
+      "note": "every row is copied into a fresh materialized row, with no identity cache in the way"
+    },
+    {
+      "id": "read.query.warm.1000",
+      "group": "Local reads",
+      "label": "Query 1,000 rows, unchanged (cached result)",
+      "unit": "ms",
+      "median": 0.0857,
+      "p95": 0.2046,
+      "iterations": 25,
+      "note": "the subscription engine still filters and sorts every row before it can tell the result is unchanged"
+    },
+    {
+      "id": "read.query.cold.1000",
+      "group": "Local reads",
+      "label": "Query 1,000 rows, cold engine",
+      "unit": "ms",
+      "median": 0.5206,
+      "p95": 0.623,
+      "iterations": 25,
+      "note": "a fresh subscription engine per sample, so every row is filtered, sorted and materialized"
+    },
+    {
+      "id": "read.query.afterEdit.1000",
+      "group": "Local reads",
+      "label": "Re-query 1,000 rows after one row changed",
+      "unit": "ms",
+      "median": 0.1809,
+      "p95": 0.2216,
+      "iterations": 25,
+      "note": "the cached result no longer matches, so the engine rebuilds the result and computes the delta against it"
+    },
+    {
+      "id": "read.listRows.1000",
+      "group": "Local reads",
+      "label": "listRows over 1,000 rows",
+      "unit": "ms",
+      "median": 0.3741,
+      "p95": 0.4567,
+      "iterations": 25,
+      "note": "every row is copied into a fresh materialized row, with no identity cache in the way"
+    },
+    {
+      "id": "read.query.warm.10000",
+      "group": "Local reads",
+      "label": "Query 10,000 rows, unchanged (cached result)",
+      "unit": "ms",
+      "median": 1.188,
+      "p95": 1.71,
+      "iterations": 25,
+      "note": "the subscription engine still filters and sorts every row before it can tell the result is unchanged"
+    },
+    {
+      "id": "read.query.cold.10000",
+      "group": "Local reads",
+      "label": "Query 10,000 rows, cold engine",
+      "unit": "ms",
+      "median": 8.789,
+      "p95": 14.8,
+      "iterations": 25,
+      "note": "a fresh subscription engine per sample, so every row is filtered, sorted and materialized"
+    },
+    {
+      "id": "read.query.afterEdit.10000",
+      "group": "Local reads",
+      "label": "Re-query 10,000 rows after one row changed",
+      "unit": "ms",
+      "median": 5.228,
+      "p95": 8.602,
+      "iterations": 25,
+      "note": "the cached result no longer matches, so the engine rebuilds the result and computes the delta against it"
+    },
+    {
+      "id": "read.listRows.10000",
+      "group": "Local reads",
+      "label": "listRows over 10,000 rows",
+      "unit": "ms",
+      "median": 4.317,
+      "p95": 5.538,
+      "iterations": 25,
+      "note": "every row is copied into a fresh materialized row, with no identity cache in the way"
+    },
+    {
+      "id": "merge.diff3.disjoint",
+      "group": "Merge",
+      "label": "diff3 prose merge, disjoint edits",
+      "unit": "ops/s",
+      "median": 384200,
+      "p95": 311500,
+      "iterations": 25,
+      "note": "20-line document, one line changed on each side, 2000 merges per sample"
+    },
+    {
+      "id": "merge.diff3.conflicting",
+      "group": "Merge",
+      "label": "diff3 prose merge, conflicting edits",
+      "unit": "ops/s",
+      "median": 397600,
+      "p95": 348000,
+      "iterations": 25,
+      "note": "20-line document, one line changed on each side, 2000 merges per sample"
+    },
+    {
+      "id": "merge.lww.serverField",
+      "group": "Merge",
+      "label": "Last-writer-wins field write through the server",
+      "unit": "ops/s",
+      "median": 965000,
+      "p95": 426300,
+      "iterations": 25,
+      "note": "2000 single-op pushes per sample against an in-process server, no network"
+    },
+    {
+      "id": "snapshot.build.100",
+      "group": "Snapshot",
+      "label": "Build a snapshot of 100 rows",
+      "unit": "ms",
+      "median": 0.0088,
+      "p95": 0.0218,
+      "iterations": 25,
+      "note": "the server scans every record it holds and keeps the ones in this scope; it holds one scope here, so the scan and the answer are the same size"
+    },
+    {
+      "id": "snapshot.ndjson.100",
+      "group": "Snapshot",
+      "label": "Order and encode a 100-row snapshot",
+      "unit": "ms",
+      "median": 1.279,
+      "p95": 2.893,
+      "iterations": 20,
+      "note": "records are sorted into key order and written as NDJSON; no digest is taken"
+    },
+    {
+      "id": "snapshot.digest.100",
+      "group": "Snapshot",
+      "label": "Digest a 100-row snapshot body",
+      "unit": "ms",
+      "median": 1.065,
+      "p95": 1.61,
+      "iterations": 20,
+      "note": "SHA-256 in portable TypeScript, so that a browser client and a Node relay agree without either taking a dependency"
+    },
+    {
+      "id": "snapshot.serialize.100",
+      "group": "Snapshot",
+      "label": "Content-address a 100-row snapshot",
+      "unit": "ms",
+      "median": 2.818,
+      "p95": 3.185,
+      "iterations": 20,
+      "note": "what GET /snapshot does: the digest and the body, each of which encodes the snapshot, so the encoding happens twice"
+    },
+    {
+      "id": "snapshot.apply.100",
+      "group": "Snapshot",
+      "label": "Apply a 100-row snapshot to an empty device",
+      "unit": "ms",
+      "median": 0.8377,
+      "p95": 1.224,
+      "iterations": 25,
+      "note": "every record is folded into the local store and into the device's clock"
+    },
+    {
+      "id": "snapshot.bytes.100",
+      "group": "Snapshot",
+      "label": "Snapshot body for 100 rows",
+      "unit": "bytes",
+      "median": 226900,
+      "p95": 226900,
+      "iterations": 1,
+      "note": "the NDJSON encoding the digest is taken over, uncompressed"
+    },
+    {
+      "id": "snapshot.wireBytes.100",
+      "group": "Snapshot",
+      "label": "/snapshot response for 100 rows",
+      "unit": "bytes",
+      "median": 263600,
+      "p95": 263600,
+      "iterations": 1,
+      "note": "the envelope as the relay sends it: the NDJSON body and the digest of those bytes"
+    },
+    {
+      "id": "snapshot.build.1000",
+      "group": "Snapshot",
+      "label": "Build a snapshot of 1,000 rows",
+      "unit": "ms",
+      "median": 0.1312,
+      "p95": 0.238,
+      "iterations": 25,
+      "note": "the server scans every record it holds and keeps the ones in this scope; it holds one scope here, so the scan and the answer are the same size"
+    },
+    {
+      "id": "snapshot.ndjson.1000",
+      "group": "Snapshot",
+      "label": "Order and encode a 1,000-row snapshot",
+      "unit": "ms",
+      "median": 13.29,
+      "p95": 14.48,
+      "iterations": 20,
+      "note": "records are sorted into key order and written as NDJSON; no digest is taken"
+    },
+    {
+      "id": "snapshot.digest.1000",
+      "group": "Snapshot",
+      "label": "Digest a 1,000-row snapshot body",
+      "unit": "ms",
+      "median": 11,
+      "p95": 16.53,
+      "iterations": 20,
+      "note": "SHA-256 in portable TypeScript, so that a browser client and a Node relay agree without either taking a dependency"
+    },
+    {
+      "id": "snapshot.serialize.1000",
+      "group": "Snapshot",
+      "label": "Content-address a 1,000-row snapshot",
+      "unit": "ms",
+      "median": 26.28,
+      "p95": 29.05,
+      "iterations": 20,
+      "note": "what GET /snapshot does: the digest and the body, each of which encodes the snapshot, so the encoding happens twice"
+    },
+    {
+      "id": "snapshot.apply.1000",
+      "group": "Snapshot",
+      "label": "Apply a 1,000-row snapshot to an empty device",
+      "unit": "ms",
+      "median": 9.223,
+      "p95": 10.21,
+      "iterations": 25,
+      "note": "every record is folded into the local store and into the device's clock"
+    },
+    {
+      "id": "snapshot.bytes.1000",
+      "group": "Snapshot",
+      "label": "Snapshot body for 1,000 rows",
+      "unit": "bytes",
+      "median": 2287000,
+      "p95": 2287000,
+      "iterations": 1,
+      "note": "the NDJSON encoding the digest is taken over, uncompressed"
+    },
+    {
+      "id": "snapshot.wireBytes.1000",
+      "group": "Snapshot",
+      "label": "/snapshot response for 1,000 rows",
+      "unit": "bytes",
+      "median": 2652000,
+      "p95": 2652000,
+      "iterations": 1,
+      "note": "the envelope as the relay sends it: the NDJSON body and the digest of those bytes"
+    },
+    {
+      "id": "snapshot.build.5000",
+      "group": "Snapshot",
+      "label": "Build a snapshot of 5,000 rows",
+      "unit": "ms",
+      "median": 0.7515,
+      "p95": 0.9269,
+      "iterations": 25,
+      "note": "the server scans every record it holds and keeps the ones in this scope; it holds one scope here, so the scan and the answer are the same size"
+    },
+    {
+      "id": "snapshot.ndjson.5000",
+      "group": "Snapshot",
+      "label": "Order and encode a 5,000-row snapshot",
+      "unit": "ms",
+      "median": 76.6,
+      "p95": 94.27,
+      "iterations": 20,
+      "note": "records are sorted into key order and written as NDJSON; no digest is taken"
+    },
+    {
+      "id": "snapshot.digest.5000",
+      "group": "Snapshot",
+      "label": "Digest a 5,000-row snapshot body",
+      "unit": "ms",
+      "median": 57.69,
+      "p95": 65.89,
+      "iterations": 20,
+      "note": "SHA-256 in portable TypeScript, so that a browser client and a Node relay agree without either taking a dependency"
+    },
+    {
+      "id": "snapshot.serialize.5000",
+      "group": "Snapshot",
+      "label": "Content-address a 5,000-row snapshot",
+      "unit": "ms",
+      "median": 139.3,
+      "p95": 158.9,
+      "iterations": 20,
+      "note": "what GET /snapshot does: the digest and the body, each of which encodes the snapshot, so the encoding happens twice"
+    },
+    {
+      "id": "snapshot.apply.5000",
+      "group": "Snapshot",
+      "label": "Apply a 5,000-row snapshot to an empty device",
+      "unit": "ms",
+      "median": 48.57,
+      "p95": 58.69,
+      "iterations": 25,
+      "note": "every record is folded into the local store and into the device's clock"
+    },
+    {
+      "id": "snapshot.bytes.5000",
+      "group": "Snapshot",
+      "label": "Snapshot body for 5,000 rows",
+      "unit": "bytes",
+      "median": 11520000,
+      "p95": 11520000,
+      "iterations": 1,
+      "note": "the NDJSON encoding the digest is taken over, uncompressed"
+    },
+    {
+      "id": "snapshot.wireBytes.5000",
+      "group": "Snapshot",
+      "label": "/snapshot response for 5,000 rows",
+      "unit": "bytes",
+      "median": 13340000,
+      "p95": 13340000,
+      "iterations": 1,
+      "note": "the envelope as the relay sends it: the NDJSON body and the digest of those bytes"
+    },
+    {
+      "id": "persist.save.100",
+      "group": "Persistence",
+      "label": "Save a 100-row scope to SQLite",
+      "unit": "ms",
+      "median": 0.6172,
+      "p95": 0.7974,
+      "iterations": 20,
+      "note": "the store rewrites the whole scope rather than the rows that changed: one transaction that deletes every row and writes it back, committed with synchronous=FULL"
+    },
+    {
+      "id": "persist.edit.100",
+      "group": "Persistence",
+      "label": "One edit with a 100-row store attached",
+      "unit": "ms",
+      "median": 0.9803,
+      "p95": 1.096,
+      "iterations": 20,
+      "note": "a single field update, including the durable write it triggers"
+    },
+    {
+      "id": "persist.hydrate.100",
+      "group": "Persistence",
+      "label": "Hydrate a 100-row client from SQLite",
+      "unit": "ms",
+      "median": 0.6168,
+      "p95": 0.94,
+      "iterations": 20,
+      "note": "every row, tombstone and queued op is read back and decoded; the file is warm in the OS cache"
+    },
+    {
+      "id": "persist.save.1000",
+      "group": "Persistence",
+      "label": "Save a 1,000-row scope to SQLite",
+      "unit": "ms",
+      "median": 0.7364,
+      "p95": 1.019,
+      "iterations": 20,
+      "note": "the store rewrites the whole scope rather than the rows that changed: one transaction that deletes every row and writes it back, committed with synchronous=FULL"
+    },
+    {
+      "id": "persist.edit.1000",
+      "group": "Persistence",
+      "label": "One edit with a 1,000-row store attached",
+      "unit": "ms",
+      "median": 1.004,
+      "p95": 1.5,
+      "iterations": 20,
+      "note": "a single field update, including the durable write it triggers"
+    },
+    {
+      "id": "persist.hydrate.1000",
+      "group": "Persistence",
+      "label": "Hydrate a 1,000-row client from SQLite",
+      "unit": "ms",
+      "median": 4.94,
+      "p95": 7.409,
+      "iterations": 20,
+      "note": "every row, tombstone and queued op is read back and decoded; the file is warm in the OS cache"
+    },
+    {
+      "id": "persist.save.5000",
+      "group": "Persistence",
+      "label": "Save a 5,000-row scope to SQLite",
+      "unit": "ms",
+      "median": 1.325,
+      "p95": 1.984,
+      "iterations": 20,
+      "note": "the store rewrites the whole scope rather than the rows that changed: one transaction that deletes every row and writes it back, committed with synchronous=FULL"
+    },
+    {
+      "id": "persist.edit.5000",
+      "group": "Persistence",
+      "label": "One edit with a 5,000-row store attached",
+      "unit": "ms",
+      "median": 1.578,
+      "p95": 1.948,
+      "iterations": 20,
+      "note": "a single field update, including the durable write it triggers"
+    },
+    {
+      "id": "persist.hydrate.5000",
+      "group": "Persistence",
+      "label": "Hydrate a 5,000-row client from SQLite",
+      "unit": "ms",
+      "median": 24.45,
+      "p95": 32.3,
+      "iterations": 20,
+      "note": "every row, tombstone and queued op is read back and decoded; the file is warm in the OS cache"
+    },
+    {
+      "id": "sync.roundtrip.inProcess",
+      "group": "Sync round trip",
+      "label": "Edit visible on a second device, in process",
+      "unit": "ms",
+      "median": 0.0102,
+      "p95": 0.0221,
+      "iterations": 200,
+      "note": "both devices share a heap and call the server directly; no serialization, no socket"
+    },
+    {
+      "id": "sync.request.http",
+      "group": "Sync round trip",
+      "label": "One HTTP request to the relay (handshake)",
+      "unit": "ms",
+      "median": 0.7016,
+      "p95": 1.084,
+      "iterations": 200,
+      "note": "a single POST /handshake over 127.0.0.1, answered by the in-memory relay"
+    },
+    {
+      "id": "sync.roundtrip.http",
+      "group": "Sync round trip",
+      "label": "Edit visible on a second device over HTTP",
+      "unit": "ms",
+      "median": 2.251,
+      "p95": 3.791,
+      "iterations": 200,
+      "note": "device A runs a full session (handshake, push, pull) and then device B does; five requests in all"
+    },
+    {
+      "id": "sync.request.ws",
+      "group": "Sync round trip",
+      "label": "One WebSocket request to the relay (handshake)",
+      "unit": "ms",
+      "median": 0.0537,
+      "p95": 0.0722,
+      "iterations": 200,
+      "note": "the same handshake over an already-open socket, so no connection is set up per request"
+    },
+    {
+      "id": "sync.roundtrip.ws",
+      "group": "Sync round trip",
+      "label": "Edit visible on a second device over a WebSocket session",
+      "unit": "ms",
+      "median": 0.2844,
+      "p95": 0.5808,
+      "iterations": 200,
+      "note": "device B asks for the change rather than being sent it — what a poller does when its timer fires"
+    },
+    {
+      "id": "sync.roundtrip.pushed",
+      "group": "Sync round trip",
+      "label": "Edit visible on a second device, pushed by the relay",
+      "unit": "ms",
+      "median": 0.1618,
+      "p95": 0.282,
+      "iterations": 200,
+      "note": "device B is subscribed with a cursor, so the relay sends the batch unasked; timing ends when B has applied it"
+    },
+    {
+      "id": "relay.push.inProcess.100",
+      "group": "Relay throughput",
+      "label": "Push 100 ops in process",
+      "unit": "ops/s",
+      "median": 666700,
+      "p95": 472600,
+      "iterations": 30,
+      "note": "no serialization and no socket; the floor the two transports below are measured against"
+    },
+    {
+      "id": "relay.push.http.100",
+      "group": "Relay throughput",
+      "label": "Push 100 ops over HTTP",
+      "unit": "ops/s",
+      "median": 58470,
+      "p95": 3877,
+      "iterations": 30,
+      "note": "one push of a 100-op outbox into a fresh in-memory scope, over 127.0.0.1"
+    },
+    {
+      "id": "relay.push.ws.100",
+      "group": "Relay throughput",
+      "label": "Push 100 ops over a WebSocket",
+      "unit": "ops/s",
+      "median": 101100,
+      "p95": 5949,
+      "iterations": 30,
+      "note": "one push of a 100-op outbox into a fresh in-memory scope, over 127.0.0.1"
+    },
+    {
+      "id": "relay.pull.http.100",
+      "group": "Relay throughput",
+      "label": "Pull 100 records over HTTP",
+      "unit": "records/s",
+      "median": 135400,
+      "p95": 6819,
+      "iterations": 30,
+      "note": "one GET /pull from a cursor of zero; the records are decoded but not applied"
+    },
+    {
+      "id": "relay.catchUp.http.100",
+      "group": "Relay throughput",
+      "label": "Catch a device up on 100 records over HTTP",
+      "unit": "records/s",
+      "median": 74070,
+      "p95": 5992,
+      "iterations": 30,
+      "note": "a full session on an empty device: handshake, pull, and applying every record locally"
+    },
+    {
+      "id": "relay.push.inProcess.1000",
+      "group": "Relay throughput",
+      "label": "Push 1,000 ops in process",
+      "unit": "ops/s",
+      "median": 708700,
+      "p95": 337200,
+      "iterations": 30,
+      "note": "no serialization and no socket; the floor the two transports below are measured against"
+    },
+    {
+      "id": "relay.push.http.1000",
+      "group": "Relay throughput",
+      "label": "Push 1,000 ops over HTTP",
+      "unit": "ops/s",
+      "median": 85060,
+      "p95": 35350,
+      "iterations": 30,
+      "note": "one push of a 1000-op outbox into a fresh in-memory scope, over 127.0.0.1"
+    },
+    {
+      "id": "relay.push.ws.1000",
+      "group": "Relay throughput",
+      "label": "Push 1,000 ops over a WebSocket",
+      "unit": "ops/s",
+      "median": 198300,
+      "p95": 49540,
+      "iterations": 30,
+      "note": "one push of a 1000-op outbox into a fresh in-memory scope, over 127.0.0.1"
+    },
+    {
+      "id": "relay.pull.http.1000",
+      "group": "Relay throughput",
+      "label": "Pull 1,000 records over HTTP",
+      "unit": "records/s",
+      "median": 338200,
+      "p95": 37950,
+      "iterations": 30,
+      "note": "one GET /pull from a cursor of zero; the records are decoded but not applied"
+    },
+    {
+      "id": "relay.catchUp.http.1000",
+      "group": "Relay throughput",
+      "label": "Catch a device up on 1,000 records over HTTP",
+      "unit": "records/s",
+      "median": 236300,
+      "p95": 34340,
+      "iterations": 30,
+      "note": "a full session on an empty device: handshake, pull, and applying every record locally"
+    },
+    {
+      "id": "relay.push.inProcess.10000",
+      "group": "Relay throughput",
+      "label": "Push 10,000 ops in process",
+      "unit": "ops/s",
+      "median": 490500,
+      "p95": 412100,
+      "iterations": 30,
+      "note": "no serialization and no socket; the floor the two transports below are measured against"
+    },
+    {
+      "id": "relay.push.http.10000",
+      "group": "Relay throughput",
+      "label": "Push 10,000 ops over HTTP",
+      "unit": "ops/s",
+      "median": 167400,
+      "p95": 122500,
+      "iterations": 30,
+      "note": "one push of a 10000-op outbox into a fresh in-memory scope, over 127.0.0.1"
+    },
+    {
+      "id": "relay.push.ws.10000",
+      "group": "Relay throughput",
+      "label": "Push 10,000 ops over a WebSocket",
+      "unit": "ops/s",
+      "median": 171800,
+      "p95": 112000,
+      "iterations": 30,
+      "note": "one push of a 10000-op outbox into a fresh in-memory scope, over 127.0.0.1"
+    },
+    {
+      "id": "relay.pull.http.10000",
+      "group": "Relay throughput",
+      "label": "Pull 10,000 records over HTTP",
+      "unit": "records/s",
+      "median": 414300,
+      "p95": 227500,
+      "iterations": 30,
+      "note": "one GET /pull from a cursor of zero; the records are decoded but not applied"
+    },
+    {
+      "id": "relay.catchUp.http.10000",
+      "group": "Relay throughput",
+      "label": "Catch a device up on 10,000 records over HTTP",
+      "unit": "records/s",
+      "median": 305200,
+      "p95": 194500,
+      "iterations": 30,
+      "note": "a full session on an empty device: handshake, pull, and applying every record locally"
+    },
+    {
+      "id": "relay.sqlite.push.100",
+      "group": "Durable relay",
+      "label": "Push 100 ops to a SQLite-backed relay",
+      "unit": "ops/s",
+      "median": 23600,
+      "p95": 4334,
+      "iterations": 20,
+      "note": "one push into an empty scope, committed with synchronous=FULL before it is acknowledged"
+    },
+    {
+      "id": "relay.sqlite.push.1000",
+      "group": "Durable relay",
+      "label": "Push 1,000 ops to a SQLite-backed relay",
+      "unit": "ops/s",
+      "median": 34220,
+      "p95": 26040,
+      "iterations": 20,
+      "note": "one push into an empty scope, committed with synchronous=FULL before it is acknowledged"
+    },
+    {
+      "id": "relay.sqlite.push.10000",
+      "group": "Durable relay",
+      "label": "Push 10,000 ops to a SQLite-backed relay",
+      "unit": "ops/s",
+      "median": 53590,
+      "p95": 46090,
+      "iterations": 20,
+      "note": "one push into an empty scope, committed with synchronous=FULL before it is acknowledged"
+    },
+    {
+      "id": "relay.sqlite.push.oneRow.scope1000",
+      "group": "Durable relay",
+      "label": "Push one new row into a durable scope holding 1,000 records",
+      "unit": "ms",
+      "median": 2.305,
+      "p95": 2.902,
+      "iterations": 20,
+      "note": "10 ops on the wire either way; only the size of the scope around them differs"
+    },
+    {
+      "id": "relay.sqlite.push.oneRow.scope10000",
+      "group": "Durable relay",
+      "label": "Push one new row into a durable scope holding 10,000 records",
+      "unit": "ms",
+      "median": 2.954,
+      "p95": 18.45,
+      "iterations": 20,
+      "note": "10 ops on the wire either way; only the size of the scope around them differs"
+    },
+    {
+      "id": "converge.disjoint.2devices",
+      "group": "Convergence",
+      "label": "2 devices, 10 new rows each, converge",
+      "unit": "ms",
+      "median": 13.8,
+      "p95": 36.58,
+      "iterations": 20,
+      "note": "each device creates its own rows offline, then all of them sync through one relay until every device holds the same state"
+    },
+    {
+      "id": "converge.contended.2devices",
+      "group": "Convergence",
+      "label": "2 devices editing one field, converge",
+      "unit": "ms",
+      "median": 4.583,
+      "p95": 5.621,
+      "iterations": 20,
+      "note": "every device writes the same field of the same row while offline; the highest stamp wins and the rest learn it"
+    },
+    {
+      "id": "converge.disjoint.4devices",
+      "group": "Convergence",
+      "label": "4 devices, 10 new rows each, converge",
+      "unit": "ms",
+      "median": 28.13,
+      "p95": 57.95,
+      "iterations": 20,
+      "note": "each device creates its own rows offline, then all of them sync through one relay until every device holds the same state"
+    },
+    {
+      "id": "converge.contended.4devices",
+      "group": "Convergence",
+      "label": "4 devices editing one field, converge",
+      "unit": "ms",
+      "median": 9.93,
+      "p95": 16.03,
+      "iterations": 20,
+      "note": "every device writes the same field of the same row while offline; the highest stamp wins and the rest learn it"
+    },
+    {
+      "id": "converge.disjoint.8devices",
+      "group": "Convergence",
+      "label": "8 devices, 10 new rows each, converge",
+      "unit": "ms",
+      "median": 81.55,
+      "p95": 115.9,
+      "iterations": 20,
+      "note": "each device creates its own rows offline, then all of them sync through one relay until every device holds the same state"
+    },
+    {
+      "id": "converge.contended.8devices",
+      "group": "Convergence",
+      "label": "8 devices editing one field, converge",
+      "unit": "ms",
+      "median": 18.83,
+      "p95": 22.14,
+      "iterations": 20,
+      "note": "every device writes the same field of the same row while offline; the highest stamp wins and the rest learn it"
+    }
+  ]
+}

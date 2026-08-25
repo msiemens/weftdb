@@ -1,0 +1,43 @@
+export function projects_issuesRelation() {
+  return {
+    sourceTable: "projects",
+    targetTable: "issues",
+    localField: "id",
+    foreignField: "project_id",
+    many: true,
+  } satisfies { readonly sourceTable: string; readonly targetTable: string; readonly localField: string; readonly foreignField: string; readonly many: boolean };
+}
+export type ProjectsIssuesResult = readonly unknown[];
+
+export function issues_projectRelation() {
+  return {
+    sourceTable: "issues",
+    targetTable: "projects",
+    localField: "project_id",
+    foreignField: "id",
+    many: false,
+  } satisfies { readonly sourceTable: string; readonly targetTable: string; readonly localField: string; readonly foreignField: string; readonly many: boolean };
+}
+export type IssuesProjectResult = unknown | null;
+
+export function issues_commentsRelation() {
+  return {
+    sourceTable: "issues",
+    targetTable: "comments",
+    localField: "id",
+    foreignField: "issue_id",
+    many: true,
+  } satisfies { readonly sourceTable: string; readonly targetTable: string; readonly localField: string; readonly foreignField: string; readonly many: boolean };
+}
+export type IssuesCommentsResult = readonly unknown[];
+
+export function comments_issueRelation() {
+  return {
+    sourceTable: "comments",
+    targetTable: "issues",
+    localField: "issue_id",
+    foreignField: "id",
+    many: false,
+  } satisfies { readonly sourceTable: string; readonly targetTable: string; readonly localField: string; readonly foreignField: string; readonly many: boolean };
+}
+export type CommentsIssueResult = unknown | null;

@@ -1,0 +1,13 @@
+{
+  "name": "weftdb-react",
+  "version": "0.0.0",
+  "license": "MPL-2.0",
+  "type": "module",
+  "peerDependencies": {
+    "weftdb": "workspace:*",
+    "react": ">=18.0.0"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

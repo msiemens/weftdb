@@ -1,0 +1,397 @@
+/*
+ * Starlight, dressed in the loom.
+ *
+ * Most of the work is done by re-pointing Starlight's own custom properties at the tokens in
+ * `loom.css`. Those tokens are `light-dark()`, so each `--sl-*` below is declared once and is
+ * correct in both themes — which is why there is no `[data-theme='light']` block here even
+ * though Starlight's own props file has one. Being unlayered, these win over it regardless.
+ *
+ * The rules after the mapping are the parts of the design language that are shape rather than
+ * colour: hairlines instead of boxes, monospace wherever the machine is speaking, one raised
+ * surface at a time.
+ */
+
+:root,
+::backdrop {
+  --sl-font: var(--sans);
+  --sl-font-mono: var(--mono);
+
+  /*
+   * Starlight's grey ramp runs light-to-dark in dark mode and is inverted in light mode. The
+   * loom tokens already invert themselves, so each step maps to the role it plays rather than
+   * to a lightness: three inks for text, two rules for borders, one recess.
+   */
+  --sl-color-white: var(--ink);
+  --sl-color-gray-1: var(--ink);
+  --sl-color-gray-2: var(--ink);
+  --sl-color-gray-3: var(--ink-2);
+  --sl-color-gray-4: var(--ink-3);
+  --sl-color-gray-5: var(--rule-strong);
+  --sl-color-gray-6: var(--rule);
+  --sl-color-gray-7: var(--sunken);
+  --sl-color-black: var(--ground);
+
+  --sl-color-text: var(--ink);
+  --sl-color-text-accent: var(--accent);
+  --sl-color-text-invert: var(--accent-ink);
+
+  --sl-color-accent: var(--accent);
+  --sl-color-accent-low: var(--accent-wash);
+  --sl-color-accent-high: var(--accent);
+  --sl-color-bg-accent: var(--accent);
+
+  --sl-color-bg: var(--ground);
+  --sl-color-bg-nav: var(--surface);
+  /* Transparent so the weave runs unbroken under the sidebar; re-grounded below where the
+     sidebar stops being a strip and becomes an overlay. */
+  --sl-color-bg-sidebar: transparent;
+  --sl-color-bg-inline-code: var(--sunken);
+
+  --sl-color-hairline: var(--rule);
+  --sl-color-hairline-light: var(--rule);
+  --sl-color-hairline-shade: var(--rule);
+
+  --sl-color-backdrop-overlay: color-mix(in srgb, var(--ground) 72%, transparent);
+
+  /*
+   * Asides are the `.caveat` from the landing page, four times over: a wash, a strong left edge,
+   * and the same ink for the title. The loom has four semantic pairs and Starlight has four
+   * aside kinds, so they line up without inventing a colour.
+   */
+  --sl-color-blue: var(--accent);
+  --sl-color-blue-low: var(--accent-wash);
+  --sl-color-blue-high: var(--accent);
+  --sl-color-purple: var(--ok);
+  --sl-color-purple-low: var(--ok-wash);
+  --sl-color-purple-high: var(--ok);
+  --sl-color-orange: var(--warn);
+  --sl-color-orange-low: var(--warn-wash);
+  --sl-color-orange-high: var(--warn);
+  --sl-color-red: var(--bad);
+  --sl-color-red-low: var(--bad-wash);
+  --sl-color-red-high: var(--bad);
+  --sl-color-green: var(--ok);
+  --sl-color-green-low: var(--ok-wash);
+  --sl-color-green-high: var(--ok);
+
+  --sl-shadow-sm: var(--shadow);
+  --sl-shadow-md: var(--shadow);
+  --sl-shadow-lg: var(--shadow);
+
+  /* Prose keeps the demo's measure. */
+  --sl-content-width: var(--measure);
+  --sl-line-height: 1.6;
+  --sl-line-height-headings: 1.25;
+}
+
+/* --- masthead ------------------------------------------------------------------------ */
+
+/*
+ * The header is the one raised surface at the top of every page, closed off by the same strong
+ * rule the landing page's masthead sits on. Starlight's default is a shadow; a hairline is the
+ * house style.
+ */
+header.header {
+  border-bottom: 1px solid var(--rule-strong);
+  box-shadow: none;
+}
+
+.site-title {
+  font: 600 20px/1 var(--mono);
+  letter-spacing: -0.035em;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+/* The one decorative use of the accent: the thread the product is named after. */
+.site-title .thread {
+  color: var(--accent);
+}
+
+/* --- sidebar ------------------------------------------------------------------------- */
+
+@media (min-width: 50rem) {
+  .sidebar-pane {
+    border-inline-end: 1px solid var(--rule);
+  }
+}
+
+/* Below the sidebar's breakpoint it is an overlay rather than a strip, so it needs a ground of
+   its own — carrying the weave, so the panel is the same cloth as the page under it. */
+@media (max-width: 50rem) {
+  .sidebar-pane {
+    background-color: var(--ground);
+    background-image: repeating-linear-gradient(45deg, var(--weave) 0 1px, transparent 1px 7px);
+  }
+}
+
+/* Sidebar links are identifiers — page names in a tree — so they are set in mono, like the
+   landing page's link list and the demo's readouts. */
+.sidebar-content a {
+  font: 500 13.5px/1.4 var(--mono);
+  letter-spacing: -0.01em;
+}
+
+.sidebar-content a[aria-current="page"],
+.sidebar-content a[aria-current="page"]:hover {
+  background-color: var(--accent-wash);
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* Group headings are the landing page's eyebrow. */
+.sidebar-content summary,
+.sidebar-content .large {
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+/* --- content ------------------------------------------------------------------------- */
+
+.sl-markdown-content {
+  font-size: 15.5px;
+}
+
+.sl-markdown-content :is(h1, h2, h3, h4, h5) {
+  letter-spacing: -0.015em;
+}
+
+/*
+ * A hairline over each section, the way the landing page separates its property rows. It is the
+ * only structure the docs need: a rule costs nothing and a box would be a second surface.
+ */
+.sl-markdown-content h2:not(:where(.not-content *)) {
+  margin-top: 2.25rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--rule);
+}
+
+.sl-markdown-content a:not(:where(.not-content *)) {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.sl-markdown-content a:hover:not(:where(.not-content *)) {
+  color: var(--accent-hover);
+}
+
+.sl-markdown-content code:not(:where(.not-content *)) {
+  font-weight: 500;
+  border-radius: var(--radius-chip);
+}
+
+/*
+ * Tables: the landing page's, down to the uppercase mono header on the recess.
+ *
+ * The panel lives on a wrapper `rehype-wordmark.mjs` adds, not on the table. Starlight makes the
+ * table itself `display: block; overflow: auto` so a wide one scrolls, which leaves it a
+ * content-width block; a border or a background put there paints a box that does not follow the
+ * table's edges. Moving the scrolling to the wrapper lets the table go back to being a table.
+ */
+.sl-markdown-content .table-scroll {
+  margin: 1.5rem 0;
+  overflow-x: auto;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.sl-markdown-content .table-scroll table:not(:where(.not-content *)) {
+  display: table;
+  width: 100%;
+  margin: 0;
+  overflow: visible;
+  border-collapse: collapse;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.sl-markdown-content .table-scroll :is(th, td):not(:where(.not-content *)) {
+  /* Starlight zeroes the outer cells' padding, which puts the first column against the panel's
+     border. Inside a panel every cell needs its inset back. */
+  padding: 10px 14px;
+  border-top: 1px solid var(--rule);
+  border-bottom: none;
+  vertical-align: top;
+}
+
+.sl-markdown-content .table-scroll thead th:not(:where(.not-content *)) {
+  background: var(--sunken);
+  border-top: none;
+  border-bottom: 1px solid var(--rule-strong);
+  font: 600 11px/1.3 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+/* The row heading column, where a table has one. */
+.sl-markdown-content .table-scroll tbody th:not(:where(.not-content *)) {
+  font: 600 13px/1.4 var(--mono);
+  color: var(--ink);
+  text-align: start;
+}
+
+.sl-markdown-content .table-scroll tbody tr:hover {
+  background: color-mix(in srgb, var(--sunken) 55%, var(--surface));
+}
+
+/* --- the wordmark -------------------------------------------------------------------- */
+
+/*
+ * Every prose mention of the project, marked up by `rehypeWordmark`. Bold for the warp, the accent
+ * thread for `db` — the same treatment the masthead and the landing page give it.
+ */
+.wordmark {
+  font-weight: 700;
+}
+
+.wordmark .wordmark-thread {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+/* --- glossary terms ------------------------------------------------------------------- */
+
+/*
+ * The first mention of a defined term on a page, marked up by `rehypeGlossary`. Its definition is
+ * the element's `title`, which is what a pointer and a screen reader both read.
+ *
+ * A dotted underline rather than a solid one: solid is what a link uses, and a term that is not a
+ * link must not offer to be followed. The `text-decoration` is set on the element rather than left
+ * to the browser's default `abbr` styling, which varies and in several browsers is nothing at all.
+ *
+ * It is drawn in a text colour rather than a rule colour, at the weight of a hairline. The rules
+ * are tuned to sit quietly under a table on the parchment ground, which is too quiet for a mark a
+ * reader is meant to notice mid-sentence; the fix is the contrast, not the thickness.
+ */
+.sl-markdown-content abbr.glossary-term {
+  text-decoration: underline dotted var(--ink-3);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  cursor: help;
+}
+
+.sl-markdown-content abbr.glossary-term:hover {
+  text-decoration-color: var(--accent);
+}
+
+.sl-markdown-content blockquote:not(:where(.not-content *)) {
+  border-inline-start: 3px solid var(--rule-strong);
+  color: var(--ink-2);
+}
+
+/* The accent bar is the aside's start edge; rounding it clips the bar into a curve, so the
+   start edge stays square and only the far corners are rounded. */
+.starlight-aside {
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+  border-start-end-radius: var(--radius-sm);
+  border-end-end-radius: var(--radius-sm);
+}
+
+.starlight-aside__title {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* --- chrome -------------------------------------------------------------------------- */
+
+/* Search and the theme picker: raised surfaces with a hairline, never a filled button. */
+site-search button[data-open-modal],
+starlight-theme-select select {
+  background: var(--surface);
+  border-color: var(--rule-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: none;
+}
+
+/*
+ * Previous/next. Starlight's default is two large boxes with the direction and the page title set
+ * at the same weight, which reads as two headings floating under the article.
+ *
+ * Here the direction is an eyebrow — the same 11px uppercase mono the sidebar groups use — and
+ * the page name is the only thing set as a title. That is the house pattern for a label above a
+ * value, and it lets the pair shrink to the size of what it actually is: navigation, not content.
+ */
+.pagination-links {
+  gap: 0;
+}
+
+/*
+ * No box. Two boxes at the foot of an article is two more raised surfaces on a page that already
+ * has one, and the house rule is hairlines instead — so the pair is a strip under a single rule,
+ * the way `.properties` separates its rows and `.pipeline` divides its stages.
+ */
+.pagination-links a {
+  gap: 12px;
+  padding: 14px 14px 16px;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--rule-strong);
+  border-radius: 0;
+  box-shadow: none;
+  /* Starlight sizes these from `--sl-text-h4`; the pair is chrome, so it steps down. */
+  font-size: var(--sl-text-sm);
+  transition: background-color 120ms ease;
+}
+
+.pagination-links a:hover {
+  /* The recess, so the hovered half is cut into the page rather than lifted off it. */
+  background: var(--sunken);
+}
+
+/* The "Previous" / "Next" word. */
+.pagination-links a > span {
+  font: 600 11px/1 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.pagination-links a .link-title {
+  display: block;
+  margin-top: 7px;
+  font: 600 14px/1.35 var(--sans);
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--ink);
+}
+
+.pagination-links a:hover .link-title {
+  color: var(--accent);
+}
+
+/* The arrow is a direction marker, not a second emphasis: it stays quiet until the hover. */
+.pagination-links a svg {
+  flex-shrink: 0;
+  color: var(--ink-3);
+  transition: color 120ms ease;
+}
+
+.pagination-links a:hover svg {
+  color: var(--accent);
+}
+
+starlight-toc a {
+  font: 500 12.5px/1.4 var(--mono);
+  letter-spacing: -0.01em;
+}
+
+starlight-toc a[aria-current="true"] {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* The right-hand outline's heading, and the mobile one's summary, are eyebrows too. */
+starlight-toc > nav > ul > li:first-child > a,
+mobile-starlight-toc .toggle {
+  font-family: var(--mono);
+}

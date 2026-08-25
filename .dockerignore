@@ -1,0 +1,10 @@
+.git
+node_modules
+**/node_modules
+dist
+tests
+scripts
+*.md
+Dockerfile
+.dockerignore
+.agents

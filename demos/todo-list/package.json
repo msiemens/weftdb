@@ -1,0 +1,33 @@
+{
+  "name": "weftdb-demo-todo",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MPL-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node dev.ts",
+    "page": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "generate": "node ../../packages/weftdb-cli/src/index.ts generate --schema src/schema.ts --out src/generated"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "weftdb": "workspace:*",
+    "weftdb-demo-shared": "workspace:*",
+    "weftdb-react": "workspace:*"
+  },
+  "devDependencies": {
+    "vite": "^8.2.2",
+    "@vitejs/plugin-react": "^6.1.0"
+  },
+  "exports": {
+    ".": "./src/store.ts",
+    "./app": "./src/app.tsx",
+    "./schema": "./src/schema.ts",
+    "./scope": "./src/scope.ts",
+    "./bindings": "./src/generated/bindings.ts",
+    "./style.css": "./src/style.css"
+  }
+}

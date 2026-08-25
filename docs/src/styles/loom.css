@@ -1,0 +1,56 @@
+/*
+ * The documentation wears the same cloth as the landing page and the demo: an undyed linen
+ * ground under a single diagonal weave, one dyed-indigo thread as the only accent, monospace
+ * wherever the machine is speaking, hairline rules instead of boxes, and one raised surface at
+ * a time.
+ *
+ * The palette itself is `weftdb-demo-shared/tokens.css`, shared with the demos so the page and
+ * the product it describes are the same object rather than two copies of one.
+ *
+ * Everything in this file is unlayered on purpose. Starlight puts its own rules in
+ * `@layer starlight.*`, and an unlayered declaration beats a layered one whatever their
+ * specificity — so these overrides do not have to out-specify anything, and none of them are
+ * written as `!important`.
+ *
+ * No web fonts and no external anything: a page about a toolkit that keeps working offline is
+ * opened from disk as often as from a server.
+ */
+
+@import "weftdb-demo-shared/tokens.css";
+
+:root {
+  /* Widths, which are this site's own: the demo has one column and needs neither. The landing
+     page is wider than a demo because a comparison table and code samples need the room, and
+     prose keeps the demo's measure. */
+  --page: 62rem;
+  --measure: 46rem;
+}
+
+/* --- the ground ---------------------------------------------------------------------- */
+
+/* The ground lives on `html` so it is propagated to the canvas and covers overscroll too, which
+   means `body` has to be let go of — Starlight paints it with `--sl-color-bg` by default. */
+html {
+  background-color: var(--ground);
+  background-image: repeating-linear-gradient(45deg, var(--weave) 0 1px, transparent 1px 7px);
+}
+
+body {
+  background: transparent;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

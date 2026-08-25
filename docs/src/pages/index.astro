@@ -1,0 +1,390 @@
+---
+/*
+ * The landing page, from `site/index.html`.
+ *
+ * The markup is the same page. What the move to Astro changed is where the work happens: the
+ * samples are highlighted and the benchmark figures written in at build time rather than on
+ * load, so both are in the HTML that ships and a reader without JavaScript sees them. The tab
+ * pattern and the copy buttons stay on the client, because they are responses to somebody doing
+ * something.
+ *
+ * Two things the old page meant to show and did not: `renderBenchmarks` looked for a
+ * `#benchmark-caveat` that was never in the markup and returned early every time, so the
+ * conditions the figures were taken under never appeared — and `aria-labelledby="numbers"`
+ * pointed at an id that did not exist. The caveat is rendered below, and the section names
+ * itself.
+ *
+ * This page is deliberately not a Starlight route: it has no sidebar, no search, and its own
+ * furniture. It shares the palette with the docs through `loom.css` and nothing else.
+ */
+import { BENCHMARKS } from "../data/benchmarks.js";
+import { DEMOS } from "../demos/registry.ts";
+import { highlight } from "../lib/highlight.js";
+import "../styles/loom.css";
+import "../styles/landing.css";
+
+const TITLE = "weftdb — local-first SQLite sync for TypeScript apps";
+const DESCRIPTION =
+  "weftdb is a self-hosted TypeScript toolkit for local-first apps: SQLite persistence, " +
+  "schema codegen, offline writes, and HTTP/WebSocket sync.";
+
+/** The three samples behind the tabs, in the order they are shown. */
+const SAMPLES = [
+  {
+    id: "schema",
+    tab: "Schema",
+    note: "Declare collections, field types, relationships, and merge behavior in TypeScript.",
+    file: "schema.ts",
+    lang: "ts",
+    foot: "The same schema produces local tables, server tables, typed rows, write helpers, and query hooks.",
+    code: `import { defineSchema, S } from "weftdb/schema";
+
+export const schema = defineSchema({
+  todos: S.collection({
+    title: S.string(),
+    notes: S.string({ merge: "diff3" }),
+    done: S.boolean(),
+    rank: S.string({ merge: "fracIndex" }),
+  }),
+  todo_events: S.eventLog({
+    todo_id: S.string(),
+    kind: S.string(),
+    actor: S.string(),
+  }),
+});`,
+  },
+  {
+    id: "client",
+    tab: "Client",
+    note: "Generated hooks read local data immediately, and generated helpers write to it.",
+    file: "Todos.tsx",
+    lang: "ts",
+    foot: "The UI updates from local data first; sync catches the relay up when the connection is there.",
+    code: `import { TodoStore } from "./store";
+import { useTodos } from "./generated/bindings";
+
+const store = TodoStore.open(window);
+store.start();
+
+export function Todos() {
+  const todos = useTodos(store.source, "rank");
+
+  const add = () => {
+    store.todos.create(crypto.randomUUID(), {
+      title: "ship the offline path",
+      notes: "",
+      done: false,
+      rank: store.nextRank(),
+    });
+  };
+
+  return (
+    <>
+      <button type="button" onClick={add}>Add</button>
+      <ul>
+        {todos.map((todo) => (
+          <li key={todo.id}>
+            <label>
+              <input
+                type="checkbox"
+                checked={todo.done}
+                onChange={() => store.todos.update(todo.id, { done: !todo.done })}
+              />
+              {todo.title}
+            </label>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}`,
+  },
+  {
+    id: "server",
+    tab: "Server",
+    note: "Run one small Node server to relay changes between devices.",
+    file: "shell",
+    lang: "shell",
+    foot: "Use SQLite for persistence, and authenticate devices with listed tokens or JWT verification.",
+    code: `pnpm exec weft generate --schema src/schema.ts --out src/generated
+
+WEFT_DB=./weft.sqlite \\
+WEFT_TOKENS=demo-token:team-1:tab-1 \\
+WEFT_PORT=8787 \\
+node packages/weftdb/src/server/main.ts`,
+  },
+];
+---
+
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>{TITLE}</title>
+<meta name="description" content={DESCRIPTION} />
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+
+<div class="page">
+
+<header class="masthead">
+  <h1 class="wordmark">weft<span>db</span></h1>
+  <p class="lede">
+    Local-first SQLite sync for TypeScript apps.
+  </p>
+  <p class="sub">
+    Write to local state first, keep unsent work durable, and sync through a small relay when a
+    connection is available. Schemas generate SQL, types, write helpers, React hooks, and the
+    small server contract that keeps devices synced.
+  </p>
+  <ul class="chips">
+    <li class="chip lead">self-hosted</li>
+    <li class="chip">TypeScript</li>
+    <li class="chip">SQLite</li>
+    <li class="chip">HTTP + WebSocket</li>
+    <li class="chip">React binding</li>
+    <li class="chip">v0.0.0</li>
+  </ul>
+  <!-- The one link from the landing page into the docs. `.actions`/`.button` were already in
+       `site/style.css` with nothing using them; this is what they were written for. -->
+  <div class="actions">
+    <a class="button primary" href="/introduction/">Read the docs</a>
+    {DEMOS[0] !== undefined && <a class="button" href={`/demos/${DEMOS[0].slug}/`}>Try the demo</a>}
+  </div>
+</header>
+
+<main id="main">
+
+<section aria-label="Quick start">
+  <div class="examples">
+    <div role="tablist" aria-label="weftdb examples">
+      {SAMPLES.map((sample, index) => (
+        <button
+          type="button"
+          role="tab"
+          id={`tab-${sample.id}`}
+          aria-controls={`panel-${sample.id}`}
+          aria-selected={index === 0 ? "true" : "false"}
+          tabindex={index === 0 ? 0 : -1}
+        >{sample.tab}</button>
+      ))}
+    </div>
+
+    {SAMPLES.map((sample) => (
+      <div role="tabpanel" id={`panel-${sample.id}`} aria-labelledby={`tab-${sample.id}`} tabindex="0">
+        <p class="panel-note">{sample.note}</p>
+        <figure class="code" data-lang={sample.lang}>
+          <figcaption class="code-head">
+            <span class="code-name">{sample.file}</span>
+            <button type="button" class="copy" data-copy>copy</button>
+          </figcaption>
+          <pre><code set:html={highlight(sample.code, sample.lang)} /></pre>
+        </figure>
+        <p class="panel-foot">{sample.foot}</p>
+      </div>
+    ))}
+  </div>
+</section>
+
+<section aria-label="Benchmarks">
+  <div class="numbers">
+    {BENCHMARKS.metrics.map((metric) => {
+      const measured = BENCHMARKS.measured && metric.value !== null && metric.value !== undefined;
+      return (
+        <div class="metric">
+          <p class={measured ? "value" : "value pending"}>
+            {measured ? <>{metric.value}<span class="unit">{metric.unit}</span></> : "—"}
+          </p>
+          <p class="label">{measured ? metric.label : `${metric.label} — not measured`}</p>
+          {/* A figure carries a note only where one earns its space; most say enough as a label. */}
+          {metric.note !== undefined && <p class="metric-note">{metric.note}</p>}
+        </div>
+      );
+    })}
+  </div>
+  {!BENCHMARKS.measured && (
+    <p class="caveat"><strong>No figures yet.</strong> Nothing on this page has been measured.</p>
+  )}
+</section>
+
+<section aria-labelledby="how">
+  <h2 class="title" id="how">What It Gives You</h2>
+  <dl class="properties">
+    <div>
+      <dt>Offline writes</dt>
+      <dd>Changes are saved locally first, so the app keeps working through reloads, flaky Wi-Fi, and long offline sessions.</dd>
+    </div>
+    <div>
+      <dt>Simple sync</dt>
+      <dd>The browser sends local changes, receives remote changes, and can fully refresh itself when it has fallen behind.</dd>
+    </div>
+    <div>
+      <dt>Live updates</dt>
+      <dd>When another device writes new data, connected browsers can receive it right away; polling remains the fallback.</dd>
+    </div>
+    <div>
+      <dt>Schema-aware codegen</dt>
+      <dd>The CLI writes SQL, TypeScript row types, write helpers, React hooks, and relationship helpers.</dd>
+    </div>
+    <div>
+      <dt>React subscriptions</dt>
+      <dd>Generated hooks return decoded rows and update components when the local database changes.</dd>
+    </div>
+    <div>
+      <dt>Conflict handling</dt>
+      <dd>Changes that cannot be applied are kept aside with a reason, so the app can show the problem instead of losing work.</dd>
+    </div>
+  </dl>
+</section>
+
+<section aria-labelledby="limits">
+  <h2 class="title" id="limits">Merge Model</h2>
+  <dl class="properties">
+    <div>
+      <dt>Newest edit wins by default</dt>
+      <dd>Ordinary fields keep the newest value, field by field.</dd>
+    </div>
+    <div>
+      <dt>Three-way prose merge</dt>
+      <dd><code>diff3</code> fields merge text from both sides when possible; overlapping edits are shown for a person to resolve.</dd>
+    </div>
+    <div>
+      <dt>Fractional ordering</dt>
+      <dd><code>fracIndex</code> fields keep shared lists in order, even when two devices move items at the same time.</dd>
+    </div>
+    <div>
+      <dt>Append-only history</dt>
+      <dd><code>eventLog</code> rows are written once, then protected from later edits, deletes, and restores.</dd>
+    </div>
+  </dl>
+</section>
+
+<section aria-labelledby="comparison">
+  <h2 class="title" id="comparison">Related Projects</h2>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th scope="col">Project</th>
+          <th scope="col">Conflicts</th>
+          <th scope="col">Backend you run</th>
+          <th scope="col">Hosting</th>
+          <th scope="col">Collaborative text</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="self">
+          <th scope="row">weftdb</th>
+          <td>Last write wins per field; three-way merge for prose</td>
+          <td>One Node server with SQLite</td>
+          <td>Self-hosted only</td>
+          <td>Three-way merge</td>
+        </tr>
+        <tr>
+          <th scope="row">Automerge</th>
+          <td>CRDT; losing values kept and retrievable</td>
+          <td class="none">None required; a reference sync server exists</td>
+          <td>Self-host; managed services available</td>
+          <td>Built in; every string is collaborative</td>
+        </tr>
+        <tr>
+          <th scope="row">cr-sqlite</th>
+          <td>CRDT per column</td>
+          <td class="none">None required; reference servers exist</td>
+          <td>Self-host only</td>
+          <td class="none">None shipped</td>
+        </tr>
+        <tr>
+          <th scope="row">ElectricSQL</th>
+          <td>Read-path only; writes are yours to handle</td>
+          <td>Electric service and Postgres</td>
+          <td>Self-host or Electric Cloud</td>
+          <td>Through Yjs</td>
+        </tr>
+        <tr>
+          <th scope="row">Jazz <span class="note">(2.0 in alpha)</span></th>
+          <td>Last write wins per field; losing versions stay in row history</td>
+          <td>A sync server</td>
+          <td>Self-host or cloud</td>
+          <td class="none">not in v2.0</td>
+        </tr>
+        <tr>
+          <th scope="row">LiveStore</th>
+          <td>One event log, with local events rebased onto it</td>
+          <td>Needed for more than one device</td>
+          <td>Self-host only</td>
+          <td>Alongside Yjs, Automerge or Loro, syncing separately</td>
+        </tr>
+        <tr>
+          <th scope="row">PouchDB / CouchDB</th>
+          <td>Revision tree; one winner, losers kept to resolve</td>
+          <td>A CouchDB-compatible endpoint</td>
+          <td>Self-host; managed services available</td>
+          <td class="none">None</td>
+        </tr>
+        <tr>
+          <th scope="row">PowerSync</th>
+          <td>Server-authoritative, through your own write API</td>
+          <td>PowerSync Service and your API</td>
+          <td>Self-host or cloud</td>
+          <td>Through Yjs</td>
+        </tr>
+        <tr>
+          <th scope="row">RxDB</th>
+          <td>Detected on push; a handler you write resolves it, server wins by default</td>
+          <td class="none">None; replication plugins target many endpoints</td>
+          <td>Self-host; some storages are paid Premium</td>
+          <td class="none">None</td>
+        </tr>
+        <tr>
+          <th scope="row">TanStack DB</th>
+          <td>Optimistic writes rolled back on failure; resolution is the adapter&rsquo;s</td>
+          <td class="none">None; whatever the adapter needs</td>
+          <td>A library</td>
+          <td class="none">None</td>
+        </tr>
+        <tr>
+          <th scope="row">Triplit</th>
+          <td>CRDT, per attribute</td>
+          <td>The Triplit sync server</td>
+          <td>Self-host only; the hosted product is gone</td>
+          <td class="none">None</td>
+        </tr>
+        <tr>
+          <th scope="row">Yjs</th>
+          <td>CRDT; converges with no central authority</td>
+          <td>A WebSocket relay, or WebRTC signalling</td>
+          <td>Self-host or cloud</td>
+          <td>Y.Text, with editor bindings</td>
+        </tr>
+        <tr>
+          <th scope="row">Zero (Rocicorp)</th>
+          <td>Server-authoritative; no offline writes</td>
+          <td><code>zero-cache</code> and Postgres</td>
+          <td>Self-host, or Cloud Zero</td>
+          <td class="none">None built in</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <p>
+    weftdb is licensed under the Mozilla Public License 2.0.
+  </p>
+  <p class="made">
+    Made with <span class="heart" role="img" aria-label="love">&hearts;</span> in Gie&szlig;en
+  </p>
+</footer>
+
+</div>
+
+<script>
+  import "../scripts/landing.js";
+</script>
+</body>
+</html>

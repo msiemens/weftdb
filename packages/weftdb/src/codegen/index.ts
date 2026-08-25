@@ -1,0 +1,721 @@
+import { schemaHash } from "weftdb/schema";
+import type { CollectionDefinition, FieldDefinition, SchemaDefinition } from "weftdb/schema";
+
+export interface GeneratedArtifactSet {
+  schemaHash: string;
+  clientDdl: string;
+  internalDatabaseDts: string;
+  databaseDts: string;
+  kyselyDatabaseDts: string;
+  mutatorsTs: string;
+  bindingsTs: string;
+  relationshipsTs: string;
+  nestedMappersTs: string;
+}
+
+export interface SchemaEvolutionIssue {
+  readonly code:
+    | "removed_collection"
+    | "removed_field"
+    | "changed_field_type"
+    | "changed_field_merge"
+    | "field_became_required"
+    | "changed_enum_values";
+  readonly path: string;
+  readonly message: string;
+}
+
+export function generateArtifacts(schema: SchemaDefinition): GeneratedArtifactSet {
+  const hash = schemaHash(schema);
+  const clientDdl = generateClientDdl(schema);
+  return {
+    schemaHash: hash,
+    clientDdl,
+    internalDatabaseDts: generateDatabaseTypes(schema, true),
+    databaseDts: generateDatabaseTypes(schema, false),
+    kyselyDatabaseDts: generateKyselyDatabaseTypes(schema),
+    mutatorsTs: generateMutators(schema),
+    bindingsTs: generateBindings(schema),
+    relationshipsTs: generateRelationshipHelpers(schema),
+    nestedMappersTs: generateNestedMappers(schema),
+  };
+}
+
+export function generateClientAddMissingColumnDdl(
+  tableName: string,
+  collection: CollectionDefinition,
+  existingColumns: ReadonlySet<string>,
+): readonly string[] {
+  const statements: string[] = [];
+  const addColumn = (name: string, definition: string): void => {
+    if (!existingColumns.has(name)) statements.push(`ALTER TABLE ${quoteIdent(tableName)} ADD COLUMN ${definition};`);
+  };
+  for (const [name, field] of Object.entries(collection.fields)) {
+    if (field.derived) continue;
+    addColumn(name, domainColumnDdl(name, field, "alter"));
+    addColumn(`_weft_hlc_${name}`, `${quoteIdent(`_weft_hlc_${name}`)} TEXT`);
+    if (field.merge === "diff3") addColumn(`_weft_base_${name}`, `${quoteIdent(`_weft_base_${name}`)} TEXT`);
+  }
+  addColumn("_weft_first_synced_at", `${quoteIdent("_weft_first_synced_at")} INTEGER`);
+  addColumn("_weft_rev", `${quoteIdent("_weft_rev")} INTEGER NOT NULL DEFAULT 0`);
+  addColumn("_weft_dirty", `${quoteIdent("_weft_dirty")} INTEGER NOT NULL DEFAULT 0`);
+  return statements;
+}
+
+export function lintAdditiveEvolution(from: SchemaDefinition, to: SchemaDefinition): readonly SchemaEvolutionIssue[] {
+  const issues: SchemaEvolutionIssue[] = [];
+  for (const [tableName, previousCollection] of Object.entries(from.collections)) {
+    const nextCollection = to.collections[tableName];
+    if (nextCollection === undefined) {
+      issues.push({
+        code: "removed_collection",
+        path: tableName,
+        message: `${tableName} was removed`,
+      });
+      continue;
+    }
+    for (const [fieldName, previousField] of Object.entries(previousCollection.fields)) {
+      const nextField = nextCollection.fields[fieldName];
+      if (nextField === undefined) {
+        issues.push({
+          code: "removed_field",
+          path: `${tableName}.${fieldName}`,
+          message: `${tableName}.${fieldName} was removed`,
+        });
+        continue;
+      }
+      if (nextField.type !== previousField.type) {
+        issues.push({
+          code: "changed_field_type",
+          path: `${tableName}.${fieldName}`,
+          message: `${tableName}.${fieldName} changed type from ${previousField.type} to ${nextField.type}`,
+        });
+      }
+      if (nextField.merge !== previousField.merge) {
+        issues.push({
+          code: "changed_field_merge",
+          path: `${tableName}.${fieldName}`,
+          message: `${tableName}.${fieldName} changed merge from ${previousField.merge} to ${nextField.merge}`,
+        });
+      }
+      if (previousField.nullable && !nextField.nullable) {
+        issues.push({
+          code: "field_became_required",
+          path: `${tableName}.${fieldName}`,
+          message: `${tableName}.${fieldName} changed from nullable to required`,
+        });
+      }
+      // A value one build writes is a value the other's `CHECK` refuses, so the two devices
+      // hold databases that cannot take each other's rows.
+      const previousValues = previousField.values ?? [];
+      const nextValues = nextField.values ?? [];
+      if (
+        previousValues.length !== nextValues.length ||
+        previousValues.some((value, index) => value !== nextValues[index])
+      ) {
+        issues.push({
+          code: "changed_enum_values",
+          path: `${tableName}.${fieldName}`,
+          message: `${tableName}.${fieldName} changed allowed values from [${previousValues.join(", ")}] to [${nextValues.join(", ")}]`,
+        });
+      }
+    }
+  }
+  return issues;
+}
+
+export function generateClientDdl(schema: SchemaDefinition): string {
+  // Table names are compared case-insensitively by SQLite, so two collections that differ only
+  // in case or punctuation would quietly become one table holding whichever set of columns was
+  // created first.
+  assertDistinctGeneratedNames(schema);
+  const statements: string[] = [
+    `CREATE TABLE IF NOT EXISTS outbox (
+  seq INTEGER PRIMARY KEY AUTOINCREMENT,
+  scope_id TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  row_id TEXT NOT NULL,
+  field TEXT,
+  value TEXT,
+  hlc TEXT NOT NULL,
+  base_hash TEXT,
+  txn_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('create','set','delete','restore','append')),
+  attempts INTEGER NOT NULL DEFAULT 0
+);`,
+    `CREATE TABLE IF NOT EXISTS outbox_quarantine (
+  seq INTEGER,
+  scope_id TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  row_id TEXT NOT NULL,
+  field TEXT,
+  value TEXT,
+  hlc TEXT NOT NULL,
+  base_hash TEXT,
+  txn_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  rejected_at INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  server_value TEXT
+);`,
+    `CREATE TABLE IF NOT EXISTS tombstones (
+  scope_id TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  row_id TEXT NOT NULL,
+  hlc TEXT NOT NULL,
+  server_seq INTEGER NOT NULL,
+  PRIMARY KEY (scope_id, table_name, row_id)
+);`,
+    `CREATE TABLE IF NOT EXISTS sync_state (
+  scope_id TEXT PRIMARY KEY,
+  last_server_seq INTEGER NOT NULL DEFAULT 0,
+  schema_hash TEXT NOT NULL,
+  schema_version INTEGER NOT NULL,
+  device_id TEXT NOT NULL,
+  hlc_last TEXT,
+  resync_required INTEGER NOT NULL DEFAULT 0
+);`,
+  ];
+
+  for (const [tableName, collection] of Object.entries(schema.collections)) {
+    statements.push(generateTableDdl(tableName, collection));
+  }
+  return `${statements.join("\n\n")}\n`;
+}
+
+export function generateServerDdl(): string {
+  return `CREATE TABLE IF NOT EXISTS fields (
+  scope_id TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  row_id TEXT NOT NULL,
+  field TEXT NOT NULL,
+  value TEXT,
+  hlc TEXT NOT NULL,
+  server_seq INTEGER NOT NULL,
+  txn_id TEXT NOT NULL,
+  PRIMARY KEY (scope_id, table_name, row_id, field)
+);
+CREATE INDEX IF NOT EXISTS fields_scope_seq ON fields (scope_id, server_seq);
+
+CREATE TABLE IF NOT EXISTS rows (
+  scope_id TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  row_id TEXT NOT NULL,
+  first_seen_at INTEGER NOT NULL,
+  class TEXT NOT NULL CHECK (class IN ('row','append')),
+  deleted_hlc TEXT,
+  register_hlc TEXT,
+  server_seq INTEGER NOT NULL,
+  PRIMARY KEY (scope_id, table_name, row_id)
+);
+CREATE INDEX IF NOT EXISTS rows_scope_seq ON rows (scope_id, server_seq);
+
+CREATE TABLE IF NOT EXISTS scope_state (
+  scope_id TEXT PRIMARY KEY,
+  server_seq INTEGER NOT NULL,
+  tombstone_floor_seq INTEGER NOT NULL,
+  schema_hash TEXT,
+  schema_version INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS devices (
+  scope_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  last_seen INTEGER NOT NULL,
+  PRIMARY KEY (scope_id, device_id)
+);
+`;
+}
+
+function generateTableDdl(tableName: string, collection: CollectionDefinition): string {
+  const fields = Object.entries(collection.fields).filter(([, field]) => !field.derived);
+  // The `CHECK` says in the database what the generated union says in the types, so a row
+  // written by anything that is not this build still cannot hold a value the schema forbids.
+  const columns = fields.map(([name, field]) => `  ${domainColumnDdl(name, field, "create")}`);
+  const internals = fields.flatMap(([name, field]) => {
+    const columns = [`  ${quoteIdent(`_weft_hlc_${name}`)} TEXT`];
+    if (field.merge === "diff3") columns.push(`  ${quoteIdent(`_weft_base_${name}`)} TEXT`);
+    return columns;
+  });
+  return `CREATE TABLE IF NOT EXISTS ${quoteIdent(tableName)} (
+${[
+  ...columns,
+  ...internals,
+  "  _weft_first_synced_at INTEGER",
+  "  _weft_rev INTEGER NOT NULL DEFAULT 0",
+  "  _weft_dirty INTEGER NOT NULL DEFAULT 0",
+  // Keyed the way every framework table is keyed. A row id is unique within its scope and
+  // nowhere else, so one database holding two scopes has two rows legitimately sharing an id —
+  // and a key on `id` alone turns the second one into a constraint failure.
+  "  PRIMARY KEY (scope_id, id)",
+].join(",\n")}
+);`;
+}
+
+function generateDatabaseTypes(schema: SchemaDefinition, internal: boolean): string {
+  const tables = Object.entries(schema.collections)
+    .map(([tableName, collection]) => `  ${propertyName(tableName)}: {\n${typeFields(collection, internal)}\n  };`)
+    .join("\n");
+  return `export interface ${internal ? "InternalDatabase" : "Database"} {\n${tables}\n}\n`;
+}
+
+export function generateKyselyDatabaseTypes(schema: SchemaDefinition): string {
+  const tables = Object.entries(schema.collections)
+    .map(([tableName, collection]) => `  ${propertyName(tableName)}: {\n${kyselyFields(collection, false)}\n  };`)
+    .join("\n");
+  const internalTables = Object.entries(schema.collections)
+    .map(([tableName, collection]) => `  ${propertyName(tableName)}: {\n${kyselyFields(collection, true)}\n  };`)
+    .join("\n");
+  return [
+    "import type { ColumnType, Generated } from 'kysely';",
+    "",
+    `export interface Database {\n${tables}\n}`,
+    "",
+    `export interface InternalDatabase {\n${internalTables}\n}`,
+    "",
+  ].join("\n");
+}
+
+/**
+ * Two collections whose names differ only in punctuation — `todo_events` and `todoEvents` —
+ * produce the same identifiers once the generator has capitalised them, and emitting both would
+ * hand one of them the other's query, decoder, hook and mutators. There is no safe choice to
+ * make on the author's behalf here: renaming one silently would be worse than saying so.
+ */
+function assertDistinctGeneratedNames(schema: SchemaDefinition): void {
+  const claimed = new Map<string, string>();
+  for (const table of Object.keys(schema.collections)) {
+    const generated = typeName(table, "");
+    const existing = claimed.get(generated);
+    if (existing !== undefined) {
+      throw new Error(
+        `collections ${JSON.stringify(existing)} and ${JSON.stringify(table)} generate the same name ` +
+          `(${generated}); rename one of them so the generated code can tell them apart`,
+      );
+    }
+    claimed.set(generated, table);
+  }
+}
+
+export function generateMutators(schema: SchemaDefinition): string {
+  assertDistinctGeneratedNames(schema);
+  const methods = Object.entries(schema.collections)
+    .map(([tableName, collection]) => {
+      const inputName = typeName(tableName, "Mutation");
+      return [
+        `export interface ${inputName} {`,
+        ...Object.entries(collection.fields)
+          .filter(
+            ([fieldName, field]) => !BASE_FIELD_NAMES.has(fieldName) && !field.derived && field.merge !== "immutable",
+          )
+          .map(([fieldName, field]) => `  readonly ${propertyName(fieldName)}?: ${tsType(field)};`),
+        "}",
+        "",
+        `export interface ${typeName(tableName, "Mutators")} {`,
+        `  create(id: string, values: ${inputName}): void;`,
+        collection.kind === "eventLog" ? "" : `  update(id: string, values: ${inputName}): void;`,
+        collection.kind === "eventLog" ? "" : "  delete(id: string): void;",
+        "}",
+      ]
+        .filter((line) => line.length > 0)
+        .join("\n");
+    })
+    .join("\n\n");
+  return `${methods}\n`;
+}
+
+/**
+ * The runtime the schema implies: a decoder per collection, the mutator interfaces implemented
+ * against a client, and a React hook per collection. Without these an application writes its
+ * own store — hand-decoding `ReadonlyMap<FieldName, WireValue>` into its row type, and having
+ * to know that a decoded array must be cached against its snapshot or React will re-render
+ * forever. That is generated code's job, not the application's.
+ */
+export function generateBindings(schema: SchemaDefinition): string {
+  assertDistinctGeneratedNames(schema);
+  const collections = Object.entries(schema.collections);
+  const header = [
+    "// Generated by weft. Do not edit; run `weft generate` after changing the schema.",
+    'import { rankBetween, rankString, rowId, tableName, txnId, fieldName, type DeviceId, type FieldName, type WireValue } from "weftdb/shared";',
+    'import type { MaterializedRow, TypedQueryKey, WeftClient } from "weftdb/client";',
+    'import { useWeftRows, type QueryLifecycleSource } from "weftdb-react";',
+    'import type { Database } from "./database.d.ts";',
+    ...collections.map(
+      ([name]) => `import type { ${typeName(name, "Mutation")}, ${typeName(name, "Mutators")} } from "./mutators.ts";`,
+    ),
+    "",
+    "// Re-exported so an application has one import for everything the schema implies.",
+    `export type { ${collections
+      .flatMap(([name]) => [typeName(name, "Mutation"), typeName(name, "Mutators")])
+      .join(", ")} } from "./mutators.ts";`,
+    "",
+    "/** The client and its subscription engine — `{ engine, rows: client.rows }`. */",
+    "export type WeftSource = QueryLifecycleSource;",
+    "",
+    "function wire(values: object): Record<FieldName, WireValue> {",
+    "  return Object.fromEntries(",
+    "    Object.entries(values)",
+    "      .filter(([, value]) => value !== undefined)",
+    "      .map(([field, value]) => [fieldName(field), value as WireValue]),",
+    "  ) as Record<FieldName, WireValue>;",
+    "}",
+  ];
+
+  const bodies = collections.map(([name, collection]) => {
+    const fields = Object.entries(collection.fields);
+    const table = memberName(name, "Table");
+    const query = memberName(name, "Query");
+    const decoder = `decode${typeName(name, "")}`;
+    const rowTypeName = typeName(name, "Row");
+    const fieldTypeName = typeName(name, "Field");
+    return [
+      `// --- ${name} ${"-".repeat(Math.max(0, 70 - name.length))}`,
+      "",
+      `export const ${table} = tableName(${JSON.stringify(name)});`,
+      `export type ${rowTypeName} = Database[${JSON.stringify(name)}];`,
+      `export type ${fieldTypeName} = ${fields.map(([field]) => JSON.stringify(field)).join(" | ")};`,
+      "",
+      "/** Every field the row type promises, so a decoded row is never missing one. */",
+      `export function ${query}(orderBy: ${fieldTypeName} = "id"): TypedQueryKey<${rowTypeName}> {`,
+      "  return {",
+      `    tableName: ${table},`,
+      `    fields: [${fields.map(([field]) => `fieldName(${JSON.stringify(field)})`).join(", ")}],`,
+      "    orderBy: fieldName(orderBy),",
+      "  };",
+      "}",
+      "",
+      `export function ${decoder}(row: MaterializedRow): ${rowTypeName} {`,
+      "  return {",
+      ...fields.map(([field, definition]) => `    ${propertyName(field)}: ${decodeExpression(field, definition)},`),
+      "  };",
+      "}",
+      "",
+      `export function ${memberName(name, "Mutators")}(client: WeftClient, notify: () => void = () => undefined): ${typeName(name, "Mutators")} {`,
+      "  return {",
+      `    create(id: string, values: ${typeName(name, "Mutation")}): void {`,
+      `      client.${collection.kind === "eventLog" ? "append" : "create"}(${table}, rowId(id), wire(values), txnId(\`create-\${id}\`));`,
+      "      notify();",
+      "    },",
+      ...(collection.kind === "eventLog"
+        ? []
+        : [
+            `    update(id: string, values: ${typeName(name, "Mutation")}): void {`,
+            `      client.update(${table}, rowId(id), wire(values), txnId(\`update-\${id}-\${crypto.randomUUID()}\`));`,
+            "      notify();",
+            "    },",
+            "    delete(id: string): void {",
+            `      client.delete(${table}, rowId(id), txnId(\`delete-\${id}-\${crypto.randomUUID()}\`));`,
+            "      notify();",
+            "    },",
+          ]),
+      "  };",
+      "}",
+      "",
+      `export function use${typeName(name, "")}(source: WeftSource, orderBy: ${fieldTypeName} = "id"): readonly ${rowTypeName}[] {`,
+      `  return useWeftRows(source, ${query}(orderBy), ${decoder});`,
+      "}",
+      ...reorderHelpers(name, collection),
+    ].join("\n");
+  });
+
+  return `${[...header, "", ...bodies].join("\n")}\n`;
+}
+
+/**
+ * Ordering, for a collection that declares a fractional index. The schema already says which
+ * field that is, so where to put a row is arithmetic on its neighbours' ranks — and getting it
+ * wrong is subtle enough (a rank must be *strictly between* two others, and two devices must
+ * not collide in the same gap) that every application working it out again is a bug waiting to
+ * be written a second time.
+ */
+function reorderHelpers(name: string, collection: CollectionDefinition): readonly string[] {
+  const ranked = Object.entries(collection.fields).find(([, field]) => field.merge === "fracIndex");
+  if (ranked === undefined || collection.kind === "eventLog") return [];
+  const [rankField] = ranked;
+  const rowType = typeName(name, "Row");
+  const mutators = typeName(name, "Mutators");
+  const rankOf = `(row: ${rowType} | undefined) => (row === undefined ? null : rankString(String(row[${JSON.stringify(rankField)}])))`;
+
+  return [
+    "",
+    `/** A rank that puts a new row after everything in \`rows\`, which must be ordered by rank. */`,
+    `export function next${typeName(name, "Rank")}(rows: readonly ${rowType}[], device: DeviceId): string {`,
+    `  const rankOf = ${rankOf};`,
+    "  return rankBetween(rankOf(rows.at(-1)), null, device);",
+    "}",
+    "",
+    "/**",
+    " * Moves the row at `index` one place. Reordering writes one field — the row's new rank,",
+    " * taken from between the two rows it lands between — so nothing below it is renumbered and",
+    " * two devices reordering at once do not undo each other.",
+    " */",
+    `export function move${typeName(name, "")}(`,
+    `  mutators: ${mutators},`,
+    `  rows: readonly ${rowType}[],`,
+    "  index: number,",
+    '  direction: "up" | "down",',
+    "  device: DeviceId,",
+    "): void {",
+    `  const rankOf = ${rankOf};`,
+    "  const moving = rows[index];",
+    '  const neighbour = rows[direction === "up" ? index - 1 : index + 1];',
+    "  if (moving === undefined || neighbour === undefined) return;",
+    "  // Landing between the neighbour and whatever is on its far side.",
+    '  const beyond = rows[direction === "up" ? index - 2 : index + 2];',
+    '  const [before, after] = direction === "up" ? [beyond, neighbour] : [neighbour, beyond];',
+    `  mutators.update(String(moving["id"]), { ${propertyName(rankField)}: rankBetween(rankOf(before), rankOf(after), device) });`,
+    "}",
+  ];
+}
+
+/** Reads one field out of a materialized row as the type the schema declares for it. */
+function decodeExpression(field: string, definition: FieldDefinition): string {
+  const read = `row.fields.get(fieldName(${JSON.stringify(field)}))`;
+  const fallback = definition.nullable ? "null" : defaultLiteral(definition);
+  if (definition.values !== undefined) {
+    // A value outside the set reaches here from a device running a schema this build does not
+    // have, so it is read as absent rather than returned as a member of a union it is not in.
+    const allowed = definition.values.map((value) => JSON.stringify(value)).join(", ");
+    return `([${allowed}] as unknown[]).includes(${read}) ? ${read} as ${tsType(definition)} : ${fallback}`;
+  }
+  switch (definition.type) {
+    case "number":
+      return `typeof ${read} === "number" ? ${read} as number : ${fallback}`;
+    case "boolean":
+      return `${read} === true${definition.nullable ? ` ? true : ${read} === false ? false : null` : ""}`;
+    case "json":
+      return `(${read} ?? ${fallback}) as ${tsType(definition)}`;
+    default:
+      return `typeof ${read} === "string" ? ${read} as string : ${fallback}`;
+  }
+}
+
+/**
+ * Two relationships can want the same generated name — `a_b.c` and `a.b_c` both read as
+ * `a_b_cRelation` — and no separator escapes it, because a table may itself contain whatever
+ * separator the join uses. Emitting both would redeclare the helper and its result type, so the
+ * collision is reported the way a colliding pair of collections is: by name, before anything is
+ * written.
+ */
+function assertDistinctRelationshipNames(schema: SchemaDefinition): void {
+  const claimed = new Map<string, string>();
+  for (const [tableName, collection] of Object.entries(schema.collections)) {
+    for (const relationshipName of Object.keys(collection.relationships)) {
+      const path = `${tableName}.${relationshipName}`;
+      for (const generated of [
+        `${tableName}_${relationshipName}Relation`,
+        typeName(`${tableName}_${relationshipName}`, "Result"),
+      ]) {
+        const existing = claimed.get(generated);
+        if (existing !== undefined && existing !== path) {
+          throw new Error(
+            `relationships ${JSON.stringify(existing)} and ${JSON.stringify(path)} generate the same name ` +
+              `(${generated}); rename one of them so the generated code can tell them apart`,
+          );
+        }
+        claimed.set(generated, path);
+      }
+    }
+  }
+}
+
+export function generateRelationshipHelpers(schema: SchemaDefinition): string {
+  assertDistinctRelationshipNames(schema);
+  const helpers = Object.entries(schema.collections)
+    .flatMap(([tableName, collection]) =>
+      Object.entries(collection.relationships).map(([relationshipName, relationship]) => {
+        // `readonly` is a type modifier for arrays and tuples only; a nullable single result is
+        // just a union, and writing `readonly unknown | null` does not compile.
+        const result = relationship.many ? "readonly unknown[]" : "unknown | null";
+        return [
+          `export function ${tableName}_${relationshipName}Relation() {`,
+          "  return {",
+          `    sourceTable: ${JSON.stringify(tableName)},`,
+          `    targetTable: ${JSON.stringify(relationship.table)},`,
+          `    localField: ${JSON.stringify(relationship.localField)},`,
+          `    foreignField: ${JSON.stringify(relationship.foreignField)},`,
+          `    many: ${relationship.many},`,
+          `  } satisfies { readonly sourceTable: string; readonly targetTable: string; readonly localField: string; readonly foreignField: string; readonly many: boolean };`,
+          "}",
+          `export type ${typeName(`${tableName}_${relationshipName}`, "Result")} = ${result};`,
+        ].join("\n");
+      }),
+    )
+    .join("\n\n");
+  return helpers.length === 0 ? "export {};\n" : `${helpers}\n`;
+}
+
+export function generateNestedMappers(schema: SchemaDefinition): string {
+  const mappers = Object.entries(schema.collections)
+    .filter(([, collection]) => Object.keys(collection.fields).some((fieldName) => fieldName.includes("__")))
+    .map(([tableName, collection]) => generateNestedMapper(tableName, collection));
+  if (mappers.length === 0) return "export {};\n";
+  // One definition for the file, however many collections nest fields: a copy per mapper is a
+  // duplicate function implementation, which is an error rather than a redundancy.
+  return `${[...mappers, ASSIGN_NESTED].join("\n\n")}\n`;
+}
+
+function typeFields(collection: CollectionDefinition, internal: boolean): string {
+  const lines: string[] = [];
+  for (const [name, field] of Object.entries(collection.fields)) {
+    lines.push(`    ${propertyName(name)}: ${tsType(field)};`);
+    if (internal && !field.derived) {
+      lines.push(`    ${propertyName(`_weft_hlc_${name}`)}: string | null;`);
+      if (field.merge === "diff3")
+        lines.push(`    ${propertyName(`_weft_base_${name}`)}: ${tsType({ ...field, nullable: true })};`);
+    }
+  }
+  if (internal) {
+    lines.push("    _weft_first_synced_at: number | null;");
+    lines.push("    _weft_rev: number;");
+    lines.push("    _weft_dirty: number;");
+  }
+  return lines.join("\n");
+}
+
+function kyselyFields(collection: CollectionDefinition, internal: boolean): string {
+  const lines: string[] = [];
+  for (const [name, field] of Object.entries(collection.fields)) {
+    lines.push(`    ${propertyName(name)}: ColumnType<${tsType(field)}, ${insertType(field)}, ${updateType(field)}>;`);
+    if (internal && !field.derived) {
+      lines.push(`    ${propertyName(`_weft_hlc_${name}`)}: string | null;`);
+      if (field.merge === "diff3")
+        lines.push(`    ${propertyName(`_weft_base_${name}`)}: ${tsType({ ...field, nullable: true })};`);
+    }
+  }
+  if (internal) {
+    lines.push("    _weft_first_synced_at: number | null;");
+    lines.push("    _weft_rev: Generated<number>;");
+    lines.push("    _weft_dirty: Generated<number>;");
+  }
+  return lines.join("\n");
+}
+
+// `date` columns hold ISO-8601 text, which is what the client actually writes into `created`
+// and what sorts chronologically under SQLite's own collation. Declaring them INTEGER made the
+// generated types disagree with every row the runtime produces.
+function enumCheck(name: string, field: FieldDefinition): string {
+  if (field.values === undefined) return "";
+  const allowed = field.values.map((value) => `'${value.replaceAll("'", "''")}'`).join(", ");
+  // The stored form is JSON, which is how every other value in these columns is written.
+  const encoded = field.values.map((value) => `'${JSON.stringify(value).replaceAll("'", "''")}'`).join(", ");
+  return ` CHECK (${quoteIdent(name)} IN (${allowed}, ${encoded})${field.nullable ? ` OR ${quoteIdent(name)} IS NULL` : ""})`;
+}
+
+function domainColumnDdl(name: string, field: FieldDefinition, mode: "create" | "alter"): string {
+  return `${quoteIdent(name)} ${sqliteType(field)}${field.nullable ? "" : " NOT NULL"}${mode === "alter" && !field.nullable ? ` DEFAULT ${sqlDefaultLiteral(field)}` : ""}${enumCheck(name, field)}`;
+}
+
+function sqliteType(field: FieldDefinition): string {
+  if (field.type === "number" || field.type === "boolean") return "INTEGER";
+  return "TEXT";
+}
+
+function tsType(field: FieldDefinition): string {
+  // An enum is worth its values: a row typed `"open" | "done"` is checked wherever it is used,
+  // where `string` would only be checked at the database.
+  const base =
+    field.values !== undefined
+      ? field.values.map((value) => JSON.stringify(value)).join(" | ")
+      : field.type === "number"
+        ? "number"
+        : field.type === "boolean"
+          ? "boolean"
+          : field.type === "json"
+            ? "unknown"
+            : "string";
+  return field.nullable ? `${base} | null` : base;
+}
+
+function insertType(field: FieldDefinition): string {
+  if (field.derived) return "never";
+  return field.nullable ? `${tsType(field)} | undefined` : tsType(field);
+}
+
+function updateType(field: FieldDefinition): string {
+  if (field.derived || field.merge === "immutable") return "never";
+  return field.nullable ? tsType(field) : `${tsType(field)} | undefined`;
+}
+
+function defaultLiteral(field: FieldDefinition): string {
+  // A non-nullable enum has no empty value to fall back to, so it falls back to its first.
+  if (field.values?.[0] !== undefined) return JSON.stringify(field.values[0]);
+  if (field.type === "number" || field.type === "boolean") return "0";
+  return "''";
+}
+
+function sqlDefaultLiteral(field: FieldDefinition): string {
+  const value = field.values?.[0] ?? (field.type === "number" ? 0 : field.type === "boolean" ? false : "");
+  return `'${JSON.stringify(value).replaceAll("'", "''")}'`;
+}
+
+/** `todo_events` + `Query` becomes `todoEventsQuery`: a value, not a type. */
+function memberName(input: string, suffix: string): string {
+  const pascal = typeName(input, suffix);
+  return `${pascal[0]?.toLowerCase() ?? ""}${pascal.slice(1)}`;
+}
+
+function typeName(input: string, suffix: string): string {
+  return `${input
+    .split(/[^A-Za-z0-9]/u)
+    .filter((part) => part.length > 0)
+    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join("")}${suffix}`;
+}
+
+function generateNestedMapper(tableName: string, collection: CollectionDefinition): string {
+  const nestedFields = Object.keys(collection.fields).filter((fieldName) => fieldName.includes("__"));
+  const assignments = nestedFields.map((field) => {
+    const path = field.split("__");
+    const quotedPath = path.map((part) => JSON.stringify(part)).join(", ");
+    return `  assignNested(output, [${quotedPath}], row[${JSON.stringify(field)}]);`;
+  });
+  return [
+    `export function map${typeName(tableName, "Row")}(row: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {`,
+    "  const output: Record<string, unknown> = { ...row };",
+    ...nestedFields.map((field) => `  delete output[${JSON.stringify(field)}];`),
+    ...assignments,
+    "  return output;",
+    "}",
+  ].join("\n");
+}
+
+const ASSIGN_NESTED = [
+  "function assignNested(target: Record<string, unknown>, path: readonly string[], value: unknown): void {",
+  "  let cursor: Record<string, unknown> = target;",
+  "  for (let index = 0; index < path.length; index += 1) {",
+  "    const segment = path[index];",
+  "    if (segment === undefined) return;",
+  "    if (index === path.length - 1) {",
+  "      cursor[segment] = value;",
+  "      return;",
+  "    }",
+  "    const next = cursor[segment];",
+  "    if (typeof next !== 'object' || next === null || Array.isArray(next)) {",
+  "      const created: Record<string, unknown> = {};",
+  "      cursor[segment] = created;",
+  "      cursor = created;",
+  "    } else {",
+  "      cursor = next as Record<string, unknown>;",
+  "    }",
+  "  }",
+  "}",
+].join("\n");
+
+const TS_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
+
+/**
+ * A key in a generated interface or object literal. A field name is whatever the schema says it
+ * is — `first-name` is a perfectly good column — but only some of those are identifiers, and an
+ * unquoted one does not parse.
+ */
+function propertyName(value: string): string {
+  return TS_IDENTIFIER.test(value) ? value : JSON.stringify(value);
+}
+
+function quoteIdent(value: string): string {
+  return `"${value.replaceAll('"', '""')}"`;
+}
+
+const BASE_FIELD_NAMES = new Set(["id", "scope_id", "created"]);

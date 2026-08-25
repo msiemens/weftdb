@@ -1,0 +1,57 @@
+---
+/*
+ * One route per demo, from the registry.
+ *
+ * The page adds exactly one thing to the demo: a way back to the docs. Everything else it might
+ * have carried, the demo already has — `App` renders its own `<main>`, its own masthead with the
+ * wordmark, and a footer disclosure listing what is worth trying. A second copy of any of those
+ * is not chrome, it is duplication, and a wrapper `<main>` around the app's own is invalid
+ * besides.
+ *
+ * It loads no palette of its own either. `weftdb-demo-todo/style.css` is self-contained — tokens,
+ * ground, weave, `body` — and pulling `loom.css` in beside it would put two `:root` blocks on one
+ * page for no gain. `demo-chrome.css` styles the back link from the demo's own tokens, so what a
+ * reader sees here is the page `pnpm demo` serves, plus a link.
+ *
+ * The `switch`-by-slug is the one place a demo's component is named. It cannot be derived from
+ * the slug — a dynamic import of a variable path would defeat bundling — so an explicit arm per
+ * demo is the cost, and it is one line.
+ */
+import { DEMOS, findDemo } from "../../demos/registry.ts";
+import TodoDemo from "../../demos/todo/Mount.tsx";
+import IssuesDemo from "../../demos/issues/Mount.tsx";
+import ChatDemo from "../../demos/chat/Mount.tsx";
+import "../../styles/demo-chrome.css";
+
+export function getStaticPaths() {
+  return DEMOS.map((demo) => ({ params: { slug: demo.slug } }));
+}
+
+const { slug } = Astro.params;
+const demo = findDemo(slug ?? "");
+if (demo === undefined) throw new Error(`no demo registered for "${slug}"`);
+---
+
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>{`${demo.title} — weftdb demo`}</title>
+<meta name="description" content={demo.blurb} />
+</head>
+<body>
+
+<nav class="demo-back">
+  <a href="/introduction/">&larr; weftdb docs</a>
+</nav>
+
+{/*
+  `client:only` rather than `client:load`: the store is opened from what this tab already has in
+  local storage, so there is no meaningful server-rendered first paint of it.
+*/}
+{slug === "todo" && <TodoDemo client:only="react" />}
+{slug === "issues" && <IssuesDemo client:only="react" />}
+{slug === "chat" && <ChatDemo client:only="react" />}
+
+</body>
+</html>

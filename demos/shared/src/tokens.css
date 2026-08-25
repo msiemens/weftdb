@@ -1,0 +1,90 @@
+/*
+ * The design tokens every weftdb surface is built from: the demos, the documentation, and the
+ * landing page.
+ *
+ * A loom. A weft is the thread carried across the warp, so a page is dressed as cloth on a
+ * workbench: an undyed linen ground, one indigo thread as the only accent, and a monospace voice
+ * for everything the machine reports about itself. Hairline rules instead of boxes, and one
+ * raised surface at a time.
+ *
+ * This file holds the palette and nothing else. What each surface does with it — the ground and
+ * its weave, the body type, the components — belongs to that surface.
+ *
+ * The values are written through `light-dark()` so one declaration serves both themes. That
+ * matters because the two consumers settle the theme differently: the documentation offers a
+ * toggle, which stamps `data-theme` and `color-scheme` on the root, while a demo has no toggle
+ * and follows the operating system. `light-dark()` reads whichever of the two applies.
+ *
+ * No web fonts and no external anything. A local-first page that goes blank-faced the moment the
+ * network is gone would be arguing against itself.
+ */
+
+:root {
+  /* Without this `light-dark()` has nothing to read, and it also tells the browser which way to
+     paint scrollbars, form controls and the caret. */
+  color-scheme: light dark;
+
+  --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+
+  --ground: light-dark(#e6e2d8, #121210);
+  --surface: light-dark(#fcfbf8, #1b1a17);
+  /* Recessed: fields, code, chips — anything that should read as cut into the surface rather than
+     laid on top of it. */
+  --sunken: light-dark(#f1eee5, #232119);
+  --rule: light-dark(#dcd6c8, #322f28);
+  --rule-strong: light-dark(#c8c0ae, #47433a);
+
+  --ink: light-dark(#191813, #f0ede4);
+  --ink-2: light-dark(#5a554a, #a69f91);
+  /* The faintest ink still cleared for text at this size — 4.8:1 on --surface. Anything quieter
+     than this is a border, not a word. */
+  --ink-3: light-dark(#756f62, #837c6d);
+
+  /* Indigo cannot stay dark on a dark ground and still read as the same thread, so it moves to the
+     tint of itself that survives there, and anything filled with it flips to dark-on-light. */
+  --accent: light-dark(#2e3a8e, #9ea9ff);
+  --accent-hover: light-dark(#3a49ac, #b6bdff);
+  --accent-ink: light-dark(#ffffff, #16160f);
+  --accent-wash: light-dark(#e4e5f4, #23243a);
+
+  --ok: light-dark(#1e6b45, #6fd39c);
+  --ok-wash: light-dark(#dcece1, #16291f);
+  --warn: light-dark(#7a5312, #e8b45c);
+  --warn-wash: light-dark(#f4e5c6, #2b2113);
+  --bad: light-dark(#9a2b26, #f08c86);
+  --bad-wash: light-dark(#f7dfdc, #2e1a18);
+
+  /* Twill: the single diagonal a fabric weave leaves, faint enough to be felt rather than seen.
+     Crossing it with its mirror produced a cross-hatch that read as wallpaper, so it runs one way
+     only. */
+  --weave: light-dark(rgb(25 24 19 / 4%), rgb(240 237 228 / 2.5%));
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --radius-chip: 4px;
+
+  --shadow: 0 1px 2px rgb(31 28 20 / 6%), 0 10px 28px -16px rgb(31 28 20 / 22%);
+}
+
+/*
+ * `--shadow` is the one token `light-dark()` cannot carry, because it is not a colour. These three
+ * rules are what the single declaration above would have been. Order matters: the two
+ * `[data-theme]` rules have the same specificity as the guarded one in the media query, so they
+ * have to come after it to win when a reader has chosen a theme against their system's.
+ */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 12px 30px -18px rgb(0 0 0 / 80%);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 12px 30px -18px rgb(0 0 0 / 80%);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --shadow: 0 1px 2px rgb(31 28 20 / 6%), 0 10px 28px -16px rgb(31 28 20 / 22%);
+}
