@@ -950,9 +950,10 @@ export { AuthorizerDependencyRecorder, compileQuery, dependency, invalidatesQuer
 export type { CompiledQuery, QueryBuilderLike, QueryDependency, RegisteredQuery } from "./query.ts";
 export { compileOnlyKysely } from "./kysely.ts";
 export type { ScopedRowQuery } from "./kysely.ts";
-export { isDeltaPush, isWorkerPush, OpfsWorkerTransport, withRequestId } from "./worker.ts";
+export { isDeltaPush, isWeftWorkerReady, isWorkerPush, OpfsWorkerTransport, withRequestId } from "./worker.ts";
 export type {
   MirrorTransport,
+  WeftWorkerReady,
   WireRow,
   WorkerDelta,
   WorkerDeltaPush,
@@ -984,3 +985,11 @@ export type {
 } from "./multitab.ts";
 export { Diff3EditorBuffer } from "./editor.ts";
 export type { BufferedRemoteEdit } from "./editor.ts";
+export { databaseChannelName, deviceIdForScope, openWeftDatabase, WeftOpenError } from "./open.ts";
+export type {
+  OpenRelayOptions,
+  OpenWeftDatabaseOptions,
+  WeftDatabase,
+  WeftOpenFailure,
+  WeftWorkerLike,
+} from "./open.ts";

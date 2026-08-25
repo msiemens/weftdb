@@ -120,6 +120,39 @@ export type WorkerPush = WorkerDeltaPush | WorkerStatusPush;
 export type WorkerMessage = WorkerResponse | WorkerPush;
 
 /**
+ * The one thing a worker says before it is asked anything: whether it managed to open the database
+ * at all, and which schema it opened.
+ *
+ * It exists because the answer cannot be got any other way. Whether OPFS will hand out a synchronous
+ * access handle pool is a property of the worker — Safari's private mode has no pool, and the page
+ * has no way to find that out from where it stands — so the worker has to try and report. A
+ * rejection thrown inside the worker reaches the page as an `error` event with no detail, which is
+ * why this is an ordinary message rather than an unhandled one.
+ *
+ * It is announced rather than answered, because a request cannot be made yet: a dedicated worker
+ * that spends its first turns awaiting a WebAssembly module has no `message` listener attached, and
+ * anything the page posted before `serveWeftWorker` ran would be delivered to nobody.
+ *
+ * The `weft` tag is what keeps it inert to everything already on these ports. It carries neither the
+ * numeric `id` a `WorkerResponse` is recognised by nor the `push` a `WorkerPush` is, so
+ * `OpfsWorkerTransport`, `WeftWorkerHost` and both halves of `BroadcastDbProxy` drop it untouched.
+ */
+export type WeftWorkerReady =
+  | {
+      readonly weft: "ready";
+      readonly ok: true;
+      /** The schema the worker serves, so a page cannot open against a worker built from another. */
+      readonly schemaHash: string;
+    }
+  | { readonly weft: "ready"; readonly ok: false; readonly error: string };
+
+export function isWeftWorkerReady(value: unknown): value is WeftWorkerReady {
+  if (typeof value !== "object" || value === null) return false;
+  const message = value as { readonly weft?: unknown; readonly ok?: unknown };
+  return message.weft === "ready" && typeof message.ok === "boolean";
+}
+
+/**
  * Which of the two a message is. A response carries `id` and a push carries `push`, so this is the
  * whole test — and it has to be made, because a transport that read `id` off every message would
  * settle request number `undefined` for each push that went by.
