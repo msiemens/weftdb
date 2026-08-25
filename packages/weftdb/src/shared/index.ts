@@ -1,6 +1,14 @@
-export { assertWireValue, decodeWireValue, encodeWireValue } from "./storage.ts";
+export {
+  assertWireValue,
+  decodeFieldValue,
+  decodeWireValue,
+  encodeFieldValue,
+  encodeWireValue,
+  fieldStorage,
+} from "./storage.ts";
 export type {
   EncodedFieldRecord,
+  FieldStorage,
   EncodedScopeState,
   SqlExecutor,
   SqlParameters,

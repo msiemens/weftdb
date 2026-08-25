@@ -1,5 +1,6 @@
 import { schemaHash } from "weftdb/schema";
 import type { CollectionDefinition, FieldDefinition, SchemaDefinition } from "weftdb/schema";
+import { fieldStorage } from "weftdb/shared";
 
 export interface GeneratedArtifactSet {
   schemaHash: string;
@@ -59,6 +60,7 @@ export function generateClientAddMissingColumnDdl(
   addColumn("_weft_first_synced_at", `${quoteIdent("_weft_first_synced_at")} INTEGER`);
   addColumn("_weft_rev", `${quoteIdent("_weft_rev")} INTEGER NOT NULL DEFAULT 0`);
   addColumn("_weft_dirty", `${quoteIdent("_weft_dirty")} INTEGER NOT NULL DEFAULT 0`);
+  addColumn("_weft_null_fields", `${quoteIdent("_weft_null_fields")} TEXT`);
   return statements;
 }
 
@@ -245,6 +247,10 @@ ${[
   "  _weft_first_synced_at INTEGER",
   "  _weft_rev INTEGER NOT NULL DEFAULT 0",
   "  _weft_dirty INTEGER NOT NULL DEFAULT 0",
+  // A declared field is stored as its column's own type, so a null field and a field that was
+  // never written both read back as SQL NULL. This says which of the two a NULL is, and only
+  // the client store reads it: nothing compiled against the generated types names it.
+  "  _weft_null_fields TEXT",
   // Keyed the way every framework table is keyed. A row id is unique within its scope and
   // nowhere else, so one database holding two scopes has two rows legitimately sharing an id —
   // and a key on `id` alone turns the second one into a constraint failure.
@@ -570,6 +576,7 @@ function typeFields(collection: CollectionDefinition, internal: boolean): string
     lines.push("    _weft_first_synced_at: number | null;");
     lines.push("    _weft_rev: number;");
     lines.push("    _weft_dirty: number;");
+    lines.push("    _weft_null_fields: string | null;");
   }
   return lines.join("\n");
 }
@@ -588,6 +595,7 @@ function kyselyFields(collection: CollectionDefinition, internal: boolean): stri
     lines.push("    _weft_first_synced_at: number | null;");
     lines.push("    _weft_rev: Generated<number>;");
     lines.push("    _weft_dirty: Generated<number>;");
+    lines.push("    _weft_null_fields: string | null;");
   }
   return lines.join("\n");
 }
@@ -597,10 +605,10 @@ function kyselyFields(collection: CollectionDefinition, internal: boolean): stri
 // generated types disagree with every row the runtime produces.
 function enumCheck(name: string, field: FieldDefinition): string {
   if (field.values === undefined) return "";
+  // An enum member is stored as the bare string it is, so the constraint lists exactly the
+  // values the schema declares — the same set the generated union offers.
   const allowed = field.values.map((value) => `'${value.replaceAll("'", "''")}'`).join(", ");
-  // The stored form is JSON, which is how every other value in these columns is written.
-  const encoded = field.values.map((value) => `'${JSON.stringify(value).replaceAll("'", "''")}'`).join(", ");
-  return ` CHECK (${quoteIdent(name)} IN (${allowed}, ${encoded})${field.nullable ? ` OR ${quoteIdent(name)} IS NULL` : ""})`;
+  return ` CHECK (${quoteIdent(name)} IN (${allowed})${field.nullable ? ` OR ${quoteIdent(name)} IS NULL` : ""})`;
 }
 
 function domainColumnDdl(name: string, field: FieldDefinition, mode: "create" | "alter"): string {
@@ -608,8 +616,10 @@ function domainColumnDdl(name: string, field: FieldDefinition, mode: "create" | 
 }
 
 function sqliteType(field: FieldDefinition): string {
-  if (field.type === "number" || field.type === "boolean") return "INTEGER";
-  return "TEXT";
+  // One source for the column type and for what the client store writes into it: they were two,
+  // and the store's JSON text landed in columns declared INTEGER.
+  const storage = fieldStorage(field);
+  return storage === "number" || storage === "boolean" ? "INTEGER" : "TEXT";
 }
 
 function tsType(field: FieldDefinition): string {
@@ -645,9 +655,23 @@ function defaultLiteral(field: FieldDefinition): string {
   return "''";
 }
 
+/**
+ * What an added column holds for rows written before it existed. It is the stored form, not the
+ * wire form: a column added to an existing table is read by the same decoder as one declared
+ * with the table, so a number defaults to a number and a string to a bare string.
+ */
 function sqlDefaultLiteral(field: FieldDefinition): string {
-  const value = field.values?.[0] ?? (field.type === "number" ? 0 : field.type === "boolean" ? false : "");
-  return `'${JSON.stringify(value).replaceAll("'", "''")}'`;
+  if (field.values?.[0] !== undefined) return `'${field.values[0].replaceAll("'", "''")}'`;
+  switch (fieldStorage(field)) {
+    case "number":
+    case "boolean":
+      return "0";
+    case "json":
+      // A json column holds JSON text, so its empty value has to parse as JSON.
+      return `'${JSON.stringify("").replaceAll("'", "''")}'`;
+    case "text":
+      return "''";
+  }
 }
 
 /** `todo_events` + `Query` becomes `todoEventsQuery`: a value, not a type. */

@@ -13,9 +13,17 @@ import {
   type WeftOp,
   type WireValue,
 } from "weftdb/core";
-import { decodeWireValue, encodeWireValue, type SqlExecutor, type SqlRow } from "weftdb/shared";
+import {
+  decodeFieldValue,
+  decodeWireValue,
+  encodeFieldValue,
+  encodeWireValue,
+  type SqlExecutor,
+  type SqlRow,
+  type SqlValue,
+} from "weftdb/shared";
 import { generateClientAddMissingColumnDdl, generateClientDdl } from "weftdb/codegen";
-import type { SchemaDefinition } from "weftdb/schema";
+import type { FieldDefinition, SchemaDefinition } from "weftdb/schema";
 import { splitSql } from "../sql.ts";
 import { WeftClient, type LocalRow, type LocalRowInternals, type QuarantinedOp, type Tombstone } from "./index.ts";
 
@@ -70,11 +78,7 @@ export class SqliteClientStore {
     this.ensureSchema();
     const client = new WeftClient(scopeIdValue, deviceIdValue, this.schema);
     for (const [tableNameValue, collection] of Object.entries(this.schema.collections)) {
-      for (const row of this.loadRows(
-        scopeIdValue,
-        tableName(tableNameValue),
-        Object.keys(collection.fields).map(fieldName),
-      )) {
+      for (const row of this.loadRows(scopeIdValue, tableName(tableNameValue), collection.fields)) {
         client.rows.set(localKey(tableName(tableNameValue), row.id), row);
       }
     }
@@ -182,28 +186,31 @@ ON CONFLICT(scope_id) DO UPDATE SET
   private loadRows(
     scopeIdValue: ScopeId,
     tableNameValue: TableName,
-    fieldNames: readonly FieldName[],
+    fields: Readonly<Record<string, FieldDefinition>>,
   ): readonly LocalRow[] {
     return this.executor.all({
       sql: `SELECT * FROM ${quoteIdent(tableNameValue)} WHERE scope_id = ?`,
       parameters: [scopeIdValue],
-      decode: (row) => decodeLocalRow(row, tableNameValue, fieldNames),
+      decode: (row) => decodeLocalRow(row, tableNameValue, fields),
     });
   }
 
   private saveRow(tableNameValue: TableName, row: LocalRow): void {
-    const domainEntries: Array<[string, string | number | null]> = [
+    const fields = this.schema.collections[tableNameValue]?.fields ?? {};
+    const domainEntries: Array<[string, SqlValue]> = [
       // Base fields are columns in their own right and are stored raw. They also appear in
       // the field map once a row has been pulled, and encoding those copies here would
       // overwrite the raw columns with JSON — `id` would come back quoted.
       ["id", row.id],
       ["scope_id", row.scopeId],
       ["created", row.created],
+      // Every other declared field goes in as what its column says it holds, so the table a
+      // query is compiled against is the table the query runs on (§10).
       ...[...row.fields.entries()]
         .filter(([field]) => !BASE_FIELD_NAMES.has(field))
-        .map(([field, value]) => [field, encodeWireValue(value)] satisfies [string, string]),
+        .map(([field, value]) => [field, encodeFieldValue(fields[field], value)] satisfies [string, SqlValue]),
     ];
-    const internalEntries: Array<[string, string | number | null]> = [
+    const internalEntries: Array<[string, SqlValue]> = [
       ...[...row.internals.hlc.entries()].map(([field, hlc]) => [`_weft_hlc_${field}`, hlc] satisfies [string, string]),
       ...[...row.internals.diff3Base.entries()].map(
         ([field, value]) => [`_weft_base_${field}`, encodeWireValue(value)] satisfies [string, string],
@@ -211,6 +218,13 @@ ON CONFLICT(scope_id) DO UPDATE SET
       ["_weft_first_synced_at", row.internals._weft_first_synced_at],
       ["_weft_rev", row.internals._weft_rev],
       ["_weft_dirty", row.internals._weft_dirty],
+      // A column holds one NULL for two different facts: a field written as null, and a field
+      // never written at all. They are not the same — the first mirrors a field record the
+      // scope holds and the second mirrors the absence of one — and losing the difference on
+      // a hydrate makes a device disagree with the server about which fields exist. The
+      // column keeps queries honest (`where x is null` means what it says) and this keeps
+      // the difference, in a name no query written against the generated types can see.
+      [NULL_FIELDS_COLUMN, encodeNullFields(row)],
     ];
     const entries = dedupeEntries([...domainEntries, ...internalEntries]);
     this.executor.run({
@@ -315,11 +329,17 @@ function syncStateStatement(scopeIdValue: ScopeId) {
   };
 }
 
-function decodeLocalRow(row: SqlRow, tableNameValue: TableName, fieldNames: readonly FieldName[]): LocalRow {
+function decodeLocalRow(
+  row: SqlRow,
+  tableNameValue: TableName,
+  definitions: Readonly<Record<string, FieldDefinition>>,
+): LocalRow {
   const fields = new Map<FieldName, WireValue>();
   const hlc = new Map<FieldName, HlcString>();
   const diff3Base = new Map<FieldName, WireValue>();
-  for (const field of fieldNames) {
+  const nulls = decodeNullFields(row[NULL_FIELDS_COLUMN]);
+  for (const name of Object.keys(definitions)) {
+    const field = fieldName(name);
     const raw = row[field];
     if (BASE_FIELD_NAMES.has(field)) {
       // A base field is stored raw in a column of its own, so it comes back as it is rather
@@ -328,7 +348,12 @@ function decodeLocalRow(row: SqlRow, tableNameValue: TableName, fieldNames: read
       // row hydrated without them is a row whose id reads as empty.
       if (typeof raw === "string") fields.set(field, raw);
     } else {
-      if (raw !== undefined && raw !== null) fields.set(field, decodeWireValue(String(raw)));
+      // Read back by what the field declares, which is what the column was written as. A
+      // blanket `JSON.parse` here would fail on the raw text a TEXT column now holds.
+      if (raw !== undefined && raw !== null) fields.set(field, decodeFieldValue(definitions[name], raw));
+      else if (nulls.has(field)) fields.set(field, null);
+      // The diff3 ancestor is not a queryable column — nothing outside the merge reads it —
+      // so it stays wire-encoded and comes back through the wire decoder.
       const rawBase = row[`_weft_base_${field}`];
       if (rawBase !== undefined && rawBase !== null) diff3Base.set(field, decodeWireValue(String(rawBase)));
     }
@@ -412,9 +437,22 @@ function encodeOutboxParameters(op: WeftOp, attempts: number): readonly (string 
   ];
 }
 
-function dedupeEntries(
-  entries: readonly (readonly [string, string | number | null])[],
-): readonly (readonly [string, string | number | null])[] {
+/** The fields this row holds as null, or SQL NULL when it holds none. */
+function encodeNullFields(row: LocalRow): string | null {
+  const names = [...row.fields.entries()]
+    .filter(([field, value]) => value === null && !BASE_FIELD_NAMES.has(field))
+    .map(([field]) => field);
+  return names.length === 0 ? null : JSON.stringify(names);
+}
+
+function decodeNullFields(raw: SqlValue | undefined): ReadonlySet<FieldName> {
+  if (typeof raw !== "string") return new Set();
+  const parsed: unknown = JSON.parse(raw);
+  if (!Array.isArray(parsed)) return new Set();
+  return new Set((parsed as readonly unknown[]).filter((name) => typeof name === "string").map(fieldName));
+}
+
+function dedupeEntries(entries: readonly (readonly [string, SqlValue])[]): readonly (readonly [string, SqlValue])[] {
   return [...new Map(entries).entries()];
 }
 
@@ -457,6 +495,9 @@ function parseLocalKey(key: string): { readonly tableName: TableName; readonly r
   if (tableNamePart === undefined || rowIdPart === undefined) throw new Error(`invalid local row key: ${key}`);
   return { tableName: tableName(tableNamePart), rowId: rowId(rowIdPart) };
 }
+
+/** Internal, like every other `_weft_` column: the generated `Database` does not carry it. */
+const NULL_FIELDS_COLUMN = "_weft_null_fields";
 
 const BASE_FIELD_NAMES: ReadonlySet<FieldName> = new Set([
   fieldName("id"),
