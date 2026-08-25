@@ -159,6 +159,35 @@ test("a wholly successful async push does not drain edits queued while it was in
   );
 });
 
+test("a device with nothing queued does not push at all", () => {
+  // The loop's own condition is what decides this. A client that has just synced, or has never
+  // written anything, talks to the relay on a schedule; sending it empty batches is traffic
+  // every idle device in a deployment pays for.
+  const { server, client } = skewedPair();
+  let pushes = 0;
+  const original = server.push.bind(server);
+  const counting = server as WeftServer & { push: WeftServer["push"] };
+  counting.push = (scope, ops) => {
+    pushes += 1;
+    return original(scope, ops);
+  };
+
+  client.flush(counting);
+  assert.equal(pushes, 0, "an empty outbox still reached the relay");
+
+  client.create(
+    TODOS,
+    ROW,
+    values({ title: "plan", notes: "first", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
+    txnId("create"),
+  );
+  client.flush(counting);
+  assert.equal(pushes, 1, "queued work took more than one push to deliver");
+
+  client.flush(counting);
+  assert.equal(pushes, 1, "a drained outbox pushed again");
+});
+
 test("a partly acknowledged async push does not drain edits queued while it was in flight", async () => {
   const { server, client, skew } = skewedPair();
   client.create(
