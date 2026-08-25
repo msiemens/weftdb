@@ -61,17 +61,7 @@ property, so a row-level write can never carry a value; a `set` operation's `fie
 required, not optional, so it can never omit one:
 
 ```ts
-import {
-  deviceId,
-  encodeHlc,
-  fieldName,
-  rowId,
-  scopeId,
-  tableName,
-  txnId,
-  type SetOp,
-  type WeftOp,
-} from "weftdb/shared";
+import { deviceId, encodeHlc, fieldName, rowId, scopeId, tableName, txnId, type SetOp, type WeftOp } from "weftdb/core";
 
 const hlc = encodeHlc({ wallMs: Date.now(), counter: 0, deviceId: deviceId("tab-1") });
 const txn = txnId("create-task-1");

@@ -1,4 +1,4 @@
-import type { FieldName, RowId, TableName } from "weftdb/shared";
+import type { FieldName, RowId, TableName } from "weftdb/core";
 
 export interface BufferedRemoteEdit {
   readonly tableName: TableName;

@@ -20,7 +20,8 @@ client in — because the subpaths are the unit of import, not the package.
 
 ```
 weftdb                      runtime
-  /shared                   HLC, merge functions, diff3, fractional index, protocol types
+  /core                     HLC, merge functions, diff3, fractional index, protocol types
+  /shared                   hashing, the wire-value codec, the SqlExecutor port
   /schema                   schema DSL, merge annotations, type-level inference
   /client                   sync client, outbox, subscription engine
   /client/sqlite            the SqlExecutor port
@@ -141,8 +142,8 @@ Two enforcement rules look like exceptions and are not:
 
 The consequences are the whole point:
 
-- **No server DDL and no server migrations, ever.** Adding `vitamin_k` to
-  `nutrition_facts` is a client deploy. The server is version-independent of your schema
+- **No server DDL and no server migrations, ever.** Adding `show_archived` to
+  `view_settings` is a client deploy. The server is version-independent of your schema
   for its entire life. This permanently eliminates the schema-push problem rather than
   relocating it.
 - A schema _hash_ is exchanged at handshake purely to catch client version skew. The
@@ -232,13 +233,13 @@ Kysely's `sql` template escape is lint-banned.
 ### 3.3 Relations
 
 Codegen emits relation helpers from the `relationships` declarations already in the schema
-— `q.calorieEntries().withFoodItems()` — wrapping `jsonArrayFrom` / `jsonObjectFrom`. One
+— `q.tasks().withCategory()` — wrapping `jsonArrayFrom` / `jsonObjectFrom`. One
 round trip, fully typed. Joining in JS across two subscriptions is not an option: it
 doubles the invalidation paths.
 
 ### 3.4 Nested record reassembly
 
-`nutrition_facts` is 25 flat columns in storage and one nested object in the API.
+`view_settings` is 25 flat columns in storage and one nested object in the API.
 Reassembly happens in the row mapper — the same pass that strips `_weft_*` — typed by a
 generated `RowOf<T> → EntityOf<T>` mapping. The query surface filters on flat column names;
 only read results are nested.
@@ -290,7 +291,7 @@ tasks
 ```
 
 Nested records are **flattened into merge-addressable leaf columns** and reassembled at the
-API boundary (§3.4). Two devices correcting `sodium` and `vitamin_d` must not conflict.
+API boundary (§3.4). Two devices changing `sort_order` and `column_width` must not conflict.
 
 `_weft_dirty` cannot distinguish never-synced from synced-then-edited, which is why
 `_weft_first_synced_at` exists separately. It is **server-authoritative** — written once
@@ -439,8 +440,8 @@ breaks equivalence in a way that never reproduces. NDJSON, streamable, content-a
 
 ### 5.3 Push
 
-Ops batched by `txn_id` and applied atomically, so a `calorie_entry` and its `food_items`
-never appear half-created. Per op the server:
+Ops batched by `txn_id` and applied atomically, so a parent row and its children never
+appear half-created. Per op the server:
 
 1. rejects if `op.scope_id != token.scope_id`
 2. rejects if `hlc.wall_ms > server_now + SKEW_THRESHOLD`
@@ -707,18 +708,21 @@ checked server-side (§5.3 step 4) and makes convergence free.
 
 ## 7. Derived values, deletion, retention
 
-`estimated_calories` is **not stored**. Recomputing a stored aggregate on merge would
-require the merge layer to understand aggregations. It is a `derived` field:
+**An aggregate over child rows is never stored.** Recomputing a stored aggregate on merge
+would require the merge layer to understand aggregations. It is a `derived` field — a select
+fragment evaluated at read:
 
 ```
-COALESCE(manual_calorie_override, SUM(food_items.calories))
+COALESCE(total_override, SUM(children.amount))
 ```
 
 Being `derived` in the DSL means it is always present in the entity type, never
 present-or-absent depending on which query produced the row.
 
-`manual_calorie_override` (nullable, LWW) replaces `is_manual_entry`. Manual-ness becomes a
-consequence of the data rather than an independently settable flag.
+**An override is a nullable LWW field carrying the overriding value, never a boolean flag
+beside the value it qualifies.** One field carries both the value and the intent, so the two
+cannot converge out of step, and overriddenness becomes a consequence of the data rather than
+an independently settable flag.
 
 **Deletion is delete-wins with read-time orphan filtering** — for clean rows. A tombstoned
 parent's children are dropped from reads and reaped lazily. Server-side, deletion is a
@@ -749,8 +753,8 @@ op log to prune (§1.2).
 
 **Blob GC runs out of band via an S3 lifecycle rule** matching the retention window —
 declarative, runs without application code, cannot be broken by a sync bug. Full URLs are
-stored inline: the endpoint is self-hosted, re-homing is a one-time `UPDATE`, and since
-photo capture requires network for calorie analysis anyway, the "op references a
+stored inline: the endpoint is self-hosted, re-homing is a one-time `UPDATE`, and since the
+capture path that produces a blob already requires the network, the "op references a
 not-yet-uploaded object" ordering problem does not arise.
 
 ---
@@ -790,7 +794,7 @@ appears on cold open, which is also when a resync is running.
 
 ### 8.4 Notification coalescing
 
-**One notify per local transaction**, so an entry and its food items appear together, plus
+**One notify per local transaction**, so a parent row and its children appear together, plus
 **microtask batching** across transactions. Remote pulls emit one notification per batch
 (§5.6); snapshot resync emits exactly one (§5.7).
 
@@ -859,10 +863,10 @@ random interleaving of snapshot resync and incremental pull, random rejection in
 
 ### Application
 
-14. `food_items.scope_id == parent calorie_entry.scope_id`, always.
-15. No `food_item` is ever _visible_ whose parent is tombstoned.
-16. Manual-ness is determined solely by `manual_calorie_override IS NOT NULL`.
-17. Derived `estimated_calories` equals `COALESCE(manual_calorie_override, SUM(food_items.calories))`.
+14. A child row's `scope_id` equals its parent row's `scope_id`, always.
+15. No child row is ever _visible_ whose parent is tombstoned.
+16. Overriddenness is determined solely by `total_override IS NOT NULL`.
+17. A derived aggregate equals `COALESCE(total_override, SUM(children.amount))`.
 18. `task_status_history` rows are never removed by any path.
 19. Rank ordering is a **total** order under lexicographic `rank`; no two visible rows in a
     scope compare equal.

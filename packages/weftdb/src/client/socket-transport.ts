@@ -6,7 +6,7 @@
 // outcome means, what to do with a rejection, when a snapshot is needed — is the same code the
 // HTTP transport runs, which is the same code the specification and the property suite are
 // about. Only the way bytes move changes.
-import type { ScopeId, WeftOp } from "weftdb/shared";
+import type { ScopeId, WeftOp } from "weftdb/core";
 import type { HandshakeRequest, PullBatch } from "weftdb/server";
 import type { SyncArguments, SyncOperation, SyncResults } from "weftdb/server/relay";
 import { snapshotFromEnvelope } from "weftdb/server/snapshot";

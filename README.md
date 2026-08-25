@@ -2,6 +2,11 @@
 
 TypeScript local-first sync for single-user, multi-device apps.
 
+One relay serves many users side by side, each in a scope of their own; within a scope the data
+belongs to one person and syncs across their devices. There is no collaboration: merges and the
+repair UI both assume the person resolving a conflict is the person who made both sides of it.
+Devices may be offline for months.
+
 WeftDB provides:
 
 - Typed schema definitions.
@@ -70,7 +75,7 @@ const artifacts = generateArtifacts(schema);
 ## Sync
 
 ```ts
-import { deviceId, fieldName, rowId, scopeId, tableName } from "weftdb/shared";
+import { deviceId, fieldName, rowId, scopeId, tableName } from "weftdb/core";
 import { schemaHash } from "weftdb/schema";
 import { WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";

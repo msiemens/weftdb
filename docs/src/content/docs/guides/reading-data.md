@@ -15,7 +15,7 @@ generated query key, a decoder, and a React hook. Against the client directly, i
 `getRow` returns one row or `undefined`, and `listRows` returns every row in a table:
 
 ```ts
-import { rowId, tableName } from "weftdb/shared";
+import { rowId, tableName } from "weftdb/core";
 
 const task = client.getRow(tableName("tasks"), rowId("task-1"));
 const tasks = client.listRows(tableName("tasks"));
@@ -91,7 +91,7 @@ on the calling thread and yields a `CompiledQuery`. The compiled query is what c
 boundary:
 
 ```ts
-import type { WireValue } from "weftdb/shared";
+import type { WireValue } from "weftdb/core";
 
 export interface CompiledQuery {
   readonly sql: string;
@@ -135,16 +135,16 @@ changes.
 ## Nested records
 
 A field name that contains a double underscore is a path into a nested object rather than a flat
-value. A field declared as `nutrition_facts__sodium` is stored as one column, and a decoded row
-exposes it as `nutrition_facts.sodium`:
+value. A field declared as `view_settings__sort_order` is stored as one column, and a decoded row
+exposes it as `view_settings.sort_order`:
 
 ```ts title="src/schema.ts"
 import { defineSchema, S } from "weftdb/schema";
 
 export const schema = defineSchema({
-  meals: S.collection({
-    nutrition_facts__sodium: S.number(),
-    nutrition_facts__vitamin_d: S.number(),
+  custom_views: S.collection({
+    view_settings__sort_order: S.number(),
+    view_settings__column_width: S.number(),
   }),
 });
 ```
@@ -152,8 +152,8 @@ export const schema = defineSchema({
 `weft generate` writes one mapper per collection that needs it, named `map<Collection>Row`, which
 reassembles the paths before a decoder reads the result. Merge state stays attached to the flat
 column underneath, under the same [merge model](/concepts/merge-model/) that governs every other
-field, so two devices correcting `sodium` and `vitamin_d` in the same record do not conflict with
-each other. A query's filters still name the flat column; only what a read returns is nested.
+field, so two devices changing `sort_order` and `column_width` in the same record do not conflict
+with each other. A query's filters still name the flat column; only what a read returns is nested.
 
 [Writing data](/guides/writing-data/) covers the other half of a generated collection: the
 mutators that write the rows a query reads back.

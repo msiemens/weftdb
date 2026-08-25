@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { createHmac, generateKeyPairSync, createSign } from "node:crypto";
-import { scopeId, deviceId } from "weftdb/shared";
+import { scopeId, deviceId } from "weftdb/core";
 import { claimsToContext, jwtVerifier, type JwtClaims } from "weftdb/server/jwt";
 
 const SECRET = "a-shared-secret-that-is-long-enough";

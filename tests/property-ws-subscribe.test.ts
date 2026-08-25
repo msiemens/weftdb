@@ -21,7 +21,7 @@ import {
   type FieldName,
   type ScopeId,
   type WireValue,
-} from "weftdb/shared";
+} from "weftdb/core";
 import { connectSocketTransport, httpTransport, WeftClient, type SocketTransport } from "weftdb/client";
 import type { PullBatch } from "weftdb/server";
 import { startRelay } from "weftdb/server/serve";

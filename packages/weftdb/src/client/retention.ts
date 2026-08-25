@@ -1,6 +1,6 @@
-import type { FieldName, RowId, TableName } from "weftdb/shared";
+import type { FieldName, RowId, TableName } from "weftdb/core";
 import type { SchemaDefinition } from "weftdb/schema";
-import type { WeftClient } from "./index.ts";
+import type { MaterializedRow, WeftClient } from "./index.ts";
 
 export interface RetentionPolicy {
   readonly defaultAutoDeleteDays?: number;
@@ -76,6 +76,26 @@ export function applyRetentionDeletes(
   const candidates = planRetentionDeletes(client, schema, policy, nowMs);
   for (const candidate of candidates) client.delete(candidate.tableName, candidate.rowId);
   return candidates;
+}
+
+/**
+ * The children whose parent is still live.
+ *
+ * Deleting a row does nothing to the rows that reference it: `listRows` answers with every row of
+ * a collection, so a child of a deleted parent goes on appearing in reads until something drops
+ * it. Nothing calls this for you and no query path applies it implicitly — it belongs where the
+ * application reads.
+ */
+export function visibleChildren(
+  liveParents: readonly MaterializedRow[],
+  children: readonly MaterializedRow[],
+  foreignField: FieldName,
+): readonly MaterializedRow[] {
+  const liveParentIds = new Set<RowId>(liveParents.map((row) => row.id));
+  return children.filter((child) => {
+    const parentId = child.fields.get(foreignField);
+    return typeof parentId === "string" && liveParentIds.has(parentId as RowId);
+  });
 }
 
 function resolveAutoDeleteDays(value: unknown, fallback: number | undefined): number | undefined {

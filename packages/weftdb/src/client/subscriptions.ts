@@ -1,4 +1,4 @@
-import { fieldName, tableName, wireText, type FieldName, type RowId, type TableName } from "weftdb/shared";
+import { fieldName, tableName, wireText, type FieldName, type RowId, type TableName } from "weftdb/core";
 import type { SchemaDefinition } from "weftdb/schema";
 import type { LocalRow, MaterializedRow } from "./index.ts";
 

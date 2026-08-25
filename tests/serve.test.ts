@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import fc from "fast-check";
-import { deviceId, encodeHlc, rowId, scopeId, tableName, txnId, type WeftOp } from "weftdb/shared";
+import { deviceId, encodeHlc, rowId, scopeId, tableName, txnId, type WeftOp } from "weftdb/core";
 import {
   envFromArgv,
   MAX_BODY_BYTES,
@@ -386,7 +386,7 @@ test("closing the relay stops the scheduled prune", async () => {
     host: "127.0.0.1",
     port: 0,
     tokens: new Map([
-      ["token", { scopeId: scopeId("scope-1"), deviceId: "device-1" as import("weftdb/shared").DeviceId }],
+      ["token", { scopeId: scopeId("scope-1"), deviceId: "device-1" as import("weftdb/core").DeviceId }],
     ]),
     pruneIntervalMs: 20,
     pruneOlderThanMs: 0,
@@ -407,9 +407,9 @@ test("closing the relay stops the scheduled prune", async () => {
 
 /** A create followed by a delete stamped at `deletedAtMs`, so the row is a tombstone at that age. */
 function tombstoneOps(
-  scope: import("weftdb/shared").ScopeId,
-  table: import("weftdb/shared").TableName,
-  row: import("weftdb/shared").RowId,
+  scope: import("weftdb/core").ScopeId,
+  table: import("weftdb/core").TableName,
+  row: import("weftdb/core").RowId,
   deletedAtMs: number,
 ): WeftOp[] {
   const seed = deviceId("seed");
@@ -435,9 +435,9 @@ function tombstoneOps(
 
 function hasRow(
   relay: RunningServer,
-  scope: import("weftdb/shared").ScopeId,
-  table: import("weftdb/shared").TableName,
-  row: import("weftdb/shared").RowId,
+  scope: import("weftdb/core").ScopeId,
+  table: import("weftdb/core").TableName,
+  row: import("weftdb/core").RowId,
 ): boolean {
   return relay.server
     .snapshot(scope)
@@ -458,7 +458,7 @@ async function listen(t: import("vitest").TestContext, overrides: Partial<ServeO
     host: "127.0.0.1",
     port: 0,
     tokens: new Map([
-      ["token", { scopeId: scopeId("scope-1"), deviceId: "device-1" as import("weftdb/shared").DeviceId }],
+      ["token", { scopeId: scopeId("scope-1"), deviceId: "device-1" as import("weftdb/core").DeviceId }],
     ]),
     ...overrides,
   });

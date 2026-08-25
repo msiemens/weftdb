@@ -2,7 +2,7 @@
 // than a cache of it, so a reload has to bring back unsent ops, quarantined work and the sync
 // cursor exactly as they were — a tab that forgets its outbox has silently discarded a write
 // somebody made.
-import { encodeHlc, type DeviceId, type HlcString, type ScopeId, type WeftOp } from "weftdb/shared";
+import { encodeHlc, type DeviceId, type HlcString, type ScopeId, type WeftOp } from "weftdb/core";
 import type { SchemaDefinition } from "weftdb/schema";
 import { WeftClient, type ClientPersistence, type LocalRow, type QuarantinedOp, type Tombstone } from "./index.ts";
 

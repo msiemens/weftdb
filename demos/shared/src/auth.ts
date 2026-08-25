@@ -12,7 +12,7 @@
 // not the same as unauthorized: anyone who learns a scope id can read it. That is acceptable for
 // throwaway demo data on a relay bound to loopback, and it is why `jwtVerifier` exists for
 // anything else.
-import { deviceId, scopeId } from "weftdb/shared";
+import { deviceId, scopeId } from "weftdb/core";
 import type { TokenVerifier } from "weftdb/server/relay";
 
 const PREFIX = "demo";

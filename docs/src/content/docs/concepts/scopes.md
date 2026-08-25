@@ -41,7 +41,7 @@ for whatever else in the same push was already valid.
 transactions and applies each in turn.
 
 ```ts
-import { scopeId } from "weftdb/shared";
+import { scopeId } from "weftdb/core";
 
 // a set op inside a push names its own scope; the relay checks it against the
 // token's scope on every operation in the push, not once for the whole request
@@ -59,14 +59,12 @@ A `RowId` is unique within a scope, not globally. Two different scopes can creat
 identical id without conflict, because a stored record is addressed by `scope_id`, table name, and
 row id together, never by row id alone.
 
-The property test suite in `tests/property-scope-schema.test.ts` checks this directly. One test
-creates a row under the same `RowId` in two separate scopes, each with a different title, and
-asserts that each scope's snapshot holds exactly one row under that id, carrying the title that
-scope wrote and never the other scope's value. That is the isolation guarantee the suite states: a
-row id shared between two scopes changes nothing about either scope's stored data. A neighbouring
-test in the same file pushes an operation whose `scopeId` differs from the scope it targets and
-asserts the relay rejects it with reason `scope_mismatch`; another confirms that `scope_id` itself
-cannot be overwritten on a row that already exists, rejected instead with `base_field_violation`.
+Create a row under the same `RowId` in two separate scopes, each with a different title, and each
+scope's snapshot holds exactly one row under that id, carrying the title that scope wrote and never
+the other scope's value. A row id shared between two scopes changes nothing about either scope's
+stored data. An operation whose `scopeId` differs from the scope it targets is rejected with reason
+`scope_mismatch`, and `scope_id` itself cannot be overwritten on a row that already exists —
+rejected with `base_field_violation`.
 
 ## Scopes, devices, and tokens
 
@@ -75,7 +73,7 @@ scope never changes for the client's lifetime. Every row and queued write it hol
 one scope; nothing moves a client, or a row, from one scope to another.
 
 ```ts
-import { deviceId, scopeId } from "weftdb/shared";
+import { deviceId, scopeId } from "weftdb/core";
 import { WeftClient } from "weftdb/client";
 import { schema } from "./src/schema.ts";
 

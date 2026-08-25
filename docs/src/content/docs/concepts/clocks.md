@@ -13,7 +13,7 @@ device compares it the same way because it is a plain string ordered by ordinary
 ## The parts of a reading
 
 An HLC reading is a triple: a wall-clock time in milliseconds, a counter, and the id of the
-device that produced it. `HlcClock`, in `weftdb/shared`, holds this triple as its internal state
+device that produced it. `HlcClock`, in `weftdb/core`, holds this triple as its internal state
 and produces a fresh `HlcString` reading on every call to `next()`.
 
 Wall-clock time alone is insufficient: two writes on different devices can share the same
@@ -25,11 +25,10 @@ measures.
 ## Total ordering
 
 `compareHlc` compares two `HlcString` values, and every device gets the same answer, because the
-comparison reads only the two strings and nothing from the comparing device's own clock.
-`tests/property-primitives.test.ts` asserts that the comparison is a total order: a reading
-compares equal to itself, the comparison is antisymmetric, and it is transitive across three
-arbitrary readings. The same file asserts that a reading always compares in the same order as
-the plain text it is written in. This total order is what every `lww` field rests its decision
+comparison reads only the two strings and nothing from the comparing device's own clock. It is a
+total order: a reading compares equal to itself, the comparison is antisymmetric, it is transitive
+across three arbitrary readings, and a reading always compares in the same order as the plain text
+it is written in. This total order is what every `lww` field rests its decision
 on: between two conflicting writes to a field, the one with the higher HLC is kept.
 
 ## String form
@@ -42,7 +41,7 @@ the device id last when both tie. `HlcString` is a branded string, distinct at t
 from a `RowId` or a `TableName` even though all three are plain strings at runtime.
 
 ```ts
-import { compareHlc, deviceId, encodeHlc } from "weftdb/shared";
+import { compareHlc, deviceId, encodeHlc } from "weftdb/core";
 
 const laptop = encodeHlc({ wallMs: Date.now(), counter: 0, deviceId: deviceId("laptop") });
 const phone = encodeHlc({ wallMs: Date.now(), counter: 0, deviceId: deviceId("phone") });
@@ -50,26 +49,25 @@ compareHlc(laptop, phone);
 ```
 
 `parseHlc` reverses the encoding, splitting on the first two hyphens and treating everything
-after the second as the device id, since a device id may itself contain one.
-`tests/property-primitives.test.ts` asserts that a reading survives being parsed and re-encoded,
-and that a string given to the parser either round-trips this way or is rejected outright.
+after the second as the device id, since a device id may itself contain one. A reading survives
+being parsed and re-encoded, and a string given to the parser either round-trips this way or is
+rejected outright.
 
 ## Clock advancement
 
 A device's `HlcClock` advances on two occasions. On a local write, `next()` takes the higher of
 the wall-clock time the device's own clock reports and the wall-clock time already recorded in
 the clock's state. When the two tie, the counter increments instead of the wall-clock time, which
-is what keeps two writes made in the same millisecond distinct and ordered.
-`tests/property-primitives.test.ts` asserts that a clock's readings never repeat or move
-backward, even when the underlying wall clock jumps by an arbitrary amount.
+is what keeps two writes made in the same millisecond distinct and ordered. A clock's readings
+never repeat or move backward, even when the underlying wall clock jumps by an arbitrary amount.
 
 On receiving a remote reading, `WeftClient` calls `clock.observe()` with the incoming `HlcString`
 before applying the value it is attached to. That happens for a field pulled from the relay, and
 for the reading returned with a `merge_required` rejection, part of the rebase path [the sync
 protocol](/concepts/sync-protocol/) covers. `observe()` folds the remote reading into the
 clock's state and advances past it, so the device's next write compares later than everything it
-has just received. `tests/property-primitives.test.ts` asserts this directly: after observing a
-reading, the clock's next write always compares greater than it.
+has just received: after observing a reading, the clock's next write always compares greater
+than it.
 
 ## Clock skew
 
@@ -78,8 +76,7 @@ wall-clock component is more than 5 minutes ahead of the relay's clock is reject
 `clock_skew`. A device retries automatically: it re-stamps the operation against the wall-clock
 time the relay reported and tries again, up to 3 times. The correction never lands at or below a
 reading the device has already had accepted, so a corrected write cannot be reordered behind one
-of the device's own earlier writes. `tests/property-primitives.test.ts` asserts exactly this
-property for the restamp function.
+of the device's own earlier writes.
 
 If the 3 retries do not converge, the operation reaches quarantine under the same `clock_skew`
 reason. [Handling conflicts](/guides/handling-conflicts/) covers how an interface should present

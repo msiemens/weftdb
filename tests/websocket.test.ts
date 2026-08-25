@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { connect, type Socket } from "node:net";
 import fc from "fast-check";
-import { deviceId, scopeId, fieldName, rowId, tableName, txnId, type FieldName, type WireValue } from "weftdb/shared";
+import { deviceId, scopeId, fieldName, rowId, tableName, txnId, type FieldName, type WireValue } from "weftdb/core";
 import {
   connectSocketTransport,
   connectWakeups,

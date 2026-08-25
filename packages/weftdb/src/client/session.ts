@@ -5,7 +5,7 @@
 // schema or an application, and every application writing it again writes the same bugs into
 // it: a status object rebuilt on every read, a channel closed by a cleanup that runs twice, a
 // poll that never stops.
-import type { SchemaHash } from "weftdb/shared";
+import type { SchemaHash } from "weftdb/core";
 import type { PullBatch } from "weftdb/server";
 import type { WeftClient } from "./index.ts";
 import type { AsyncSyncTransport } from "./transport.ts";

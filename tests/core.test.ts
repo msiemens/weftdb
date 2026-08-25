@@ -11,7 +11,7 @@ import {
   scopeId,
   tableName,
   txnId,
-} from "weftdb/shared";
+} from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
 import { WeftServer } from "weftdb/server";
 import { applyRetentionDeletes, planRetentionDeletes, WeftClient } from "weftdb/client";

@@ -1,5 +1,5 @@
 // What an edit costs with no network and no disk: the mutation path on its own.
-import { txnId, type FieldName, type RowId, type WireValue } from "weftdb/shared";
+import { txnId, type FieldName, type RowId, type WireValue } from "weftdb/core";
 import { WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import {

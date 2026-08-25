@@ -15,7 +15,7 @@ import {
   txnId,
   type FieldName,
   type WireValue,
-} from "weftdb/shared";
+} from "weftdb/core";
 import { WebStorageClientStore, WeftClient, type StorageLike } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { schemaHash } from "weftdb/schema";

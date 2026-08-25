@@ -1,10 +1,10 @@
 // A sync session is four calls — handshake, push, pull, snapshot — and every decision between
 // them is the client's. That makes the calls the only thing a network has to change, so a
 // relay reached over HTTP and an in-process `WeftServer` differ here and nowhere else.
-import type { ScopeId, WeftOp } from "weftdb/shared";
+import type { ScopeId, WeftOp } from "weftdb/core";
 import type { HandshakeRequest, HandshakeResponse, PullBatch, PushAck, Snapshot } from "weftdb/server";
 import { snapshotFromEnvelope, type SnapshotEnvelope } from "weftdb/server/snapshot";
-import type { Rejection } from "weftdb/shared";
+import type { Rejection } from "weftdb/core";
 
 export type PushResult =
   | { ok: true; acks: PushAck[] }

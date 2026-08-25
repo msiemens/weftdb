@@ -5,7 +5,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import type { ScopeId } from "weftdb/shared";
+import type { ScopeId } from "weftdb/core";
 import { requiredCount, requiredOps } from "./relay.ts";
 import type { AuthContext, SyncArguments, SyncOperation, SyncOperations, SyncResults, TokenVerifier } from "./relay.ts";
 import {

@@ -1,4 +1,4 @@
-import { fieldName, rowId, tableName, type FieldName, type TxnId, type WireValue } from "weftdb/shared";
+import { fieldName, rowId, tableName, type FieldName, type TxnId, type WireValue } from "weftdb/core";
 import type { CollectionDefinition, FieldValue, SchemaDefinition } from "weftdb/schema";
 import type { MaterializedRow, WeftClient } from "./index.ts";
 

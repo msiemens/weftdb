@@ -15,7 +15,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import fc from "fast-check";
-import { rowId, txnId, type RowId } from "weftdb/shared";
+import { rowId, txnId, type RowId } from "weftdb/core";
 import { WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import {

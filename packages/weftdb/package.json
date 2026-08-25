@@ -6,8 +6,9 @@
   "sideEffects": false,
   "exports": {
     ".": "./src/index.ts",
+    "./core": "./src/core.ts",
     "./shared": "./src/shared/index.ts",
-    "./schema": "./src/schema/index.ts",
+    "./schema": "./src/schema.ts",
     "./client": "./src/client/index.ts",
     "./client/sqlite": "./src/client/sqlite.ts",
     "./client/wasm-sqlite": "./src/client/wasm-sqlite.ts",

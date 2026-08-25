@@ -1,7 +1,7 @@
 // Local durability: what it costs to write the client through to a real SQLite file and to read
 // it back at startup. §4.1 makes that file the client's state rather than a cache of it, so the
 // write-through happens on every mutation — which is what the per-edit case measures.
-import { deviceId } from "weftdb/shared";
+import { deviceId } from "weftdb/core";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
 import { SCOPE, TITLE, TODOS, schema, syncedClient, tempDirectory, todoId, updateTxn } from "../fixtures.ts";

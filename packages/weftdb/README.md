@@ -2,11 +2,16 @@
 
 Main WeftDB runtime package.
 
+A scope is the unit of sync and of authorization: one relay holds many scopes side by side, and a
+scope holds one person's data across their devices. A bearer token resolves to one scope and one
+device, and that comparison is the only boundary enforced — there is no per-row permission, and no
+sharing of a scope between identities.
+
 ## Import Paths
 
 ```ts
 import { defineSchema, S, WeftClient } from "weftdb";
-import { deviceId, scopeId } from "weftdb/shared";
+import { deviceId, scopeId } from "weftdb/core";
 import { schemaHash } from "weftdb/schema";
 import { httpTransport } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
@@ -15,8 +20,9 @@ import { generateArtifacts } from "weftdb/codegen";
 
 ## Exports
 
-- `weftdb` - shared types, schema helpers, and client APIs.
-- `weftdb/shared` - branded ids, operation types, HLCs, diff3, ranks, hashing, SQL port.
+- `weftdb` - core types, schema helpers, and client APIs.
+- `weftdb/core` - branded ids, operation types, HLCs, diff3, ranks.
+- `weftdb/shared` - hashing, the wire-value codec, SQL port.
 - `weftdb/schema` - schema DSL and schema hashing.
 - `weftdb/client` - client model, sync, transports, subscriptions, query keys.
 - `weftdb/client/sqlite` - SQLite-backed client store.
@@ -50,7 +56,7 @@ export type Database = DatabaseOf<typeof schema>;
 ## Client
 
 ```ts
-import { deviceId, fieldName, rowId, scopeId, tableName } from "weftdb/shared";
+import { deviceId, fieldName, rowId, scopeId, tableName } from "weftdb/core";
 import { WeftClient } from "weftdb/client";
 
 const client = new WeftClient(scopeId("user-1"), deviceId("laptop"), schema);

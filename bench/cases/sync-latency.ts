@@ -1,7 +1,7 @@
 // How long one edit takes to become visible on a second device. Every path here is the real
 // relay over the loopback interface, so what separates them is the protocol and the transport
 // rather than the network — see the caveats in RESULTS.md before quoting any of it.
-import type { WireValue } from "weftdb/shared";
+import type { WireValue } from "weftdb/core";
 import { connectSocketTransport, httpTransport, WeftClient, type SocketTransport } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import {

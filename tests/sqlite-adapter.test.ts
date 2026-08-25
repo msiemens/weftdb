@@ -5,21 +5,8 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import fc from "fast-check";
-import {
-  compareHlc,
-  deviceId,
-  fieldName,
-  rowId,
-  scopeId,
-  tableName,
-  txnId,
-  type HlcString,
-  type SqlExecutor,
-  type SqlParameters,
-  type SqlRow,
-  type SqlStatement,
-  type SqlValue,
-} from "weftdb/shared";
+import { compareHlc, deviceId, fieldName, rowId, scopeId, tableName, txnId, type HlcString } from "weftdb/core";
+import { type SqlExecutor, type SqlParameters, type SqlRow, type SqlStatement, type SqlValue } from "weftdb/shared";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
 import { WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";

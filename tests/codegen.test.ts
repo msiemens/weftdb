@@ -98,26 +98,26 @@ test("changing a field's type leaves the column a device already has as it was",
 
 test("artifact set includes mutators, Kysely types, relationships, and nested mappers", () => {
   const schema = defineSchema({
-    calorie_entries: S.collection(
+    invoices: S.collection(
       {
-        nutrition__sodium: S.number({ nullable: true }),
-        manual_calorie_override: S.number({ nullable: true }),
+        totals__tax: S.number({ nullable: true }),
+        total_override: S.number({ nullable: true }),
       },
       {
-        food_items: S.hasMany("food_items", "id", "entry_id"),
+        line_items: S.hasMany("line_items", "id", "invoice_id"),
       },
     ),
-    food_items: S.collection({
-      entry_id: S.string(),
-      calories: S.number(),
+    line_items: S.collection({
+      invoice_id: S.string(),
+      amount: S.number(),
     }),
   });
 
   const artifacts = generateArtifacts(schema);
   assert.match(artifacts.kyselyDatabaseDts, /ColumnType/u);
-  assert.match(artifacts.mutatorsTs, /CalorieEntriesMutation/u);
-  assert.match(artifacts.relationshipsTs, /calorie_entries_food_itemsRelation/u);
-  assert.match(artifacts.nestedMappersTs, /mapCalorieEntriesRow/u);
+  assert.match(artifacts.mutatorsTs, /InvoicesMutation/u);
+  assert.match(artifacts.relationshipsTs, /invoices_line_itemsRelation/u);
+  assert.match(artifacts.nestedMappersTs, /mapInvoicesRow/u);
   assert.equal(generateRelationshipHelpers(schema), artifacts.relationshipsTs);
   assert.equal(generateNestedMappers(schema), artifacts.nestedMappersTs);
 });

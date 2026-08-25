@@ -8,10 +8,10 @@
   "related_comment": "`vitest --related` picks test files by walking the module graph from the mutated path, which finds nothing in a sandbox. Off, so coverage does the selecting instead.",
   "mutate_comment": "Narrow a run with `--mutate <file>`; the mutation workflow builds one job per entry.",
   "mutate": [
-    "packages/weftdb/src/shared/index.ts",
+    "packages/weftdb/src/core.ts",
     "packages/weftdb/src/client/index.ts",
     "packages/weftdb/src/server/index.ts",
-    "packages/weftdb/src/schema/index.ts",
+    "packages/weftdb/src/schema.ts",
     "packages/weftdb/src/codegen/index.ts",
     "packages/weftdb/src/client/sqlite.ts",
     "packages/weftdb/src/client/subscriptions.ts",

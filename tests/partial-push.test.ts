@@ -5,7 +5,7 @@
 // manufacturing conflicts with itself out of a push that partly worked.
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { deviceId, fieldName, rowId, scopeId, tableName, txnId, type FieldName, type WireValue } from "weftdb/shared";
+import { deviceId, fieldName, rowId, scopeId, tableName, txnId, type FieldName, type WireValue } from "weftdb/core";
 import { WeftClient, type AsyncSyncTransport } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { schemaHash } from "weftdb/schema";

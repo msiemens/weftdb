@@ -18,7 +18,7 @@ import {
   type RowId,
   type ScopeId,
   type WireValue,
-} from "weftdb/shared";
+} from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
 import { WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";

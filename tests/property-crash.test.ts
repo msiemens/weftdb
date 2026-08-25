@@ -10,7 +10,7 @@ import fc from "fast-check";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { deviceId, fieldName, rowId, scopeId, tableName, wireText } from "weftdb/shared";
+import { deviceId, fieldName, rowId, scopeId, tableName, wireText } from "weftdb/core";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
 import { SqliteWeftServer } from "weftdb/server/sqlite";
@@ -130,7 +130,7 @@ test("a process killed at any point comes back holding every edit it had made", 
 });
 
 const WORK_THEN_DIE = `
-import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/shared";
+import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";

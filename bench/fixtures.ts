@@ -17,7 +17,7 @@ import {
   type RowId,
   type TxnId,
   type WireValue,
-} from "weftdb/shared";
+} from "weftdb/core";
 import { WeftClient, type SocketTransport } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { startRelay, type RunningServer } from "weftdb/server/serve";

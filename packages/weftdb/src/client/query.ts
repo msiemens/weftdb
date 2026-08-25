@@ -1,4 +1,4 @@
-import type { FieldName, TableName } from "weftdb/shared";
+import type { FieldName, TableName } from "weftdb/core";
 
 export interface CompiledQuery {
   readonly sql: string;

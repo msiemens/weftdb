@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/shared";
+import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
 import { WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";

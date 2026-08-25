@@ -126,8 +126,8 @@ export default tseslint.config(
     },
   },
 
-  // Browser-side code: the client and the React binding. `src/shared` is in neither list because
-  // it runs on both sides and may assume the globals of neither.
+  // Browser-side code: the client and the React binding. `src/core.ts` and `src/shared` are in
+  // neither list because they run on both sides and may assume the globals of neither.
   {
     files: ["packages/weftdb/src/client/**", "packages/weftdb-react/**"],
     languageOptions: {

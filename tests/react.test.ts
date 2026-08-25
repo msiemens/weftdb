@@ -18,7 +18,7 @@ import {
   type RowId,
   type TableName,
   type WireValue,
-} from "weftdb/shared";
+} from "weftdb/core";
 import { QueryCache, useWeftConflicts, useWeftQuery, useWeftQuerySnapshot, useWeftSuspenseQuery } from "weftdb-react";
 import { SubscriptionEngine, type LocalRow, type MaterializedRow, type QueryKey } from "weftdb/client";
 import { TASKS, TITLE } from "./property-model.ts";

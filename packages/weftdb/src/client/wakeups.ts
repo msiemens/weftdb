@@ -2,7 +2,7 @@
 // moved, the client runs the same sync session it would have run on a timer. That keeps one
 // code path responsible for correctness and makes the socket a latency improvement rather than
 // a second way for state to arrive.
-import type { ScopeId } from "weftdb/shared";
+import type { ScopeId } from "weftdb/core";
 import { FIRST_RETRY_MS, nextRetryMs } from "./backoff.ts";
 
 export interface ScopeAdvanced {

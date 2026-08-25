@@ -1,4 +1,4 @@
-import { deviceId, isWeftOp, scopeId, type DeviceId, type ScopeId, type SchemaHash, type WeftOp } from "weftdb/shared";
+import { deviceId, isWeftOp, scopeId, type DeviceId, type ScopeId, type SchemaHash, type WeftOp } from "weftdb/core";
 import { contentAddressSnapshot, type SnapshotEnvelope } from "./snapshot.ts";
 import type { HandshakeRequest, HandshakeResponse, PullBatch, PushOutcome, WeftServer } from "./index.ts";
 

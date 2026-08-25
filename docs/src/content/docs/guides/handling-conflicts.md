@@ -56,7 +56,7 @@ row type exposes the same answer as `_weft_dirty`, so a list of rows can mark ea
 lookup per render:
 
 ```ts
-import { rowId, tableName } from "weftdb/shared";
+import { rowId, tableName } from "weftdb/core";
 
 const dirty = client.isRowDirty(tableName("tasks"), rowId("task-1"));
 const reasons = client.listQuarantine().map((op) => op.reason);
@@ -87,7 +87,7 @@ state](/concepts/row-lifecycle/) on the relay. Taking the deletion calls
 the outbox entries and requires a snapshot on the next sync, where the row will be absent:
 
 ```ts title="src/resolve-deletion.ts"
-import { fieldName, rowId, tableName } from "weftdb/shared";
+import { fieldName, rowId, tableName } from "weftdb/core";
 import type { WeftClient } from "weftdb/client";
 
 // keepEdits is the answer to the question the interface asked the person.
@@ -125,7 +125,7 @@ marker by editing it out of the text, the same way as any other change to the fi
 nothing left to update once the markers are gone:
 
 ```ts
-import { fieldName, hasConflictMarkers, rowId, tableName } from "weftdb/shared";
+import { fieldName, hasConflictMarkers, rowId, tableName } from "weftdb/core";
 
 const row = client.getRow(tableName("tasks"), rowId("task-1"));
 const notes = row?.fields.get(fieldName("notes"));

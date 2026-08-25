@@ -1,4 +1,6 @@
-import type { FieldName, HlcString, RowId, SchemaHash, ScopeId, TableName, TxnId, WireValue } from "./index.ts";
+// Type-only, so naming core from inside shared costs no runtime edge: core imports the wire-value
+// guard from here, and a value import back would close the cycle.
+import type { FieldName, HlcString, RowId, SchemaHash, ScopeId, TableName, TxnId, WireValue } from "../core.ts";
 
 export type SqlValue = string | number | bigint | Uint8Array<ArrayBuffer> | null;
 export type SqlParameters = readonly SqlValue[];

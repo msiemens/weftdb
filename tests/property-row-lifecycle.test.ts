@@ -18,29 +18,24 @@ import {
   type RowId,
   type WeftOp,
   type WireValue,
-} from "weftdb/shared";
-import {
-  estimatedCalories,
-  isManualEntry,
-  planRetentionDeletes,
-  visibleChildren,
-  WeftClient,
-  type MaterializedRow,
-} from "weftdb/client";
+} from "weftdb/core";
+import { planRetentionDeletes, visibleChildren, WeftClient, type MaterializedRow } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import {
+  AMOUNT,
   AUTO_DELETE_DAYS,
   BASE_NOTES,
   BASE_TIME,
-  CALORIES,
   CONSUMED_AT,
   createWorld,
   DAY_MS,
+  derivedTotal,
   deviceAt,
-  ENTRIES,
-  ENTRY_ID,
   EVENTS,
-  FOODS,
+  INVOICE_ID,
+  INVOICES,
+  isOverridden,
+  LINE_ITEMS,
   localKey,
   localState,
   NOTES,
@@ -62,30 +57,30 @@ import {
 } from "./property-model.ts";
 
 const overrideArb = fc.option(fc.integer({ min: 0, max: 900 }));
-const caloriesArb = fc.array(fc.integer({ min: 0, max: 400 }), { maxLength: 6 });
+const amountsArb = fc.array(fc.integer({ min: 0, max: 400 }), { maxLength: 6 });
 
-test("§9.App14 a food item always carries its parent entry's scope", () => {
+test("§9.App14 a child row always carries its parent's scope", () => {
   fc.assert(
     fc.property(fc.array(fc.integer({ min: 0, max: 3 }), { minLength: 1, maxLength: 4 }), (childCounts) => {
       const world = createWorld(2);
       const owner = deviceAt(world, 0).client;
       for (const [index, children] of childCounts.entries()) {
-        const entry = rowId(`entry-${index}`);
-        owner.create(ENTRIES, entry, { [OVERRIDE]: null }, txnId(`entry-${index}`));
+        const invoice = rowId(`invoice-${index}`);
+        owner.create(INVOICES, invoice, { [OVERRIDE]: null }, txnId(`invoice-${index}`));
         for (let child = 0; child < children; child += 1) {
           owner.create(
-            FOODS,
-            rowId(`food-${index}-${child}`),
-            { [ENTRY_ID]: entry, [CALORIES]: 100 },
-            txnId(`food-${index}-${child}`),
+            LINE_ITEMS,
+            rowId(`line-${index}-${child}`),
+            { [INVOICE_ID]: invoice, [AMOUNT]: 100 },
+            txnId(`line-${index}-${child}`),
           );
         }
       }
       quiesce(world);
 
       for (const device of world.devices) {
-        for (const child of device.client.listRows(FOODS)) {
-          const parent = device.client.getRow(ENTRIES, rowId(wireText(child.fields.get(ENTRY_ID) ?? "")));
+        for (const child of device.client.listRows(LINE_ITEMS)) {
+          const parent = device.client.getRow(INVOICES, rowId(wireText(child.fields.get(INVOICE_ID) ?? "")));
           assert.equal(child.fields.get(fieldName("scope_id")), world.scopeId);
           if (parent !== undefined) {
             assert.equal(parent.fields.get(fieldName("scope_id")), child.fields.get(fieldName("scope_id")));
@@ -97,27 +92,36 @@ test("§9.App14 a food item always carries its parent entry's scope", () => {
   );
 });
 
-test("§9.App15 no food item is visible under a tombstoned parent", () => {
+test("§9.App15 no child row is visible under a tombstoned parent", () => {
   fc.assert(
     fc.property(fc.array(fc.boolean(), { minLength: 1, maxLength: 4 }), (doomed) => {
       const world = createWorld(2);
       const owner = deviceAt(world, 0).client;
       for (const [index] of doomed.entries()) {
-        const entry = rowId(`entry-${index}`);
-        owner.create(ENTRIES, entry, { [OVERRIDE]: null }, txnId(`entry-${index}`));
-        owner.create(FOODS, rowId(`food-${index}`), { [ENTRY_ID]: entry, [CALORIES]: 100 }, txnId(`food-${index}`));
+        const invoice = rowId(`invoice-${index}`);
+        owner.create(INVOICES, invoice, { [OVERRIDE]: null }, txnId(`invoice-${index}`));
+        owner.create(
+          LINE_ITEMS,
+          rowId(`line-${index}`),
+          { [INVOICE_ID]: invoice, [AMOUNT]: 100 },
+          txnId(`line-${index}`),
+        );
       }
       quiesce(world);
       for (const [index, remove] of doomed.entries()) {
-        if (remove) owner.delete(ENTRIES, rowId(`entry-${index}`), txnId(`delete-${index}`));
+        if (remove) owner.delete(INVOICES, rowId(`invoice-${index}`), txnId(`delete-${index}`));
       }
       quiesce(world);
 
       for (const device of world.devices) {
-        const visible = visibleChildren(device.client.listRows(ENTRIES), device.client.listRows(FOODS), ENTRY_ID);
+        const visible = visibleChildren(
+          device.client.listRows(INVOICES),
+          device.client.listRows(LINE_ITEMS),
+          INVOICE_ID,
+        );
         for (const child of visible) {
-          const parent = rowId(wireText(child.fields.get(ENTRY_ID) ?? ""));
-          assert.equal(localState(device.client, ENTRIES, parent), "live", `${child.id} outlived its parent`);
+          const parent = rowId(wireText(child.fields.get(INVOICE_ID) ?? ""));
+          assert.equal(localState(device.client, INVOICES, parent), "live", `${child.id} outlived its parent`);
         }
         assert.equal(
           visible.length,
@@ -130,34 +134,34 @@ test("§9.App15 no food item is visible under a tombstoned parent", () => {
   );
 });
 
-test("§9.16 manual-ness is exactly manual_calorie_override IS NOT NULL", () => {
+test("§9.16 overriddenness is exactly total_override IS NOT NULL", () => {
   fc.assert(
     fc.property(overrideArb, (override) => {
-      const entry = materialized(rowId("entry"), [[OVERRIDE, override]]);
-      assert.equal(isManualEntry(entry, OVERRIDE), override !== null);
+      const invoice = materialized(rowId("invoice"), [[OVERRIDE, override]]);
+      assert.equal(isOverridden(invoice, OVERRIDE), override !== null);
     }),
     { numRuns: PROPERTY_RUNS },
   );
 });
 
-test("§9.17 estimated calories is the override, otherwise the sum of visible children", () => {
+test("§9.17 the derived total is the override, otherwise the sum of visible children", () => {
   fc.assert(
-    fc.property(overrideArb, caloriesArb, (override, calories) => {
-      const entryId = rowId("entry");
-      const entry = materialized(entryId, [[OVERRIDE, override]]);
-      const children = calories.map((value, index) =>
-        materialized(rowId(`food-${index}`), [
-          [ENTRY_ID, entryId],
-          [CALORIES, value],
+    fc.property(overrideArb, amountsArb, (override, amounts) => {
+      const invoiceId = rowId("invoice");
+      const invoice = materialized(invoiceId, [[OVERRIDE, override]]);
+      const children = amounts.map((value, index) =>
+        materialized(rowId(`line-${index}`), [
+          [INVOICE_ID, invoiceId],
+          [AMOUNT, value],
         ]),
       );
       const orphan = materialized(rowId("orphan"), [
-        [ENTRY_ID, rowId("missing")],
-        [CALORIES, 999],
+        [INVOICE_ID, rowId("missing")],
+        [AMOUNT, 999],
       ]);
-      const visible = visibleChildren([entry], [...children, orphan], ENTRY_ID);
-      const summed = calories.reduce((total, value) => total + value, 0);
-      assert.equal(estimatedCalories(entry, visible, OVERRIDE, CALORIES), override ?? summed);
+      const visible = visibleChildren([invoice], [...children, orphan], INVOICE_ID);
+      const summed = amounts.reduce((total, value) => total + value, 0);
+      assert.equal(derivedTotal(invoice, visible, OVERRIDE, AMOUNT), override ?? summed);
     }),
     { numRuns: PROPERTY_RUNS },
   );

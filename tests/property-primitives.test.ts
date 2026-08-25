@@ -8,11 +8,9 @@ import { test } from "vitest";
 import fc from "fast-check";
 import {
   compareHlc,
-  decodeWireValue,
   deviceId,
   diff3,
   encodeHlc,
-  encodeWireValue,
   fieldName,
   hasConflictMarkers,
   HlcClock,
@@ -27,7 +25,8 @@ import {
   type HlcString,
   type RankString,
   type WireValue,
-} from "weftdb/shared";
+} from "weftdb/core";
+import { decodeWireValue, encodeWireValue } from "weftdb/shared";
 import { SubscriptionEngine, type LocalRow } from "weftdb/client";
 
 const RUNS = Number(process.env["WEFT_PROPERTY_RUNS"] ?? 1_000);

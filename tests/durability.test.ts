@@ -9,7 +9,7 @@ import { test } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/shared";
+import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
 import { WeftClient } from "weftdb/client";
 import { SqliteClientStore } from "weftdb/client/sqlite";
@@ -126,7 +126,7 @@ test("the server database is configured to survive power loss, not just process 
 });
 
 const PUSH_THEN_DIE = `
-import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/shared";
+import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
 import { WeftClient } from "weftdb/client";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";

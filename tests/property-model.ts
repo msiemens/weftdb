@@ -26,9 +26,9 @@ import {
   type TxnId,
   type WeftOp,
   type WireValue,
-} from "weftdb/shared";
+} from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
-import { planRetentionDeletes, WeftClient } from "weftdb/client";
+import { planRetentionDeletes, WeftClient, type MaterializedRow } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { assertWorldInvariants } from "./property-invariants.ts";
 
@@ -41,17 +41,17 @@ export const propertySchema = defineSchema({
     consumed_at: S.number({ nullable: true, retentionAnchor: true }),
     auto_delete_days: S.number({ nullable: true }),
   }),
-  calorie_entries: S.collection(
+  invoices: S.collection(
     {
-      manual_calorie_override: S.number({ nullable: true }),
+      total_override: S.number({ nullable: true }),
     },
     {
-      food_items: S.hasMany("food_items", "id", "entry_id"),
+      line_items: S.hasMany("line_items", "id", "invoice_id"),
     },
   ),
-  food_items: S.collection({
-    entry_id: S.string(),
-    calories: S.number(),
+  line_items: S.collection({
+    invoice_id: S.string(),
+    amount: S.number(),
   }),
   task_status_history: S.eventLog({
     task_id: S.string(),
@@ -88,8 +88,8 @@ export const neighbourScope = scopeId("neighbour-scope");
 
 export const TASKS = tableName("tasks");
 export const EVENTS = tableName("task_status_history");
-export const ENTRIES = tableName("calorie_entries");
-export const FOODS = tableName("food_items");
+export const INVOICES = tableName("invoices");
+export const LINE_ITEMS = tableName("line_items");
 
 export const TITLE = fieldName("title");
 export const STATUS = fieldName("status");
@@ -97,9 +97,9 @@ export const NOTES = fieldName("notes");
 export const RANK = fieldName("rank");
 export const CONSUMED_AT = fieldName("consumed_at");
 export const AUTO_DELETE_DAYS = fieldName("auto_delete_days");
-export const ENTRY_ID = fieldName("entry_id");
-export const CALORIES = fieldName("calories");
-export const OVERRIDE = fieldName("manual_calorie_override");
+export const INVOICE_ID = fieldName("invoice_id");
+export const AMOUNT = fieldName("amount");
+export const OVERRIDE = fieldName("total_override");
 
 /**
  * Run counts. Cheap properties run far more cases than ones that build and settle a whole
@@ -314,14 +314,14 @@ export function writeKey(table: TableName, row: RowId, field: FieldName): string
  */
 export interface WorldModel {
   readonly rows: readonly RowId[];
-  readonly entries: readonly RowId[];
+  readonly invoices: readonly RowId[];
 }
 
 export const MODEL_ROWS = ["row-0", "row-1", "row-2", "row-3", "row-4"].map(rowId);
-export const MODEL_ENTRIES = ["entry-0", "entry-1", "entry-2"].map(rowId);
+export const MODEL_INVOICES = ["invoice-0", "invoice-1", "invoice-2"].map(rowId);
 
 export function initialModel(): WorldModel {
-  return { rows: MODEL_ROWS, entries: MODEL_ENTRIES };
+  return { rows: MODEL_ROWS, invoices: MODEL_INVOICES };
 }
 
 export type WorldCommand = fc.Command<WorldModel, PropertyWorld>;
@@ -435,32 +435,37 @@ function appendEvent(device: number, row: number, status: string): WorldCommand 
   });
 }
 
-function createEntryWithFood(device: number, entry: number, children: number, override: number | null): WorldCommand {
-  return command(`createEntry(d${device}, e${entry}, ${children} children)`, (model, world) => {
+function createInvoiceWithLines(
+  device: number,
+  invoice: number,
+  children: number,
+  override: number | null,
+): WorldCommand {
+  return command(`createInvoice(d${device}, i${invoice}, ${children} children)`, (model, world) => {
     const target = deviceAt(world, device);
-    const id = rowAt(model.entries, entry);
-    if (localState(target.client, ENTRIES, id) !== "absent") return;
-    target.client.create(ENTRIES, id, { [OVERRIDE]: override }, nextTxn(world, "entry"));
+    const id = rowAt(model.invoices, invoice);
+    if (localState(target.client, INVOICES, id) !== "absent") return;
+    target.client.create(INVOICES, id, { [OVERRIDE]: override }, nextTxn(world, "invoice"));
     for (let index = 0; index < children; index += 1) {
       target.client.create(
-        FOODS,
-        rowId(`${id}-food-${world.txnCounter}`),
+        LINE_ITEMS,
+        rowId(`${id}-line-${world.txnCounter}`),
         {
-          [ENTRY_ID]: id,
-          [CALORIES]: 50 * (index + 1),
+          [INVOICE_ID]: id,
+          [AMOUNT]: 50 * (index + 1),
         },
-        nextTxn(world, "food"),
+        nextTxn(world, "line"),
       );
     }
   });
 }
 
-function deleteEntry(device: number, entry: number): WorldCommand {
-  return command(`deleteEntry(d${device}, e${entry})`, (model, world) => {
+function deleteInvoice(device: number, invoice: number): WorldCommand {
+  return command(`deleteInvoice(d${device}, i${invoice})`, (model, world) => {
     const target = deviceAt(world, device);
-    const id = rowAt(model.entries, entry);
-    if (localState(target.client, ENTRIES, id) !== "live") return;
-    target.client.delete(ENTRIES, id, nextTxn(world, "entry-delete"));
+    const id = rowAt(model.invoices, invoice);
+    if (localState(target.client, INVOICES, id) !== "live") return;
+    target.client.delete(INVOICES, id, nextTxn(world, "invoice-delete"));
   });
 }
 
@@ -653,7 +658,7 @@ function neighbourScopeWrite(row: number, title: string): WorldCommand {
 
 const deviceArb = fc.integer({ min: 0, max: 4 });
 const rowArb = fc.integer({ min: 0, max: MODEL_ROWS.length - 1 });
-const entryArb = fc.integer({ min: 0, max: MODEL_ENTRIES.length - 1 });
+const invoiceArb = fc.integer({ min: 0, max: MODEL_INVOICES.length - 1 });
 const textArb = fc.string({ minLength: 1, maxLength: 12 });
 
 /** The generated command space, weighted so sync traffic keeps up with mutations. */
@@ -676,9 +681,9 @@ export function worldCommands(maxCommands = 100): fc.Arbitrary<Iterable<WorldCom
       fc.tuple(deviceArb, rowArb, textArb).map(([device, row, title]) => restoreTask(device, row, title)),
       fc.tuple(deviceArb, rowArb, textArb).map(([device, row, status]) => appendEvent(device, row, status)),
       fc
-        .tuple(deviceArb, entryArb, fc.integer({ min: 0, max: 2 }), fc.option(fc.integer({ min: 0, max: 900 })))
-        .map(([device, entry, children, override]) => createEntryWithFood(device, entry, children, override)),
-      fc.tuple(deviceArb, entryArb).map(([device, entry]) => deleteEntry(device, entry)),
+        .tuple(deviceArb, invoiceArb, fc.integer({ min: 0, max: 2 }), fc.option(fc.integer({ min: 0, max: 900 })))
+        .map(([device, invoice, children, override]) => createInvoiceWithLines(device, invoice, children, override)),
+      fc.tuple(deviceArb, invoiceArb).map(([device, invoice]) => deleteInvoice(device, invoice)),
       fc.tuple(deviceArb).map(([device]) => togglePartition(device)),
       fc.tuple(deviceArb).map(([device]) => sync(device)),
       fc.tuple(deviceArb).map(([device]) => sync(device)),
@@ -962,4 +967,23 @@ export function at<T>(items: readonly T[], index: number): T {
   const value = items[index];
   if (value === undefined) throw new Error(`no item at index ${index}`);
   return value;
+}
+
+/** The model schema's aggregate arithmetic: fixture logic, not something the client provides. */
+export function isOverridden(row: MaterializedRow, overrideField: FieldName): boolean {
+  return row.fields.get(overrideField) !== null && row.fields.get(overrideField) !== undefined;
+}
+
+export function derivedTotal(
+  parent: MaterializedRow,
+  children: readonly MaterializedRow[],
+  overrideField: FieldName,
+  amountField: FieldName,
+): number {
+  const override = parent.fields.get(overrideField);
+  if (typeof override === "number") return override;
+  return children.reduce((total, child) => {
+    const amount = child.fields.get(amountField);
+    return total + (typeof amount === "number" ? amount : 0);
+  }, 0);
 }

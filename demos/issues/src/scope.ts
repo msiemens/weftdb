@@ -4,7 +4,7 @@
 // open in two tabs of one browser neither read each other's device record nor land in each other's
 // rows. Each visitor gets a scope of their own underneath it; see `visitorScope` in
 // `weftdb-demo-shared/identity`.
-import { scopeId, type ScopeId } from "weftdb/shared";
+import { scopeId, type ScopeId } from "weftdb/core";
 
 export const DEMO = "issues";
 

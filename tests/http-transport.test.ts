@@ -13,7 +13,7 @@ import {
   wireText,
   type WireValue,
   type FieldName,
-} from "weftdb/shared";
+} from "weftdb/core";
 import { httpTransport, WeftClient, type AsyncSyncTransport, type FetchLike } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { createRelayHandler, type TokenVerifier } from "weftdb/server/relay";

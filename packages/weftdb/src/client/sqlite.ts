@@ -1,6 +1,4 @@
 import {
-  decodeWireValue,
-  encodeWireValue,
   fieldName,
   isHlcString,
   rowId,
@@ -11,12 +9,11 @@ import {
   type HlcString,
   type RowId,
   type ScopeId,
-  type SqlExecutor,
-  type SqlRow,
   type TableName,
   type WeftOp,
   type WireValue,
-} from "weftdb/shared";
+} from "weftdb/core";
+import { decodeWireValue, encodeWireValue, type SqlExecutor, type SqlRow } from "weftdb/shared";
 import { generateClientAddMissingColumnDdl, generateClientDdl } from "weftdb/codegen";
 import type { SchemaDefinition } from "weftdb/schema";
 import { splitSql } from "../sql.ts";
@@ -69,7 +66,7 @@ export class SqliteClientStore {
    * and a hydrate that read the lot would load another scope's rows, another scope's unsent
    * outbox and another scope's tombstones into this client — and push them on the next flush.
    */
-  hydrate(scopeIdValue: ScopeId, deviceIdValue: import("weftdb/shared").DeviceId): WeftClient {
+  hydrate(scopeIdValue: ScopeId, deviceIdValue: import("weftdb/core").DeviceId): WeftClient {
     this.ensureSchema();
     const client = new WeftClient(scopeIdValue, deviceIdValue, this.schema);
     for (const [tableNameValue, collection] of Object.entries(this.schema.collections)) {
@@ -372,7 +369,7 @@ function decodeOutboxOp(row: SqlRow): WeftOp {
       value: decodeWireValue(nullableString(column(row, "value"))),
       ...(nullableString(column(row, "base_hash")) === null
         ? {}
-        : { baseHash: nullableString(column(row, "base_hash")) as import("weftdb/shared").SchemaHash }),
+        : { baseHash: nullableString(column(row, "base_hash")) as import("weftdb/core").SchemaHash }),
     };
   }
   if (kind === "create" || kind === "delete" || kind === "restore" || kind === "append") return { ...common, kind };
@@ -385,7 +382,7 @@ function decodeQuarantineOp(row: SqlRow): QuarantinedOp {
   return {
     ...op,
     rejectedAt: requiredNumber(column(row, "rejected_at")),
-    reason: requiredString(column(row, "reason")) as import("weftdb/shared").RejectReason,
+    reason: requiredString(column(row, "reason")) as import("weftdb/core").RejectReason,
     ...(serverValue === null ? {} : { serverValue: decodeWireValue(serverValue) }),
   };
 }

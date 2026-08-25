@@ -1,8 +1,9 @@
 import { access } from "node:fs/promises";
 
 const files = [
+  "packages/weftdb/src/core.ts",
   "packages/weftdb/src/shared/index.ts",
-  "packages/weftdb/src/schema/index.ts",
+  "packages/weftdb/src/schema.ts",
   "packages/weftdb/src/server/index.ts",
   "packages/weftdb/src/client/index.ts",
   "packages/weftdb-react/src/index.ts",

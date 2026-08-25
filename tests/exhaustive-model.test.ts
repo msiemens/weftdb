@@ -8,7 +8,7 @@
 // run, with the shortest sequence that produces it.
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { rowId, txnId, wireText, type DeviceId, type RowId } from "weftdb/shared";
+import { rowId, txnId, wireText, type DeviceId, type RowId } from "weftdb/core";
 import { WeftClient } from "weftdb/client";
 import { WeftServer, type Snapshot } from "weftdb/server";
 import {

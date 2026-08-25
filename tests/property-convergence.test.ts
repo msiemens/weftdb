@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import fc from "fast-check";
-import { fieldName, rowId, txnId, type RowId, type WeftOp } from "weftdb/shared";
+import { fieldName, rowId, txnId, type RowId, type WeftOp } from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
 import { WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";

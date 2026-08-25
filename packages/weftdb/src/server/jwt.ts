@@ -6,7 +6,7 @@
 // network, no key discovery. Fetching a JWKS, caching it and rotating on `kid` is a policy
 // decision — the `keys` callback is where that goes, so this file never has to know.
 import { createHmac, createPublicKey, createVerify, KeyObject, timingSafeEqual } from "node:crypto";
-import { deviceId, scopeId } from "weftdb/shared";
+import { deviceId, scopeId } from "weftdb/core";
 import type { AuthContext, TokenVerifier } from "./relay.ts";
 
 export interface JwtHeader {

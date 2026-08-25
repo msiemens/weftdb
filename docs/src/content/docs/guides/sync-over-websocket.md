@@ -15,7 +15,7 @@ runs identical code against either one. Only the way the four calls travel chang
 `connectSocketTransport` takes a `url`, a `token`, and an `onWake` callback:
 
 ```ts title="socket.ts"
-import { deviceId, scopeId } from "weftdb/shared";
+import { deviceId, scopeId } from "weftdb/core";
 import { connectSocketTransport, WeftClient } from "weftdb/client";
 import { schemaHash } from "weftdb/schema";
 import { schema } from "./src/schema.ts";
@@ -100,8 +100,8 @@ A browser's `WebSocket` constructor cannot set headers, so the token travels as 
 between the device and the relay. RFC 6455 requires a subprotocol value to be a valid HTTP token,
 and the `WebSocket` constructor throws on a value that is not. A token containing a separator
 character such as a colon never opens the socket, and a page written to fall back to polling on
-that failure does so silently, with nothing to say why. `tests/demo.test.ts` asserts that every
-token issued is a legal subprotocol value, because a colon in a token has broken this before.
+that failure does so silently, with nothing to say why. Every token an application issues must
+therefore be a legal subprotocol value; a colon in a token is enough to break the connection.
 
 An answer too large for one message, mainly a snapshot, is split into `32KB` chunks and written
 across separate turns of the event loop so nothing else on the connection has to wait behind it.

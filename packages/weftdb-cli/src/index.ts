@@ -3,7 +3,7 @@ import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { generateArtifacts, generateServerDdl } from "weftdb/codegen";
-import { MERGE_STRATEGIES, type MergeStrategy } from "weftdb/shared";
+import { MERGE_STRATEGIES, type MergeStrategy } from "weftdb/core";
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const [command, ...args] = argv;

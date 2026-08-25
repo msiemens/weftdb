@@ -3,7 +3,7 @@
 // `weft generate` writes from the schema; syncing, connectivity and status come from
 // `WeftSession`. What is genuinely this application's is here: which storage it uses, who this
 // tab is, and what a row looks like once the client's own knowledge is added to it.
-import { hasConflictMarkers, rowId, type RowId } from "weftdb/shared";
+import { hasConflictMarkers, rowId, type RowId } from "weftdb/core";
 import {
   connectSocketTransport,
   httpTransport,

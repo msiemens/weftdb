@@ -3,7 +3,7 @@
 // watch what the merge does when it comes back.
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Diff3EditorBuffer } from "weftdb/client";
-import { fieldName, hasConflictMarkers, rowId as toRowId, tableName } from "weftdb/shared";
+import { fieldName, hasConflictMarkers, rowId as toRowId, tableName } from "weftdb/core";
 import { newTodoId, useTodoEvents, useTodos, type StoreStatus, type TodoStore, type TodoView } from "./store.ts";
 
 export function App({ store }: { readonly store: TodoStore }): ReactNode {

@@ -17,6 +17,24 @@ WEFT_WORLD_RUNS=3000 WEFT_SCENARIO_RUNS=1500 pnpm test
 WEFT_PROPERTY_SEED=1352270866 pnpm test
 ```
 
+Every variable the suite reads, and what it tunes. None of them configures the library itself.
+
+| Variable                    | Default | Controls                                                                                                           |
+| --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
+| `WEFT_PROPERTY_RUNS`        | `300`   | case count in `tests/facade.test.ts`                                                                               |
+| `WEFT_PROPERTY_RUNS`        | `1000`  | case count for suites importing `PROPERTY_RUNS` from `tests/property-model.ts`                                     |
+| `WEFT_SCENARIO_RUNS`        | `200`   | case count for suites importing `SCENARIO_RUNS` from `tests/property-model.ts`                                     |
+| `WEFT_WORLD_RUNS`           | `300`   | case count for suites importing `WORLD_RUNS` from `tests/property-model.ts`                                        |
+| `WEFT_PROPERTY_SEED`        | unset   | pins the fast-check global seed for suites built on `tests/property-model.ts`, so a counterexample can be replayed |
+| `WEFT_CODEGEN_RUNS`         | `40`    | case count in `tests/property-codegen.test.ts`                                                                     |
+| `WEFT_CRASH_RUNS`           | `15`    | case count in `tests/property-crash.test.ts`                                                                       |
+| `WEFT_RENDER_RUNS`          | `25`    | case count in `tests/property-render.test.ts`                                                                      |
+| `WEFT_SOCKET_RUNS`          | `40`    | case count in `tests/property-socket.test.ts`                                                                      |
+| `WEFT_SOCKET_RUNS`          | `12`    | case count in `tests/property-ws-subscribe.test.ts`                                                                |
+| `WEFT_SQLITE_PROPERTY_RUNS` | `25`    | case count in `tests/sqlite-adapter.test.ts`                                                                       |
+| `WEFT_TLC`                  | `tlc`   | path to the TLA+ model checker binary `tests/trace-validation.test.ts` runs; the test skips if it is not on `PATH` |
+| `WEFT_KEEP_TRACES`          | unset   | set to `1` to keep the generated TLA+ trace modules after `tests/trace-validation.test.ts` runs                    |
+
 ## Property Model
 
 `tests/property-model.ts` is the world model: simulated devices against one server, plus a

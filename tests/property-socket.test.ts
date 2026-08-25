@@ -23,7 +23,7 @@ import {
   wireText,
   type FieldName,
   type WireValue,
-} from "weftdb/shared";
+} from "weftdb/core";
 import { connectSocketTransport, httpTransport, WeftClient, type SocketTransport } from "weftdb/client";
 import { startRelay } from "weftdb/server/serve";
 import { authContext } from "weftdb/server/relay";

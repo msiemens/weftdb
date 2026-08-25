@@ -23,10 +23,10 @@ import ts from "typescript";
 // `--only` takes a substring, so `--only server/` or `--only client/index` narrows a run to one
 // group without editing this list.
 const TARGETS = [
-  "packages/weftdb/src/shared/index.ts",
+  "packages/weftdb/src/core.ts",
   "packages/weftdb/src/client/index.ts",
   "packages/weftdb/src/server/index.ts",
-  "packages/weftdb/src/schema/index.ts",
+  "packages/weftdb/src/schema.ts",
   "packages/weftdb/src/codegen/index.ts",
   "packages/weftdb/src/client/sqlite.ts",
   "packages/weftdb/src/client/subscriptions.ts",
@@ -259,10 +259,9 @@ function collectMutants(file) {
 }
 
 /**
- * One runner process per wave rather than one per file. Vitest runs the files it is given
- * concurrently itself, so spawning a process each only pays for a second startup per file, and
- * `--bail=1` reproduces what the old per-file `AbortController` did: the first failure ends the
- * wave instead of waiting the rest out.
+ * One runner process per wave rather than one per file: Vitest runs the files it is given
+ * concurrently itself, so a process each would only pay for a second startup. `--bail=1` ends the
+ * wave at the first failure instead of waiting the rest out.
  */
 function runWave(wave, signal) {
   return new Promise((resolve) => {
@@ -317,7 +316,7 @@ function parseArgs(argv) {
 /**
  * Refuses to run in a checkout whose workspace links point somewhere else. pnpm links workspace
  * packages by absolute path, at the root and again under each package, so a copied checkout goes
- * on resolving `weftdb/shared` back to the original tree: the mutation is written, the tests never
+ * on resolving `weftdb/core` back to the original tree: the mutation is written, the tests never
  * load it, every mutant "survives", and the score is a confident zero. Nothing about that failure
  * shows up in the output, which is why it is checked rather than assumed.
  */

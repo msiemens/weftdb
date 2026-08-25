@@ -4,7 +4,7 @@
 // `WeftSession`. What is genuinely this application's is here: which storage it uses, who this
 // tab is, how a row looks once the client's own knowledge is added to it, and how the schema's
 // relationships are resolved against rows the client already holds.
-import { hasConflictMarkers, rankBetween, rankString, rowId, type RowId, type TableName } from "weftdb/shared";
+import { hasConflictMarkers, rankBetween, rankString, rowId, type RowId, type TableName } from "weftdb/core";
 import {
   connectSocketTransport,
   httpTransport,

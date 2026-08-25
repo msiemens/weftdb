@@ -12,7 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import fc from "fast-check";
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
-import { rowId, txnId, type SqlValue } from "weftdb/shared";
+import { rowId, txnId } from "weftdb/core";
+import { type SqlValue } from "weftdb/shared";
 import type { WeftClient } from "weftdb/client";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import {

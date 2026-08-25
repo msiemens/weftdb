@@ -6,13 +6,13 @@ import {
   ROW_CLASSES,
   schemaHashValue,
   scopeId,
-  sha256Hex,
   tableName,
   txnId,
   type HlcString,
   type RowClass,
   type WireValue,
-} from "weftdb/shared";
+} from "weftdb/core";
+import { sha256Hex } from "weftdb/shared";
 import type { FieldRecord, RowRecord, Snapshot } from "./index.ts";
 
 export type SnapshotLine =

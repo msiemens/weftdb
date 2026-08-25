@@ -1,5 +1,5 @@
 import { useCallback, useRef, useSyncExternalStore } from "react";
-import { hasConflictMarkers } from "weftdb/shared";
+import { hasConflictMarkers } from "weftdb/core";
 import type { MaterializedRow, QuerySnapshot, SubscriptionEngine, QueryKey, TypedQueryKey } from "weftdb/client";
 
 /**

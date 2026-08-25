@@ -109,7 +109,7 @@ the authentication a relay reachable from outside a laptop needs.
 With the relay running in one terminal, run the following in another:
 
 ```ts title="sync.ts"
-import { deviceId, fieldName, rowId, scopeId, tableName } from "weftdb/shared";
+import { deviceId, fieldName, rowId, scopeId, tableName } from "weftdb/core";
 import { httpTransport, WeftClient } from "weftdb/client";
 import { schemaHash } from "weftdb/schema";
 import { schema } from "./src/schema.ts";

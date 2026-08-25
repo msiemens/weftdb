@@ -36,24 +36,25 @@ stay outside the runtime package; the dependency runs from `weftdb-cli` and `wef
 `weftdb`'s `package.json` declares one subpath per part of the runtime, so a build imports only
 what it uses.
 
-| Subpath                          | Provides                                                                                                                 | Environment      |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ---------------- |
-| `weftdb`                         | Re-exports `weftdb/shared`, `weftdb/schema`, and `weftdb/client`                                                         | Browser and Node |
-| `weftdb/shared`                  | Branded ids, operation types, hybrid logical clocks (HLCs), diff3, fractional ranks, hashing, and the `SqlExecutor` port | Browser and Node |
-| `weftdb/schema`                  | The schema DSL and schema hashing                                                                                        | Browser and Node |
-| `weftdb/client`                  | `WeftClient`, sync transports, subscriptions, query keys, and a compile-only query builder built on `kysely`             | Browser and Node |
-| `weftdb/client/sqlite`           | `SqliteClientStore`, a client store generic over a `SqlExecutor`                                                         | Browser and Node |
-| `weftdb/client/wasm-sqlite`      | Executor helpers for a WebAssembly build of SQLite, opened from a dedicated worker                                       | Browser only     |
-| `weftdb/server`                  | `WeftServer`, the in-memory schema-blind server                                                                          | Browser and Node |
-| `weftdb/server/sqlite`           | `SqliteWeftServer`, the same server backed by a `SqlExecutor`                                                            | Browser and Node |
-| `weftdb/server/node-sqlite`      | `openSqliteExecutor`, an executor built on `node:sqlite`                                                                 | Node only        |
-| `weftdb/server/snapshot`         | `contentAddressSnapshot`, the snapshot serialisation format                                                              | Browser and Node |
-| `weftdb/server/relay`            | `createRelayHandler` and the token verifiers it takes                                                                    | Browser and Node |
-| `weftdb/server/serve`            | `main`, `startRelay`, and `serveOptionsFromEnv`: the Node HTTP relay run by `weft serve`                                 | Node only        |
-| `weftdb/server/websocket`        | `SyncSocketHub`, the `/sync` connection registry                                                                         | Node only        |
-| `weftdb/server/websocket-frames` | `decodeFrame` and `encodeFrame`, the WebSocket frame codec                                                               | Node only        |
-| `weftdb/server/jwt`              | `jwtVerifier`, for the `--jwt-*` flags                                                                                   | Node only        |
-| `weftdb/codegen`                 | `generateArtifacts`, generated SQL, types, mutators, and bindings                                                        | Browser and Node |
+| Subpath                          | Provides                                                                                                     | Environment      |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------- |
+| `weftdb`                         | Re-exports `weftdb/core`, `weftdb/shared`, `weftdb/schema`, and `weftdb/client`                              | Browser and Node |
+| `weftdb/core`                    | Branded ids, operation types, hybrid logical clocks (HLCs), diff3, and fractional ranks                      | Browser and Node |
+| `weftdb/shared`                  | Hashing, the wire-value codec, and the `SqlExecutor` port                                                    | Browser and Node |
+| `weftdb/schema`                  | The schema DSL and schema hashing                                                                            | Browser and Node |
+| `weftdb/client`                  | `WeftClient`, sync transports, subscriptions, query keys, and a compile-only query builder built on `kysely` | Browser and Node |
+| `weftdb/client/sqlite`           | `SqliteClientStore`, a client store generic over a `SqlExecutor`                                             | Browser and Node |
+| `weftdb/client/wasm-sqlite`      | Executor helpers for a WebAssembly build of SQLite, opened from a dedicated worker                           | Browser only     |
+| `weftdb/server`                  | `WeftServer`, the in-memory schema-blind server                                                              | Browser and Node |
+| `weftdb/server/sqlite`           | `SqliteWeftServer`, the same server backed by a `SqlExecutor`                                                | Browser and Node |
+| `weftdb/server/node-sqlite`      | `openSqliteExecutor`, an executor built on `node:sqlite`                                                     | Node only        |
+| `weftdb/server/snapshot`         | `contentAddressSnapshot`, the snapshot serialisation format                                                  | Browser and Node |
+| `weftdb/server/relay`            | `createRelayHandler` and the token verifiers it takes                                                        | Browser and Node |
+| `weftdb/server/serve`            | `main`, `startRelay`, and `serveOptionsFromEnv`: the Node HTTP relay run by `weft serve`                     | Node only        |
+| `weftdb/server/websocket`        | `SyncSocketHub`, the `/sync` connection registry                                                             | Node only        |
+| `weftdb/server/websocket-frames` | `decodeFrame` and `encodeFrame`, the WebSocket frame codec                                                   | Node only        |
+| `weftdb/server/jwt`              | `jwtVerifier`, for the `--jwt-*` flags                                                                       | Node only        |
+| `weftdb/codegen`                 | `generateArtifacts`, generated SQL, types, mutators, and bindings                                            | Browser and Node |
 
 Five subpaths are Node-only: `weftdb/server/node-sqlite` imports `node:sqlite`,
 `weftdb/server/serve` imports `node:http`, `weftdb/server/websocket` imports `node:crypto`,

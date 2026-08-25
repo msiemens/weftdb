@@ -12,7 +12,7 @@
 //
 // Scope equality is the whole of the authorization model, so this is also what keeps one visitor
 // out of another's rows, and the todo demo out of the chat demo.
-import { deviceId, scopeId, type DeviceId, type ScopeId } from "weftdb/shared";
+import { deviceId, scopeId, type DeviceId, type ScopeId } from "weftdb/core";
 import type { StorageLike } from "weftdb/client";
 import { demoToken } from "./auth.ts";
 

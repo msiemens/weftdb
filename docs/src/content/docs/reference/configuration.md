@@ -174,23 +174,6 @@ a flag.
 | Reconnect backoff floor   | 500 milliseconds | first retry delay after a client socket disconnects, in `connectSocketTransport` and `connectWakeups`   |
 | Reconnect backoff ceiling | 30 seconds       | the retry delay doubles on each attempt and stops growing here                                          |
 
-## Test-suite variables
-
-The test suite reads these directly. None of them configures the library itself, and none has a
-corresponding relay or client option.
-
-| Variable                    | Default | Controls                                                                                                                        |
-| --------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `WEFT_PROPERTY_RUNS`        | `300`   | case count in `tests/facade.test.ts`                                                                                            |
-| `WEFT_PROPERTY_RUNS`        | `1000`  | case count for suites importing `PROPERTY_RUNS` from `tests/property-model.ts`                                                  |
-| `WEFT_SCENARIO_RUNS`        | `200`   | case count for suites importing `SCENARIO_RUNS` from `tests/property-model.ts`                                                  |
-| `WEFT_WORLD_RUNS`           | `300`   | case count for suites importing `WORLD_RUNS` from `tests/property-model.ts`                                                     |
-| `WEFT_PROPERTY_SEED`        | unset   | pins the fast-check global seed used by suites built on `tests/property-model.ts`, so a reported counterexample can be replayed |
-| `WEFT_CODEGEN_RUNS`         | `40`    | case count in `tests/property-codegen.test.ts`                                                                                  |
-| `WEFT_CRASH_RUNS`           | `15`    | case count in `tests/property-crash.test.ts`                                                                                    |
-| `WEFT_RENDER_RUNS`          | `25`    | case count in `tests/property-render.test.ts`                                                                                   |
-| `WEFT_SOCKET_RUNS`          | `40`    | case count in `tests/property-socket.test.ts`                                                                                   |
-| `WEFT_SOCKET_RUNS`          | `12`    | case count in `tests/property-ws-subscribe.test.ts`                                                                             |
-| `WEFT_SQLITE_PROPERTY_RUNS` | `25`    | case count in `tests/sqlite-adapter.test.ts`                                                                                    |
-| `WEFT_TLC`                  | `tlc`   | path to the TLA+ model checker binary `tests/trace-validation.test.ts` runs; the test skips if it cannot be found on `PATH`     |
-| `WEFT_KEEP_TRACES`          | unset   | set to `1` to keep the generated TLA+ trace modules after `tests/trace-validation.test.ts` runs                                 |
+The suite reads a further set of variables that tune its own run counts and seeds. None of them
+configures the library, and none has a relay or client option; they are documented in `TESTING.md`
+alongside the suites they belong to.

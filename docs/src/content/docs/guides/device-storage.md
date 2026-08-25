@@ -49,7 +49,7 @@ SQLite is used on the device rather than IndexedDB because:
 
 - The generated tables are relational.
 - `transaction()` gives a batch of related writes a real commit and rollback to rest on.
-- The same compiled SQL that runs on a device also runs against `node:sqlite` in the test suite.
+- The same compiled SQL that runs on a device runs unchanged against `node:sqlite` on the server.
 
 The cost of that choice is the worker constraint above, which shapes how a browser application is
 put together.
@@ -62,7 +62,7 @@ put together.
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import { openWebSqliteExecutor } from "weftdb/client/wasm-sqlite";
 import { SqliteClientStore } from "weftdb/client/sqlite";
-import { scopeId, deviceId } from "weftdb/shared";
+import { scopeId, deviceId } from "weftdb/core";
 import { schema } from "./schema.ts";
 
 const sqlite3 = await sqlite3InitModule();

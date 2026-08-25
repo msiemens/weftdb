@@ -3,7 +3,7 @@
 // `weft generate` writes from the schema; syncing, connectivity and status come from
 // `WeftSession`. What is genuinely this application's is here: which storage it uses, who this
 // tab is, and the heartbeat that keeps its device record current.
-import { rowId, type RowId } from "weftdb/shared";
+import { rowId, type RowId } from "weftdb/core";
 import {
   connectSocketTransport,
   httpTransport,

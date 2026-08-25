@@ -1,6 +1,6 @@
-import { schemaHashValue, stableHash } from "weftdb/shared";
-import type { MergeStrategy } from "weftdb/shared";
-import type { SchemaHash, WireValue } from "weftdb/shared";
+import { schemaHashValue, stableHash } from "weftdb/core";
+import type { MergeStrategy } from "weftdb/core";
+import type { SchemaHash, WireValue } from "weftdb/core";
 
 export interface FieldDefinition {
   type: "string" | "number" | "boolean" | "json" | "date" | "enum";
@@ -53,7 +53,7 @@ export type ScalarType<Type extends FieldDefinition["type"]> = Type extends "num
   : Type extends "boolean"
     ? boolean
     : Type extends "json"
-      ? import("weftdb/shared").WireValue
+      ? import("weftdb/core").WireValue
       : string;
 
 type FieldOptions = Partial<Pick<FieldDefinition, "merge" | "nullable" | "derived" | "retentionAnchor">>;

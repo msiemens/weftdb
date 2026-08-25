@@ -16,7 +16,7 @@ import {
   type SyntheticEvent,
 } from "react";
 import { Diff3EditorBuffer } from "weftdb/client";
-import { fieldName, hasConflictMarkers, rowId as toRowId, tableName, type TableName } from "weftdb/shared";
+import { fieldName, hasConflictMarkers, rowId as toRowId, tableName, type TableName } from "weftdb/core";
 import {
   issues_commentsRelation,
   issues_projectRelation,

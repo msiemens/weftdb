@@ -17,7 +17,7 @@ import {
   type TxnId,
   type WeftOp,
   type WireValue,
-} from "weftdb/shared";
+} from "weftdb/core";
 import type {
   FieldRecord,
   HandshakeRequest,
@@ -888,18 +888,37 @@ function materializeRow(row: LocalRow): MaterializedRow {
   });
 }
 
-export * from "./transport.ts";
-export * from "./wakeups.ts";
-export * from "./socket-transport.ts";
-export * from "./session.ts";
-export * from "./web-storage.ts";
-export * from "./subscriptions.ts";
-export * from "./facade.ts";
-export * from "./retention.ts";
-export * from "./query.ts";
-export * from "./kysely.ts";
-export * from "./worker.ts";
-export * from "./multitab.ts";
-export * from "./editor.ts";
-export * from "./drag.ts";
-export * from "./application.ts";
+// The public surface is listed, not inherited: a new export reaches consumers only from here.
+export { httpTransport, RelayError } from "./transport.ts";
+export type { AsyncSyncTransport, FetchLike, HttpTransportOptions, PushResult } from "./transport.ts";
+export { connectWakeups, TOKEN_PROTOCOL_PREFIX, WAKEUP_PROTOCOL } from "./wakeups.ts";
+export type { ScopeAdvanced, WakeupConnection, WakeupOptions, WebSocketFactory, WebSocketLike } from "./wakeups.ts";
+export { connectSocketTransport, SocketClosedError, SocketRequestError } from "./socket-transport.ts";
+export type { SocketTransport, SocketTransportOptions } from "./socket-transport.ts";
+export { WeftSession } from "./session.ts";
+export type { BroadcastChannelLike, SessionOptions, SessionStatus, SocketHandlers } from "./session.ts";
+export { serializeClient, WebStorageClientStore } from "./web-storage.ts";
+export type { StorageLike, StoredClient, StoredValue } from "./web-storage.ts";
+export { queryKey, RowIdentityCache, SubscriptionEngine } from "./subscriptions.ts";
+export type {
+  CollectionName,
+  FieldOf,
+  QueryDelta,
+  QueryKey,
+  QueryListener,
+  QuerySnapshot,
+  TypedQueryKey,
+} from "./subscriptions.ts";
+export { createWeftDb, WeftDb } from "./facade.ts";
+export type { CollectionFacade, MutationInput } from "./facade.ts";
+export { applyRetentionDeletes, planRetentionDeletes, visibleChildren } from "./retention.ts";
+export type { RetentionCandidate, RetentionPolicy } from "./retention.ts";
+export { AuthorizerDependencyRecorder, compileQuery, dependency, invalidatesQuery, queryCacheKey } from "./query.ts";
+export type { CompiledQuery, QueryBuilderLike, QueryDependency, RegisteredQuery } from "./query.ts";
+export { compileOnlyKysely } from "./kysely.ts";
+export { OpfsWorkerTransport } from "./worker.ts";
+export type { WorkerLike, WorkerRequest, WorkerRequestBody, WorkerResponse } from "./worker.ts";
+export { BroadcastDbProxy, MultiTabCoordinator } from "./multitab.ts";
+export type { LockManagerLike, MultiTabOptions, ProxyRequest, ProxyResponse, TabRole } from "./multitab.ts";
+export { Diff3EditorBuffer } from "./editor.ts";
+export type { BufferedRemoteEdit } from "./editor.ts";

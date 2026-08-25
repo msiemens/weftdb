@@ -16,7 +16,7 @@ import {
   wireText,
   type FieldName,
   type WireValue,
-} from "weftdb/shared";
+} from "weftdb/core";
 import { WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { schemaHash } from "weftdb/schema";

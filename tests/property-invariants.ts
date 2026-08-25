@@ -21,7 +21,7 @@ import {
   type RowId,
   type TableName,
   type WeftOp,
-} from "weftdb/shared";
+} from "weftdb/core";
 import { planRetentionDeletes } from "weftdb/client";
 import {
   at,

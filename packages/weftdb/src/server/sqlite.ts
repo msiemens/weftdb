@@ -1,6 +1,4 @@
 import {
-  decodeWireValue,
-  encodeWireValue,
   fieldName,
   rowId,
   schemaHashValue,
@@ -9,10 +7,9 @@ import {
   txnId,
   type HlcString,
   type ScopeId,
-  type SqlExecutor,
-  type SqlRow,
   type WeftOp,
-} from "weftdb/shared";
+} from "weftdb/core";
+import { decodeWireValue, encodeWireValue, type SqlExecutor, type SqlRow } from "weftdb/shared";
 import { generateServerDdl } from "weftdb/codegen";
 import { splitSql } from "../sql.ts";
 import {
@@ -304,8 +301,8 @@ function decodeDevice(row: SqlRow): DeviceRecord {
   };
 }
 
-function importDeviceId(value: string): import("weftdb/shared").DeviceId {
-  return value as import("weftdb/shared").DeviceId;
+function importDeviceId(value: string): import("weftdb/core").DeviceId {
+  return value as import("weftdb/core").DeviceId;
 }
 
 function column(row: SqlRow, name: string): SqlRow[string] {
@@ -329,6 +326,6 @@ function requiredNumber(value: SqlRow[string]): number {
   return value;
 }
 
-function deviceStoreKey(scopeIdValue: ScopeId, deviceIdValue: import("weftdb/shared").DeviceId): string {
+function deviceStoreKey(scopeIdValue: ScopeId, deviceIdValue: import("weftdb/core").DeviceId): string {
   return `${scopeIdValue}\0${deviceIdValue}`;
 }

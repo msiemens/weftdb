@@ -5,6 +5,9 @@ sync cursor, and the relay pushes over a WebSocket, so a message posted in one t
 other without a poll. The message log is an event log: rows are created once and are never edited
 or deleted.
 
+Both tabs are the same person: they share one scope, and what the demo shows is a device talking to
+its own other device, not two people in a room. Nothing here is collaborative.
+
 ```sh
 pnpm --filter weftdb-demo-chat dev
 ```

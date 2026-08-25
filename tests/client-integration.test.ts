@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { fieldName, rowId, tableName } from "weftdb/shared";
+import { fieldName, rowId, tableName } from "weftdb/core";
 import {
   AuthorizerDependencyRecorder,
   BroadcastDbProxy,
   Diff3EditorBuffer,
-  DragFrozenList,
   MultiTabCoordinator,
   OpfsWorkerTransport,
   compileOnlyKysely,
@@ -83,13 +82,6 @@ test("editor buffer holds remote edits while focused", () => {
   buffer.focus();
   assert.deepEqual(buffer.receiveRemote(edit), []);
   assert.deepEqual(buffer.blur(), [edit]);
-});
-
-test("drag-frozen list applies pending updates on drop", () => {
-  const list = new DragFrozenList(["a", "b"]);
-  assert.deepEqual(list.startDrag(), ["a", "b"]);
-  assert.deepEqual(list.update(["b", "a"]), ["a", "b"]);
-  assert.deepEqual(list.drop(), ["b", "a"]);
 });
 
 test("worker transport correlates requests and responses", async () => {

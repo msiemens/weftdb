@@ -15,7 +15,7 @@ import {
   type RowId,
   type TableName,
   type WireValue,
-} from "weftdb/shared";
+} from "weftdb/core";
 import {
   AuthorizerDependencyRecorder,
   compileQuery,
@@ -183,8 +183,8 @@ test("§9.37 removing the markers by hand clears the conflict with no residue", 
 test("§9.38 recorded dependencies cover every table the query reads", () => {
   const candidates: readonly TableName[] = [
     TASKS,
-    tableName("calorie_entries"),
-    tableName("food_items"),
+    tableName("invoices"),
+    tableName("line_items"),
     tableName("task_status_history"),
   ];
   fc.assert(

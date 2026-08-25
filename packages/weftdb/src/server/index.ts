@@ -17,7 +17,7 @@ import {
   type TxnId,
   type WeftOp,
   type WireValue,
-} from "weftdb/shared";
+} from "weftdb/core";
 
 export interface FieldRecord {
   scopeId: ScopeId;
@@ -51,13 +51,13 @@ export interface ScopeState {
 
 export interface DeviceRecord {
   scopeId: ScopeId;
-  deviceId: import("weftdb/shared").DeviceId;
+  deviceId: import("weftdb/core").DeviceId;
   lastSeen: number;
 }
 
 export interface HandshakeRequest {
   scopeId: ScopeId;
-  deviceId: import("weftdb/shared").DeviceId;
+  deviceId: import("weftdb/core").DeviceId;
   schemaHash: SchemaHash;
   schemaVersion: number;
   lastServerSeq: number;
@@ -440,6 +440,6 @@ function isFieldForRow(key: StoreKey, scopeId: ScopeId, tableName: TableName, ro
   return key.startsWith(`${scopeId}\0${tableName}\0${rowId}\0`);
 }
 
-function deviceKey(scopeId: ScopeId, deviceId: import("weftdb/shared").DeviceId): string {
+function deviceKey(scopeId: ScopeId, deviceId: import("weftdb/core").DeviceId): string {
   return `${scopeId}\0${deviceId}`;
 }

@@ -63,7 +63,7 @@ floor for that [scope](/concepts/scopes/) to cover them. `olderThanMs` defaults 
 accepts a different value:
 
 ```ts
-import type { ScopeId } from "weftdb/shared";
+import type { ScopeId } from "weftdb/core";
 import type { SqliteWeftServer } from "weftdb/server/sqlite";
 
 function pruneOldTombstones(relay: SqliteWeftServer, scopeId: ScopeId): void {
