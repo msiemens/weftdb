@@ -133,9 +133,38 @@ export type ScalarType<Type extends FieldDefinition["type"]> = Type extends "num
       ? import("weftdb/core").WireValue
       : string;
 
-type FieldOptions = Partial<Pick<FieldDefinition, "merge" | "nullable" | "retentionAnchor">>;
+/**
+ * A field definition that still remembers the two things its declaration said about it.
+ *
+ * `FieldDefinition` is the shape every field has, and both of the facts a schema author writes
+ * down are flattened in it: `type` is the whole union, and `nullable` is `boolean`. That is enough
+ * for the generator, which reads a schema as a runtime value and sees the real ones — and it is
+ * exactly not enough for everything that reads a schema as a type. `ScalarType` distributes over
+ * the union and collapses to `WireValue`, so `S.string()` read back as anything the wire can
+ * carry; `boolean` does not extend `true`, so a nullable field read back as not nullable. The two
+ * halves have to be carried together, because fixing either one alone makes the other wrong:
+ * a literal `type` stops the collapse to `WireValue`, and a `boolean` `nullable` then never adds
+ * the `| null` that a nullable field exists to hold.
+ */
+export type FieldOf<Type extends FieldDefinition["type"], Nullable extends boolean> = Omit<
+  FieldDefinition,
+  "type" | "nullable"
+> & {
+  readonly type: Type;
+  readonly nullable: Nullable;
+};
 
-type JsonFieldOptions = FieldOptions & Partial<JsonTypeReference>;
+/**
+ * What a builder takes, with `nullable` left as a type parameter so the literal `true` written at
+ * the call survives into what the builder returns. `Nullable` defaults to `boolean` for the
+ * positions that only describe the shape; the builders default it to `false`, which is what a
+ * field that says nothing about nullability is.
+ */
+type FieldOptions<Nullable extends boolean = boolean> = Partial<Pick<FieldDefinition, "merge" | "retentionAnchor">> & {
+  readonly nullable?: Nullable;
+};
+
+type JsonFieldOptions<Nullable extends boolean = boolean> = FieldOptions<Nullable> & Partial<JsonTypeReference>;
 
 const TS_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 
@@ -160,51 +189,83 @@ function assertDeclaredJsonType(reference: JsonTypeReference): void {
   }
 }
 
-function field(type: FieldDefinition["type"], options: FieldOptions = {}): FieldDefinition {
+/**
+ * The value is exactly what it was: the same three keys in the same order, and a fourth only when
+ * `retentionAnchor` was given. `schemaHash` is computed from this, and it is protocol visible —
+ * two devices that disagree on it refuse to sync — so nothing here may start writing anything
+ * down. All that changed is what the compiler is told about the value, hence the cast: `nullable`
+ * is a `boolean` at runtime and the literal `Nullable` in the type, and the boolean written is
+ * `options.nullable` itself, which is what `Nullable` was inferred from.
+ */
+function field<Type extends FieldDefinition["type"], const Nullable extends boolean = false>(
+  type: Type,
+  options: FieldOptions<Nullable> = {},
+): FieldOf<Type, Nullable> {
   const definition: FieldDefinition = {
     type,
     merge: options.merge ?? "lww",
     nullable: options.nullable ?? false,
   };
   if (options.retentionAnchor !== undefined) definition.retentionAnchor = options.retentionAnchor;
-  return definition;
+  return definition as FieldOf<Type, Nullable>;
+}
+
+/**
+ * A value JSON can carry. `as` names the TypeScript type it holds — `S.json({ as: "Tags", from:
+ * "../types.ts" })` — and the generated row type, mutation type and decoder say `Tags` where
+ * they would otherwise say `unknown`, which is what an application would have to cast its way
+ * out of on every read. Declaring nothing keeps `unknown`, which is the honest answer for a
+ * field whose shape the schema does not fix.
+ *
+ * The type is the author's to keep JSON-serialisable. The generated bindings check what they
+ * can — a declared type that reduces to methods, as a `Date` or a `Map` does, has no wire form
+ * and fails to compile there — but nothing here can see through a name to what it will hold.
+ *
+ * Overloaded rather than generic in the nullability, because this is the one builder anybody
+ * writes an explicit type argument on. Supplying one type argument stops the rest being inferred
+ * and falls back to their defaults, so a second type parameter would have made
+ * `S.json<SortConfig>({ nullable: true })` quietly non-nullable — the half-fix this whole shape
+ * exists to avoid. Overloads choose on the argument instead, and each carries the one type
+ * parameter `Value` that a call may name. The last is the widened case: options assembled at
+ * runtime say `boolean`, which is worth no more than it used to be but is still accepted.
+ */
+function jsonField<Value = WireValue>(
+  options: JsonFieldOptions & { readonly nullable: true },
+): FieldOf<"json", true> & JsonValued<Value>;
+function jsonField<Value = WireValue>(
+  options?: JsonFieldOptions & { readonly nullable?: false },
+): FieldOf<"json", false> & JsonValued<Value>;
+function jsonField<Value = WireValue>(options?: JsonFieldOptions): FieldOf<"json", boolean> & JsonValued<Value>;
+function jsonField<Value = WireValue>(options?: JsonFieldOptions): FieldDefinition & JsonValued<Value> {
+  const definition = field("json", options);
+  // Cast because the brand is a type and not a value: nothing sets the property, nothing reads
+  // it, and it is keyed by a symbol nothing outside this module can name.
+  if (options?.as === undefined) return definition as FieldDefinition & JsonValued<Value>;
+  const reference: JsonTypeReference =
+    options.from === undefined ? { as: options.as } : { as: options.as, from: options.from };
+  assertDeclaredJsonType(reference);
+  return { ...definition, jsonType: reference } as FieldDefinition & JsonValued<Value>;
 }
 
 export const S = {
-  string: (options?: FieldOptions) => field("string", options),
-  number: (options?: FieldOptions) => field("number", options),
-  boolean: (options?: FieldOptions) => field("boolean", options),
-  /**
-   * A value JSON can carry. `as` names the TypeScript type it holds — `S.json({ as: "Tags", from:
-   * "../types.ts" })` — and the generated row type, mutation type and decoder say `Tags` where
-   * they would otherwise say `unknown`, which is what an application would have to cast its way
-   * out of on every read. Declaring nothing keeps `unknown`, which is the honest answer for a
-   * field whose shape the schema does not fix.
-   *
-   * The type is the author's to keep JSON-serialisable. The generated bindings check what they
-   * can — a declared type that reduces to methods, as a `Date` or a `Map` does, has no wire form
-   * and fails to compile there — but nothing here can see through a name to what it will hold.
-   */
-  json: <Value = WireValue>(options?: JsonFieldOptions): FieldDefinition & JsonValued<Value> => {
-    const definition = field("json", options);
-    // Cast because the brand is a type and not a value: nothing sets the property, nothing reads
-    // it, and it is keyed by a symbol nothing outside this module can name.
-    if (options?.as === undefined) return definition as FieldDefinition & JsonValued<Value>;
-    const reference: JsonTypeReference =
-      options.from === undefined ? { as: options.as } : { as: options.as, from: options.from };
-    assertDeclaredJsonType(reference);
-    return { ...definition, jsonType: reference } as FieldDefinition & JsonValued<Value>;
-  },
-  date: (options?: FieldOptions) => field("date", options),
+  string: <const Nullable extends boolean = false>(options?: FieldOptions<Nullable>): FieldOf<"string", Nullable> =>
+    field("string", options),
+  number: <const Nullable extends boolean = false>(options?: FieldOptions<Nullable>): FieldOf<"number", Nullable> =>
+    field("number", options),
+  boolean: <const Nullable extends boolean = false>(options?: FieldOptions<Nullable>): FieldOf<"boolean", Nullable> =>
+    field("boolean", options),
+  json: jsonField,
+  date: <const Nullable extends boolean = false>(options?: FieldOptions<Nullable>): FieldOf<"date", Nullable> =>
+    field("date", options),
   /**
    * A string from a fixed set. The values are carried on the definition, so the generated row
    * type is the union rather than `string`, the mutators refuse anything else before it can be
    * written, and the column gets a `CHECK` that says the same thing to the database.
    */
-  enum: <const Values extends readonly [string, ...string[]]>(
+  enum: <const Values extends readonly [string, ...string[]], const Nullable extends boolean = false>(
     values: Values,
-    options?: FieldOptions,
-  ): FieldDefinition & { readonly type: "enum"; readonly values: Values } => {
+    options?: FieldOptions<Nullable>,
+  ): FieldOf<"enum", Nullable> & { readonly values: Values } => {
     if (new Set(values).size !== values.length) throw new Error(`enum values repeat: ${values.join(", ")}`);
     return { ...field("enum", options), type: "enum", values };
   },
@@ -451,10 +512,15 @@ function toWireSchema(schema: SchemaDefinition): WireValue {
   };
 }
 
+/**
+ * Written out rather than left as three bare `FieldDefinition`s: a row's `id` is a string, and a
+ * reader that had to treat it as anything the wire can carry was being told less than the
+ * framework knows. These are the definitions {@link withBaseFields} actually writes.
+ */
 type BaseFieldDefinitions = {
-  readonly id: FieldDefinition;
-  readonly scope_id: FieldDefinition;
-  readonly created: FieldDefinition;
+  readonly id: FieldOf<"string", false>;
+  readonly scope_id: FieldOf<"string", false>;
+  readonly created: FieldOf<"date", false>;
 };
 
 /**

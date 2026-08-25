@@ -205,6 +205,26 @@ test("a declared json type is the type the facade takes, without a cast", () => 
   assert.deepEqual(client.getRow(tableName("views"), rowId("view-1"))?.fields.get(fieldName("sort")), sort);
 });
 
+test("a nullable field takes null, and takes it as the type the schema declares", () => {
+  const { db: database, client } = db();
+  const todos = database.collection("todos");
+
+  // The assertion is as much that this compiles as that it runs. `MutationInput` used to type
+  // every scalar as `WireValue`, which took `null` because it takes nearly everything; now each
+  // field is worth what it was declared as, and `null` is accepted because `weight` is the one
+  // that was declared nullable — see `tests/schema-types.test.ts` for the compiler's side of it.
+  const weight: number | null = null;
+  todos.create("todo-1", { title: "plan", done: false, weight });
+  assert.equal(client.getRow(tableName("todos"), rowId("todo-1"))?.fields.get(fieldName("weight")), null);
+
+  // And clearing one later is the same write, not a delete of the field.
+  todos.update("todo-1", { weight: 3 });
+  todos.update("todo-1", { weight: null, notes: null });
+  const row = client.getRow(tableName("todos"), rowId("todo-1"));
+  assert.equal(row?.fields.get(fieldName("weight")), null);
+  assert.equal(row?.fields.get(fieldName("notes")), null);
+});
+
 test("a json field with nothing declared still takes what the wire can carry", () => {
   // The default has to stay put: a schema that says nothing about a json field's shape is the
   // honest case, and narrowing it to something would break every one of them.
