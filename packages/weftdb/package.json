@@ -10,7 +10,6 @@
     "./shared": "./src/shared/index.ts",
     "./schema": "./src/schema.ts",
     "./client": "./src/client/index.ts",
-    "./client/mutation-target": "./src/client/mutation-target.ts",
     "./client/sqlite": "./src/client/sqlite.ts",
     "./client/wasm-sqlite": "./src/client/wasm-sqlite.ts",
     "./client/worker-host": "./src/client/worker-host.ts",

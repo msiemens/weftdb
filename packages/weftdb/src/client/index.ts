@@ -935,6 +935,7 @@ export type {
   RowSelect,
   TypedQueryKey,
 } from "./subscriptions.ts";
+export type { MutationTarget, WeftDbTarget } from "./mutation-target.ts";
 export { createWeftDb, WeftDb } from "./facade.ts";
 export type { CollectionFacade, MutationInput } from "./facade.ts";
 export { applyRetentionDeletes, planRetentionDeletes, visibleChildren } from "./retention.ts";

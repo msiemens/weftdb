@@ -21,10 +21,11 @@ import {
   WeftClient,
   WeftClientMirror,
   type WeftWorkerHost,
+  type MutationTarget,
+  type WeftDbTarget,
   type WorkerMessage,
   type WorkerRequest,
 } from "weftdb/client";
-import type { MutationTarget, WeftDbTarget } from "weftdb/client/mutation-target";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
 import { schema } from "weftdb-demo-todo/schema";
