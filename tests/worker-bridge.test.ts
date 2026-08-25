@@ -24,6 +24,7 @@ import type { SqlExecutor, SqlStatement } from "weftdb/shared";
 import { defineSchema, S } from "weftdb/schema";
 import {
   compileOnlyKysely,
+  isDeltaPush,
   OpfsWorkerTransport,
   reactiveSqlQuery,
   serveWeftWorker,
@@ -196,7 +197,10 @@ test("§8.7 unwatching stops the worker running the statement at all", async () 
   // nothing is rendering.
   assert.equal(bridge.counted.ran(all.compiled.sql), 0, "the worker still ran a statement nobody is watching");
   assert.deepEqual(
-    bridge.pushes.at(-1)?.results.map(([cacheKey]) => cacheKey),
+    bridge.pushes
+      .filter(isDeltaPush)
+      .at(-1)
+      ?.results.map(([cacheKey]) => cacheKey),
     [],
     "the worker pushed a result for an unwatched statement",
   );

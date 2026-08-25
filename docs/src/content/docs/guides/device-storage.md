@@ -166,6 +166,58 @@ Per-field hybrid logical clock (HLC) readings, three-way merge ancestors, and th
 the worker. The sync session and retention read those, and neither runs on the page, so the mirror
 carries only what a component renders from.
 
+## Syncing from the worker
+
+The sync session runs beside the client, in the worker, for the same reason the client is there: it
+drives the sync against a `WeftClient` and reads that client's outbox and quarantine to say what is
+pending. Give `serveWeftWorker` a `session` and it runs one:
+
+```ts title="src/storage-worker.ts"
+serveWeftWorker({
+  port: globalThis as unknown as WorkerHostPortLike,
+  executor,
+  store,
+  session: {
+    schemaHash,
+    transport: (token) => httpTransport({ baseUrl: "/api", token }),
+    openSocket: (handlers, token) => connectSocketTransport({ url: "/sync", token, handlers }),
+  },
+});
+```
+
+`transport` is a function of the token rather than a transport, because a transport carries its
+credential: the socket presents one when it connects, and HTTP sends one per request. Signing in as
+somebody else is a new transport, so the session is rebuilt around it and the socket reopened.
+
+The page keeps the token, because the page is where a token can be got. A worker has no
+`localStorage` and no redirect to read one out of, so the mirror hands it over:
+
+```ts
+mirror.setToken(await signIn());
+mirror.setToken(null);
+```
+
+Signing out ends the session and closes the socket. It leaves the outbox exactly as it is: unsent
+work belongs to the device rather than to the session that would have pushed it, and signing back in
+pushes it. Dropping it is `discardQuarantine`, which is a separate decision about work the relay
+has refused.
+
+`sync()` syncs now rather than at the next poll, and resolves when that sync has finished, so a
+pull-to-refresh stops spinning at the right moment. A relay that cannot be reached is an ordinary
+state: it settles into the status rather than throwing.
+
+`status()` is what the session last reported, and `subscribeStatus` wakes when it changes. It reads
+`undefined` before the device has signed in, which is where an application starts rather than a
+failure. The worker sends a status only when something in it has moved, and the mirror holds the
+object it was given, so a component can compare it by identity:
+
+```tsx
+const status = useSyncExternalStore(
+  (listener) => mirror.subscribeStatus(listener),
+  () => mirror.status(),
+);
+```
+
 ## Reaching the worker from another tab
 
 One tab at a time may hold the OPFS access handle, so one tab at a time may hold the worker.

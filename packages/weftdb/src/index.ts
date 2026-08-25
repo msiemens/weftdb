@@ -107,6 +107,7 @@ export {
   executorRowSelect,
   httpTransport,
   invalidatesQuery,
+  isDeltaPush,
   isWorkerPush,
   planRetentionDeletes,
   queryCacheKey,

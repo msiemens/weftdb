@@ -1,5 +1,6 @@
 import type { WireValue } from "weftdb/core";
 import type { CompiledQuery } from "./query.ts";
+import type { SessionStatus } from "./session.ts";
 
 /**
  * A change the page asks the worker to carry out. Only the intent crosses, never the result: the
@@ -34,7 +35,21 @@ export type WorkerRequestBody =
   | { readonly type: "hydrate"; readonly scopeId: string; readonly deviceId: string }
   | { readonly type: "mutate"; readonly mutation: WorkerMutation }
   | { readonly type: "watch"; readonly cacheKey: string; readonly tableName: string; readonly query: CompiledQuery }
-  | { readonly type: "unwatch"; readonly cacheKey: string };
+  | { readonly type: "unwatch"; readonly cacheKey: string }
+  /**
+   * The credential the sync session runs under. It crosses because the session runs beside the
+   * client, in the worker, where there is no `localStorage` to read it from and no page to ask.
+   *
+   * A new token is not a setting to update in place: a socket presents its token once, when it
+   * connects, so the session is rebuilt around the new credential and the socket reopened. `null`
+   * signs the device out and leaves the outbox exactly as it is, because unsent work belongs to
+   * the device rather than to the session that would have pushed it (§4.1).
+   */
+  | { readonly type: "auth"; readonly token: string | null }
+  /** Sync now, rather than at the next poll or debounce. Answers when that sync has finished. */
+  | { readonly type: "sync" }
+  /** Drops this device's diverged work and re-derives its rows from the relay (§5.5). */
+  | { readonly type: "discardQuarantine" };
 
 /**
  * Written as an intersection rather than as a second hand-maintained union: the two drifted apart
@@ -83,9 +98,24 @@ export interface WorkerDelta {
  * A delta the worker sends without being asked. Every other message on this port answers a
  * request; this one is the echo half of a mutation the page has already returned from.
  */
-export interface WorkerPush extends WorkerDelta {
+export interface WorkerDeltaPush extends WorkerDelta {
   readonly push: "delta";
 }
+
+/**
+ * What the sync session in the worker is doing, on its way to whatever the page renders from it.
+ *
+ * Sent only when something in it has actually moved: the session compares each status against the
+ * last one it published and tells nobody when they match, so this is one message per real change
+ * rather than one per poll. That comparison is also what lets the mirror hold the object it was
+ * given and hand it to `useSyncExternalStore` unchanged.
+ */
+export interface WorkerStatusPush {
+  readonly push: "status";
+  readonly status: SessionStatus;
+}
+
+export type WorkerPush = WorkerDeltaPush | WorkerStatusPush;
 
 export type WorkerMessage = WorkerResponse | WorkerPush;
 
@@ -96,6 +126,15 @@ export type WorkerMessage = WorkerResponse | WorkerPush;
  */
 export function isWorkerPush(message: WorkerMessage): message is WorkerPush {
   return "push" in message;
+}
+
+/**
+ * Narrows to the row half of a push, which is the only one that carries a delta to apply. Takes a
+ * whole `WorkerMessage` rather than a `WorkerPush`, so a caller holding everything that crossed the
+ * port can pick the deltas out of it without narrowing twice.
+ */
+export function isDeltaPush(message: WorkerMessage): message is WorkerDeltaPush {
+  return "push" in message && message.push === "delta";
 }
 
 export interface WorkerLike {

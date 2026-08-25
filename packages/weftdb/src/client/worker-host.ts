@@ -22,9 +22,13 @@ import {
   type FieldName,
   type WireValue,
 } from "weftdb/core";
+import type { SchemaHash } from "weftdb/core";
 import type { SqlExecutor, SqlRow, SqlValue } from "weftdb/shared";
 import { executorRowSelect, reactiveSqlQuery, type ReactiveSqlQuery, type RowSelect } from "./subscriptions.ts";
 import type { CompiledQuery } from "./query.ts";
+import { WeftSession, type SessionStatus, type SocketHandlers } from "./session.ts";
+import type { AsyncSyncTransport } from "./transport.ts";
+import type { SocketTransport } from "./socket-transport.ts";
 // Type-only, and deliberately so: `./sqlite.ts` pulls the codegen module in with it, and the
 // client entry point is kept clear of that. The caller constructs the store.
 import type { SqliteClientStore } from "./sqlite.ts";
@@ -42,6 +46,30 @@ export interface WorkerHostPortLike {
   removeEventListener(type: "message", listener: (event: MessageEvent<WorkerRequest>) => void): void;
 }
 
+/**
+ * What the worker needs to keep the client it holds in touch with a relay.
+ *
+ * The session has to run here for the same reason the client does: it drives `syncWith` against a
+ * `WeftClient` this thread owns, and reaches into its outbox and quarantine to say what is pending.
+ * Left on the page it would be driving a client it cannot see, and every application on OPFS would
+ * write the same side-channel to bridge the gap.
+ *
+ * `transport` is a function of the credential rather than a value, because a transport carries its
+ * token: the socket presents one when it connects, and HTTP sends one per request. Signing in as
+ * somebody else is therefore a new transport, not a mutated one.
+ */
+export interface WeftWorkerSessionOptions {
+  readonly schemaHash: SchemaHash;
+  /** Built per credential. Called again whenever the token changes. */
+  readonly transport: (token: string) => AsyncSyncTransport;
+  /** Opened and closed by the session. Also per credential, for the same reason. */
+  readonly openSocket?: (handlers: SocketHandlers, token: string) => SocketTransport;
+  readonly pollWhileLiveMs?: number;
+  readonly pollWhileBlindMs?: number;
+  readonly debounceMs?: number;
+  readonly now?: () => number;
+}
+
 export interface WeftWorkerHostOptions {
   readonly port: WorkerHostPortLike;
   /**
@@ -50,6 +78,11 @@ export interface WeftWorkerHostOptions {
    */
   readonly executor: SqlExecutor;
   readonly store: SqliteClientStore;
+  /**
+   * Left out for a device that never syncs. Without it the three session verbs are refused rather
+   * than silently accepted, so a page that expected to be syncing hears about it.
+   */
+  readonly session?: WeftWorkerSessionOptions;
 }
 
 /**
@@ -83,15 +116,28 @@ export class WeftWorkerHost {
    * on demand: see `#recorder`.
    */
   readonly #changed = new Set<string>();
+  readonly #sessionOptions: WeftWorkerSessionOptions | undefined;
   #client: WeftClient | undefined;
+  #session: WeftSession | undefined;
+  /** `start`'s teardown: stops the poll timer and closes the socket. */
+  #stopSession: (() => void) | undefined;
+  #offStatus: (() => void) | undefined;
+  #token: string | null = null;
+  #lastStatus: SessionStatus | undefined;
   #serving = true;
 
   constructor(options: WeftWorkerHostOptions) {
     this.#port = options.port;
     this.#executor = options.executor;
     this.#store = options.store;
+    this.#sessionOptions = options.session;
     this.#select = executorRowSelect(options.executor);
     this.#port.addEventListener("message", this.#onMessage);
+  }
+
+  /** The session this host is running, if it has been given a token to run one under. */
+  get session(): WeftSession | undefined {
+    return this.#session;
   }
 
   /** The client this host hydrated, or nothing if it has not been asked to hydrate one yet. */
@@ -99,9 +145,10 @@ export class WeftWorkerHost {
     return this.#client;
   }
 
-  /** Stops answering. A reply produced after this is dropped rather than posted. */
+  /** Stops answering, and stops the session with it. */
   stop(): void {
     this.#serving = false;
+    this.#endSession();
     this.#port.removeEventListener("message", this.#onMessage);
   }
 
@@ -111,15 +158,24 @@ export class WeftWorkerHost {
     // Anything without a correlation id is not a request. The page's mirror listens on this same
     // port for pushes, and in a `MessageChannel` test both halves can see each other's traffic.
     if (typeof request !== "object" || request === null || typeof request.id !== "number") return;
-    try {
-      this.#post({ id: request.id, ok: true, value: this.#handle(request) });
-    } catch (error) {
-      // A rejection crosses as text: an `Error` does not survive a structured clone with its
-      // prototype intact, and dropping it would hang the page on a request already given up on.
-      this.#post({ id: request.id, ok: false, error: error instanceof Error ? error.message : String(error) });
-    }
+    // Through a promise whether or not the handler returned one: `sync` answers when the sync it
+    // ran has finished, and a page that awaited it would otherwise be told "done" while the relay
+    // was still being talked to.
+    void Promise.resolve()
+      .then(() => this.#handle(request))
+      .then(
+        (value) => {
+          this.#post({ id: request.id, ok: true, value });
+        },
+        (error: unknown) => {
+          // A rejection crosses as text: an `Error` does not survive a structured clone with its
+          // prototype intact, and dropping it would hang the page on a request already given up on.
+          this.#post({ id: request.id, ok: false, error: error instanceof Error ? error.message : String(error) });
+        },
+      );
   };
 
+  /** Answers, or a promise of one: `sync` settles when the sync it ran has finished. */
   #handle(request: WorkerRequest): unknown {
     switch (request.type) {
       case "open":
@@ -139,14 +195,117 @@ export class WeftWorkerHost {
       case "unwatch":
         this.#unwatch(request.cacheKey);
         return null;
+      case "auth":
+        this.#auth(request.token);
+        return null;
+      case "sync":
+        return this.#requireSession().sync();
+      case "discardQuarantine":
+        this.#requireSession().discardQuarantine();
+        return null;
     }
+  }
+
+  /**
+   * Takes the credential the session runs under. A token is not applied to the running session: a
+   * socket presents its token when it connects, so the session is rebuilt around the new one and
+   * its socket reopened.
+   *
+   * Signing out ends the session and closes the socket. It does not touch the outbox: unsent work
+   * is the device's, not the session's, and a person who signs out and back in expects to find it
+   * still queued (§4.1). What it does do is publish one last status saying so, because a page whose
+   * status stream simply stopped would go on showing a live connection that has been closed.
+   */
+  #auth(token: string | null): void {
+    if (this.#sessionOptions === undefined) throw new Error("this worker was not given session options");
+    if (token === this.#token) return;
+    this.#token = token;
+    this.#endSession();
+    if (token === null) {
+      this.#postSignedOut();
+      return;
+    }
+    this.#startSession();
+  }
+
+  /** Builds and starts a session for the current token, if there is both a token and a client. */
+  #startSession(): void {
+    const options = this.#sessionOptions;
+    const token = this.#token;
+    const client = this.#client;
+    // A token can arrive before the page has asked to hydrate, and a hydrate can arrive before
+    // anyone has signed in. Whichever lands second starts the session; neither is an error.
+    if (options === undefined || token === null || client === undefined) return;
+    const openSocket = options.openSocket;
+    const session = new WeftSession({
+      client,
+      schemaHash: options.schemaHash,
+      transport: options.transport(token),
+      ...(openSocket === undefined ? {} : { openSocket: (handlers: SocketHandlers) => openSocket(handlers, token) }),
+      // A sync applies what the relay sent, so the rows it moved have to reach the page by the
+      // same path a mutation's do. Without this a device would pull a neighbour's edit and show
+      // it only when something local happened to push next.
+      onChange: () => this.#push(),
+      ...(options.pollWhileLiveMs === undefined ? {} : { pollWhileLiveMs: options.pollWhileLiveMs }),
+      ...(options.pollWhileBlindMs === undefined ? {} : { pollWhileBlindMs: options.pollWhileBlindMs }),
+      ...(options.debounceMs === undefined ? {} : { debounceMs: options.debounceMs }),
+      ...(options.now === undefined ? {} : { now: options.now }),
+    });
+    this.#session = session;
+    // The session publishes only when a status differs from the last one it published, so this is
+    // one message per real change rather than one per poll.
+    this.#offStatus = session.subscribe(() => this.#postStatus(session.status()));
+    this.#stopSession = session.start();
+    this.#postStatus(session.status());
+  }
+
+  #endSession(): void {
+    this.#offStatus?.();
+    this.#offStatus = undefined;
+    this.#stopSession?.();
+    this.#stopSession = undefined;
+    this.#session?.dispose();
+    this.#session = undefined;
+  }
+
+  #postStatus(status: SessionStatus): void {
+    this.#lastStatus = status;
+    this.#post({ push: "status", status });
+  }
+
+  /**
+   * The status of a device with no session: whatever was last true of it, with the three things
+   * that describe a live connection turned off. Synthesised rather than read, because the session
+   * that could have reported it has been stopped — and saying nothing would leave the page showing
+   * the connection it had before it signed out.
+   */
+  #postSignedOut(): void {
+    const last = this.#lastStatus;
+    if (last === undefined) return;
+    this.#postStatus({ ...last, online: false, syncing: false, live: false });
+  }
+
+  #requireSession(): WeftSession {
+    const session = this.#session;
+    if (session === undefined) {
+      throw new Error(
+        this.#sessionOptions === undefined
+          ? "this worker was not given session options"
+          : "this worker has no session: hydrate a client and set a token first",
+      );
+    }
+    return session;
   }
 
   #hydrate(scopeId: string, deviceId: string): WorkerDelta {
     const client = this.#store.hydrate(toScopeId(scopeId), toDeviceId(deviceId));
     client.persistence = this.#recorder(client.persistence);
+    // A hydrate replaces the client, and a session drives the one it was built with. Ending the
+    // old one first is what stops a poll firing against a client this host has let go of.
+    this.#endSession();
     this.#client = client;
     this.#changed.clear();
+    this.#startSession();
     // Every row this scope holds, in the one delta shape a push uses, so the page has a single
     // path for "rows arrived" and `_weft_rev` cannot be carried differently by the two.
     return this.#delta([...client.rows.keys()]);
@@ -241,6 +400,7 @@ export class WeftWorkerHost {
   }
 
   #close(): null {
+    this.#endSession();
     this.#watched.clear();
     this.#client = undefined;
     // Only if the executor has a handle to give back. `SqlExecutor` does not declare one — an

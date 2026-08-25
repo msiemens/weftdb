@@ -7,6 +7,7 @@ import { test } from "vitest";
 import fc from "fast-check";
 import {
   BroadcastDbProxy,
+  isDeltaPush,
   MultiTabCoordinator,
   OpfsWorkerTransport,
   serveBroadcastDbProxy,
@@ -569,7 +570,7 @@ test("§8.7 a tab that has lost the lock relays nothing", async () => {
     await delay(50);
 
     assert.deepEqual(
-      pushes.flatMap((push) => [...push.removed]),
+      pushes.filter(isDeltaPush).flatMap((push) => [...push.removed]),
       ["todos\0first"],
       "a tab that had given up the lock kept relaying its worker's deltas",
     );
@@ -702,6 +703,12 @@ function describe(body: WorkerRequestBody): string {
       return `watch:${body.cacheKey}`;
     case "unwatch":
       return `unwatch:${body.cacheKey}`;
+    case "auth":
+      return `auth:${body.token ?? "signed-out"}`;
+    case "sync":
+      return "sync";
+    case "discardQuarantine":
+      return "discardQuarantine";
     case "close":
       return "close";
   }

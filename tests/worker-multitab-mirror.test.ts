@@ -18,6 +18,7 @@ import { defineSchema, S } from "weftdb/schema";
 import {
   BroadcastDbProxy,
   compileOnlyKysely,
+  isDeltaPush,
   OpfsWorkerTransport,
   reactiveSqlQuery,
   serveBroadcastDbProxy,
@@ -344,8 +345,8 @@ class Tabs {
 
   /** Which statements the worker recomputed for the last push — its registry, seen from outside. */
   lastResults(): readonly string[] {
-    const last = this.#pushes.at(-1);
-    if (last === undefined || !("push" in last)) return [];
+    const last = this.#pushes.filter(isDeltaPush).at(-1);
+    if (last === undefined) return [];
     return last.results.map(([cacheKey]) => cacheKey);
   }
 

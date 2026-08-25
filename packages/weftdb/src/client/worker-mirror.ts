@@ -24,7 +24,16 @@ import {
 } from "weftdb/core";
 import { SubscriptionEngine, type ReactiveSqlQuery, type RowSelect } from "./subscriptions.ts";
 import type { LocalRow, MaterializedRow } from "./index.ts";
-import type { MirrorTransport, WireRow, WorkerDelta, WorkerMutation, WorkerPush, WorkerRequestBody } from "./worker.ts";
+import type { SessionStatus } from "./session.ts";
+import {
+  isDeltaPush,
+  type MirrorTransport,
+  type WireRow,
+  type WorkerDelta,
+  type WorkerMutation,
+  type WorkerPush,
+  type WorkerRequestBody,
+} from "./worker.ts";
 
 export interface WeftClientMirrorOptions {
   /**
@@ -66,6 +75,9 @@ export class WeftClientMirror {
   /** The ids each of those last matched, in order, as the worker last ran them. */
   readonly #results = new Map<string, readonly RowId[]>();
   readonly #offPush: () => void;
+  /** What the worker's session last said it was doing, held by identity for `useSyncExternalStore`. */
+  #status: SessionStatus | undefined;
+  readonly #statusListeners = new Set<() => void>();
 
   constructor(options: WeftClientMirrorOptions) {
     this.scopeId = options.scopeId;
@@ -182,6 +194,51 @@ export class WeftClientMirror {
   }
 
   /**
+   * Hands the worker the credential its session runs under, or `null` to sign out.
+   *
+   * The page keeps the token, because the page is where it can be got: a worker has no
+   * `localStorage` and no redirect to read one out of. What it does not keep is the session, so
+   * this is the whole of the arrangement rather than a side-channel beside it.
+   *
+   * Signing out leaves unsent work queued. The device still holds it, and signing back in pushes
+   * it (§4.1); dropping it is `discardQuarantine`, which is a different decision made deliberately.
+   */
+  setToken(token: string | null): void {
+    this.#send({ type: "auth", token });
+  }
+
+  /**
+   * Syncs now rather than at the next poll. Resolves when that sync has finished, so a pull-to-
+   * refresh can stop spinning at the right moment; a failure to reach the relay is an ordinary
+   * state and settles the status rather than rejecting here.
+   */
+  async sync(): Promise<void> {
+    await this.#transport.request({ type: "sync" });
+  }
+
+  /** Drops this device's diverged work and re-derives its rows from the relay (§5.5). */
+  discardQuarantine(): void {
+    this.#send({ type: "discardQuarantine" });
+  }
+
+  /**
+   * What the worker's session last reported, or nothing before it has reported anything — which is
+   * the state of a device that has not signed in yet, not an error. The object is the one the
+   * worker sent and is replaced only when a new push arrives, so `useSyncExternalStore` can compare
+   * it by identity.
+   */
+  status(): SessionStatus | undefined {
+    return this.#status;
+  }
+
+  subscribeStatus(listener: () => void): () => void {
+    this.#statusListeners.add(listener);
+    return () => {
+      this.#statusListeners.delete(listener);
+    };
+  }
+
+  /**
    * Stops applying pushes. The transport is left alone: the caller made it — a leader tab is still
    * relaying its worker's pushes to the follower tabs over the same one — so tearing it down here
    * would take the tab's channel with the mirror.
@@ -219,6 +276,14 @@ export class WeftClientMirror {
   }
 
   readonly #onPush = (push: WorkerPush): void => {
+    if (!isDeltaPush(push)) {
+      // Status listeners rather than the engine's: nothing about a row moved, and waking every
+      // subscribed query so a connection indicator could change colour would re-scan every list
+      // on this page each time the relay was polled.
+      this.#status = push.status;
+      for (const listener of [...this.#statusListeners]) listener();
+      return;
+    }
     this.#applyDelta(push);
     this.engine.notify();
   };

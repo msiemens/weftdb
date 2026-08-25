@@ -950,16 +950,18 @@ export { AuthorizerDependencyRecorder, compileQuery, dependency, invalidatesQuer
 export type { CompiledQuery, QueryBuilderLike, QueryDependency, RegisteredQuery } from "./query.ts";
 export { compileOnlyKysely } from "./kysely.ts";
 export type { ScopedRowQuery } from "./kysely.ts";
-export { isWorkerPush, OpfsWorkerTransport, withRequestId } from "./worker.ts";
+export { isDeltaPush, isWorkerPush, OpfsWorkerTransport, withRequestId } from "./worker.ts";
 export type {
   MirrorTransport,
   WireRow,
   WorkerDelta,
+  WorkerDeltaPush,
   WorkerLike,
   WorkerMessage,
   WorkerMutation,
   WorkerPush,
   WorkerPushHandler,
+  WorkerStatusPush,
   WorkerRequest,
   WorkerRequestBody,
   WorkerResponse,
