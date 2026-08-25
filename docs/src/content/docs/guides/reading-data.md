@@ -1,14 +1,99 @@
 ---
 title: Reading data
-description: Generated query helpers, the Database and InternalDatabase interfaces, relations, nested records, and the worker boundary.
+description: Query builders, query keys, generated decoders, the Database and InternalDatabase interfaces, relations, and nested records.
 sidebar:
   order: 3
 ---
 
-Application code reads through the functions `weft generate` writes for each collection, never
-through SQL composed by hand. For the `tasks` collection from the quick start, that means a
-generated query key, a decoder, and a React hook. Against the client directly, it means
-`WeftClient.getRow` and `WeftClient.listRows`.
+Application code reads through the functions `weft generate` writes for each collection. A
+component reads a whole collection with `use<Collection>`, or part of one with
+`use<Collection>Query`, which takes a query builder and does the filtering, ordering, and paging
+in the database. Against the client directly, reading means `WeftClient.getRow` and
+`WeftClient.listRows`.
+
+## Filtering, ordering, and paging
+
+`use<Collection>Query` takes a callback and hands it a statement over that collection. Chain
+`where`, `orderBy`, `limit`, and `offset` onto it:
+
+```tsx
+import { useTodosQuery } from "./generated/bindings.ts";
+import type { WeftSqlSource } from "./generated/bindings.ts";
+
+export function OpenTodos({ source }: { source: WeftSqlSource }) {
+  const todos = useTodosQuery(source, (todos) => todos.where("done", "=", false).orderBy("rank").limit(20));
+  return (
+    <ul>
+      {todos.map((todo) => (
+        <li key={todo.id}>{todo.title}</li>
+      ))}
+    </ul>
+  );
+}
+```
+
+The statement is typed against the generated `Database`, so a predicate naming a field the schema
+does not declare, or comparing one against the wrong type, does not compile.
+
+The statement arrives already selecting `id` and already constraining `scope_id`, and a callback
+can only add to it. Scoping is not the caller's to remember: one database file holds every scope a
+person is signed into, and a row id is unique only within its collection, so an unscoped statement
+can match another scope's row and hand it back under this scope's id.
+
+`use<Collection>Query` re-renders when the rows it selected change, on the same terms as every
+other generated hook. The statement decides which rows and in what order; the rows themselves come
+from the client's in-memory map, so a row that did not change is the same object it was and
+`React.memo` still skips it. The statement runs once per change rather than once per render.
+
+`WeftSqlSource` is the client's engine and row map, the scope the statements are confined to, and
+`select`, which answers which rows a statement matched: `{ engine, rows, select, scopeId }`.
+
+`select` is a function rather than a database because the database is not always on the thread
+that renders. On a device holding it there, `executorRowSelect(executor)` runs the statement. On a
+device holding it in a worker, a `WeftClientMirror` reads the ids that worker last pushed and
+satisfies `WeftSqlSource` on its own. Both answer synchronously, which is what a snapshot read
+during render requires, and a component sees neither.
+
+:::note
+A browser reaches SQLite through a worker, because the only synchronous handle exists inside one.
+[Storage on the device](/guides/device-storage/) covers the worker and the mirror that carries its
+rows to the page.
+:::
+
+## Reading a whole collection
+
+`use<Collection>` returns every row of a collection, ordered by one field:
+
+```tsx
+const todos = useTodos(source, "rank");
+```
+
+What it asks for is a `QueryKey`: one collection, the fields a row must carry, and at most one
+field to order by.
+
+```ts
+import type { FieldName, TableName } from "weftdb/core";
+
+export interface QueryKey {
+  readonly tableName: TableName;
+  readonly fields: readonly FieldName[];
+  readonly orderBy?: FieldName;
+}
+```
+
+A query key has no other members. There is no `where`, no `limit`, and no `offset`, and `orderBy`
+names one field rather than a list. The engine scans the client's row map, keeps the rows of the
+named collection that carry every listed field, and sorts them by `orderBy` ascending with `id` as
+the tiebreak. Values are compared as text, so a number field orders lexicographically.
+
+Use `use<Collection>` for a collection a device holds all of, and `use<Collection>Query` when the
+answer is a part of one, is ordered by more than one field, or is a page. The query key path reads
+the row map alone, so it is also the path that works on a device with no SQL database, such as one
+storing through `WebStorageClientStore`.
+
+The generated helper `todosQuery(orderBy)` builds the key, and `queryKey(schema, table, options)`
+builds one for a query an application assembles itself. Both validate names against the schema and
+throw on a collection or field it does not declare.
 
 ## Reading a row
 
@@ -52,14 +137,13 @@ export function decodeTodos(row: MaterializedRow): TodosRow {
 
 A query key and its decoder are paired by a `TypedQueryKey<Row>`, so passing the query key for one
 collection to the decoder for another is a compile error rather than a row that reads back wrong.
-The generated hook, `useTodos`, wraps both behind `useWeftRows`; [React](/guides/react/) covers how
-a component subscribes to one and re-renders when it changes.
+[React](/guides/react/) covers how a component subscribes and re-renders when a result changes.
 
 ## The generated interfaces
 
 Alongside the decoders, `weft generate` writes `Database` and `InternalDatabase` from the schema.
-`Database` lists only the fields a collection declares, and it is the interface a decoded row
-satisfies:
+`Database` lists only the fields a collection declares. It is the interface a decoded row
+satisfies, and the one a query builder's statement is typed against:
 
 ```ts title="src/generated/database.d.ts"
 export interface Database {
@@ -78,36 +162,17 @@ export interface Database {
 }
 ```
 
+A declared field is stored in a column of its own, as the type it declares: a number as a number, a
+boolean as 1 or 0, a string, date, or enum as itself. That is what lets a statement compiled
+against `Database` match the rows the store wrote.
+
 `InternalDatabase` adds every column the sync engine reads and writes: a clock reading per
 mergeable field (`_weft_hlc_title`), the diff3 ancestor for a field merged that way
-(`_weft_base_notes`), and the revision and dirty counters (`_weft_rev`, `_weft_dirty`). Application
-code never sees `InternalDatabase`. A decoded row is typed against `Database` alone, so none of
-those columns can appear in an editor's autocomplete for it.
-
-## Crossing the worker boundary
-
-Building a query and running it are two separate steps. A query builder's `compile()` method runs
-on the calling thread and yields a `CompiledQuery`. The compiled query is what crosses a worker
-boundary:
-
-```ts
-import type { WireValue } from "weftdb/core";
-
-export interface CompiledQuery {
-  readonly sql: string;
-  readonly parameters: readonly WireValue[];
-}
-
-export function queryCacheKey(query: CompiledQuery): string {
-  return JSON.stringify({ sql: query.sql, parameters: query.parameters });
-}
-```
-
-`OpfsWorkerTransport` sends a `CompiledQuery` over `postMessage` and returns its result the same
-way, so nothing but the compiled statement and its parameters leaves the calling thread. The same
-pair is also the subscription's identity: `queryCacheKey` derives a cache key from `sql` and
-`parameters` together, so two builders that compile to the same statement share one cached result
-and one set of subscribers.
+(`_weft_base_notes`), the revision and dirty counters (`_weft_rev`, `_weft_dirty`), and
+`_weft_null_fields`, which records the fields a row holds as null so that a field written as null
+stays distinct from one never written. Application code never sees `InternalDatabase`. A decoded
+row is typed against `Database` alone, so none of those columns can appear in an editor's
+autocomplete for it.
 
 ## Relations
 
@@ -127,10 +192,9 @@ export const schema = defineSchema({
 
 `weft generate` writes one helper per declared relationship, named
 `<collection>_<relationship>Relation`, returning the source table, the target table, both fields,
-and whether the relationship is one row or many. Fetching a collection together with its relation
-is one round trip. Joining two separately subscribed collections in application code is not
-offered, because it would double the paths that have to be invalidated whenever either side
-changes.
+and whether the relationship is one row or many. The helper returns that description and performs
+no read. Resolve a relationship by reading the target collection with a statement that matches
+`foreignField` against the ids the source rows carry.
 
 ## Nested records
 
@@ -153,7 +217,8 @@ export const schema = defineSchema({
 reassembles the paths before a decoder reads the result. Merge state stays attached to the flat
 column underneath, under the same [merge model](/concepts/merge-model/) that governs every other
 field, so two devices changing `sort_order` and `column_width` in the same record do not conflict
-with each other. A query's filters still name the flat column; only what a read returns is nested.
+with each other. A statement names the flat column, because that is the column the table has. Only
+what a read returns is nested.
 
 [Writing data](/guides/writing-data/) covers the other half of a generated collection: the
 mutators that write the rows a query reads back.
