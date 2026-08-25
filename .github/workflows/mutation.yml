@@ -6,56 +6,39 @@ on:
   workflow_dispatch:
     inputs:
       target:
-        description: "One source file to mutate. Leave empty to sweep every target in stryker.config.json."
+        description: "One source file to mutate, or empty to sweep all of them."
         required: false
         default: ""
-      concurrency:
-        description: "Stryker workers per job. A public runner has 4 vCPU; more than 2 oversubscribes and turns slow mutants into false timeouts."
+      workers:
+        description: "Stryker workers per job. A runner has 4 vCPU; more than 2 oversubscribes and turns slow mutants into false timeouts."
         required: false
         default: "2"
 
 jobs:
   # One job per source file, because a job is capped at six hours and the whole sweep is not.
-  # The list comes from stryker.config.json so the workflow and a local run cannot disagree
-  # about what the targets are.
-  plan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      matrix: ${{ steps.targets.outputs.matrix }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - id: targets
-        env:
-          TARGET: ${{ inputs.target }}
-        run: |
-          node --input-type=module -e '
-            import { appendFileSync, readFileSync } from "node:fs";
-            const { mutate } = JSON.parse(readFileSync("stryker.config.json", "utf8"));
-            const requested = process.env.TARGET?.trim();
-            if (requested && !mutate.includes(requested)) {
-              throw new Error(`${requested} is not one of the targets in stryker.config.json`);
-            }
-            const include = (requested ? [requested] : mutate).map((file) => ({
-              file,
-              // Artifact names have to be unique and cannot hold a slash.
-              name: file.replace(/^packages\/weftdb\/src\//u, "").replace(/[/.]/gu, "-"),
-            }));
-            appendFileSync(process.env.GITHUB_OUTPUT, `matrix=${JSON.stringify({ include })}\n`);
-          '
-
+  # An empty `target` runs the whole matrix; naming one file runs that entry alone.
   mutate:
-    needs: plan
     runs-on: ubuntu-latest
-    # Under the six-hour ceiling on a GitHub-hosted runner, with room to report before the cap.
     timeout-minutes: 330
     strategy:
       # One target failing is not a reason to abandon the rest: each file's score stands alone.
       fail-fast: false
-      matrix: ${{ fromJson(needs.plan.outputs.matrix) }}
-
-    name: ${{ matrix.name }}
+      matrix:
+        target:
+          - packages/weftdb/src/core.ts
+          - packages/weftdb/src/client/index.ts
+          - packages/weftdb/src/server/index.ts
+          - packages/weftdb/src/schema.ts
+          - packages/weftdb/src/codegen/index.ts
+          - packages/weftdb/src/client/sqlite.ts
+          - packages/weftdb/src/client/subscriptions.ts
+          - packages/weftdb/src/client/multitab.ts
+          - packages/weftdb/src/server/relay.ts
+          - packages/weftdb/src/server/serve.ts
+          - packages/weftdb/src/server/jwt.ts
+          - packages/weftdb/src/server/snapshot.ts
+          - packages/weftdb/src/server/websocket.ts
+          - packages/weftdb/src/server/websocket-frames.ts
 
     steps:
       - uses: actions/checkout@v4
@@ -69,21 +52,21 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # Through the environment rather than interpolated into the command: `concurrency` is
-      # whatever the person who pressed the button typed, and `${{ }}` would hand it to the shell.
-      - name: Mutate ${{ matrix.file }}
+      # Through the environment rather than interpolated into the command: `workers` is whatever
+      # the person who pressed the button typed, and `${{ }}` would hand it to the shell.
+      - name: Mutate ${{ matrix.target }}
+        if: ${{ inputs.target == '' || inputs.target == matrix.target }}
         env:
-          TARGET: ${{ matrix.file }}
-          WORKERS: ${{ inputs.concurrency }}
+          TARGET: ${{ matrix.target }}
+          WORKERS: ${{ inputs.workers }}
         run: pnpm exec stryker run --mutate "$TARGET" --concurrency "$WORKERS" --reporters html,clear-text
 
-      # Uploaded even when the run failed or the score fell short: the report is the thing worth
-      # reading in either case.
+      # Uploaded even when the run failed: the report is the thing worth reading either way.
       - name: Upload report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && (inputs.target == '' || inputs.target == matrix.target) }}
         uses: actions/upload-artifact@v4
         with:
-          name: mutation-${{ matrix.name }}
+          name: mutation-${{ strategy.job-index }}
           path: reports/mutation
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: ignore
