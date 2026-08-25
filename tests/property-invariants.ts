@@ -38,6 +38,11 @@ import {
 
 const BASE_FIELD_NAMES = ["id", "scope_id", "created"];
 
+/** What makes two ops the same write, for telling a moved op from a copied one. */
+function opIdentity(op: WeftOp): string {
+  return [op.txnId, op.tableName, op.rowId, op.kind, op.kind === "set" ? op.field : ""].join("\0");
+}
+
 /**
  * Where this device's most recent skew correction sits in its emission history. Stamps emitted
  * before it belong to the baseline the correction replaced.
@@ -344,6 +349,24 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
           if (trackingKey.startsWith(`${device.client.deviceId}\0`) && !seen.has(trackingKey)) {
             world.trace.revHighWater.delete(trackingKey);
           }
+        }
+      }
+    },
+  },
+  {
+    id: "§5.5.move",
+    title: "quarantining work moves it out of the outbox rather than copying it",
+    check: (world) => {
+      // An op left in both is pushed again on the next flush, and quarantined work is never
+      // retried without the person asking for it.
+      for (const device of [...world.devices, world.neighbour]) {
+        const queued = new Set(device.client.outbox.map(opIdentity));
+        for (const op of device.client.quarantine) {
+          assert.equal(
+            queued.has(opIdentity(op)),
+            false,
+            `${device.client.deviceId} holds ${opIdentity(op)} in the outbox and in quarantine at once`,
+          );
         }
       }
     },
