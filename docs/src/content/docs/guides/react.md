@@ -156,9 +156,16 @@ on drop. Otherwise a remote reorder could resort the row out from under the poin
 ## Running across multiple tabs
 
 An on-device database opened through the WebAssembly SQLite executor holds one OPFS synchronous
-access handle, open in one tab at a time. `MultiTabCoordinator.elect()` resolves that with a Web
-Lock: the tab that acquires it becomes `leader`, and every other tab becomes `follower`. A tab in a
-browser without Web Locks is `degraded`, and so is a leader after it calls `close()`.
+access handle, open in one tab at a time. `openWeftDatabase` settles that for an application:
+it elects the tab, builds whichever half the tab needs, and reports which one it got as `role`.
+Read that to show a banner, rather than a request that a follower may be waiting on
+([Storage on the device](/guides/device-storage/)).
+
+The rest of this section is what it does, for an application assembling the pieces itself.
+
+`MultiTabCoordinator.elect()` resolves the exclusivity with a Web Lock: the tab that acquires it
+becomes `leader`, and every other tab becomes `follower`. A tab in a browser without Web Locks is
+`degraded`, and so is a leader after it calls `close()`.
 
 A Web Lock is held for exactly as long as the callback's promise is pending, so the leader's
 callback returns one that stays pending until `close()`. A callback that returned straight away

@@ -94,6 +94,26 @@ The whole `WeftClient` therefore runs in the worker, next to the database it wri
 posts back the rows that moved. It knows nothing about OPFS, so the same host runs against any
 `SqlExecutor`.
 
+The worker module is `serveWeftWorkerDefaults` and the schema:
+
+```ts title="src/storage-worker.ts"
+import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
+import { serveWeftWorkerDefaults } from "weftdb/client/worker-entry";
+import { schema } from "./schema.ts";
+
+serveWeftWorkerDefaults({
+  schema,
+  sqlite3InitModule,
+  relay: { baseUrl: "/api/db", socketUrl: "/api/db/sync" },
+});
+```
+
+It opens the OPFS executor, builds the store, installs the schema, serves the protocol, and tells
+the page whether the database opened. A browser with no access handle pool is reported rather than
+thrown, so the page can fail the open with the reason rather than a stack from a worker.
+
+The same worker assembled by hand, for an application that needs a piece of it:
+
 ```ts title="src/storage-worker.ts"
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import { openWebSqliteExecutor } from "weftdb/client/wasm-sqlite";
@@ -129,11 +149,52 @@ that failure visible immediately, instead of after the data is already gone.
 `openMemorySqliteExecutor` opens an explicit in-memory database for tests, but nothing falls
 back to it on its own.
 
-## Reading and writing from the page
+## Opening a database
 
-`OpfsWorkerTransport` wraps the `Worker` and correlates each request with its reply.
-`WeftClientMirror` holds the rows the worker last said the scope contains, applies every delta the
-worker pushes, and wakes the subscriptions that read them.
+`openWeftDatabase` is the whole of what a page does. It elects this tab, opens the worker or reaches
+the tab that holds it, mints and stores a device id, builds the mirror, hydrates it, and hands back
+what the generated code reads and writes through:
+
+```ts title="src/store.ts"
+import { openWeftDatabase } from "weftdb/client";
+import { schema } from "./schema.ts";
+import { todosMutators } from "./generated/bindings.ts";
+
+export const weft = await openWeftDatabase({
+  schema,
+  scopeId: "user-1",
+  worker: new URL("./storage-worker.ts", import.meta.url),
+  relay: { token: () => localStorage.getItem("token") },
+  onError: (error) => {
+    console.error(error);
+  },
+});
+
+export const todos = todosMutators(weft.source);
+```
+
+`weft.source` is a `WeftSource`, so `use<Collection>` and `use<Collection>Query` take it unchanged,
+and it is a `MutationTarget`, so `<collection>Mutators` writes through it. `weft.role` is `leader`
+or `follower`; drive a banner from it rather than from a request that may not come back.
+`weft.status()` and `weft.subscribeStatus()` report the worker's sync session, `weft.setToken()`
+hands over a credential or signs out, and `weft.dispose()` unwinds everything in the order it was
+built.
+
+The relay's address is not among the options. The worker builds the transport, so the base URL
+belongs there; the token is the exception, because a worker has no `localStorage` to read one from.
+It is a function so that re-reading it is how a refreshed credential reaches the session, which is
+what `setToken()` with no argument does.
+
+A device whose browser has no synchronous access handle pool fails to open. `WeftOpenError` carries
+a `reason` naming which condition it was, and Safari's private browsing mode is the one that
+matters. Nothing is left running behind a failed open.
+
+## Assembling the same thing by hand
+
+`openWeftDatabase` is built from parts that stay public, for an application that needs a piece of
+this it cannot express through the front door. `OpfsWorkerTransport` wraps the `Worker` and
+correlates each request with its reply. `WeftClientMirror` holds the rows the worker last said the
+scope contains, applies every delta the worker pushes, and wakes the subscriptions that read them:
 
 ```ts title="src/store.ts"
 import { OpfsWorkerTransport, WeftClientMirror } from "weftdb/client";
@@ -156,6 +217,11 @@ await mirror.hydrate();
 
 export const todos = todosMutators(mirror);
 ```
+
+What the front door does that this does not: a mirror needs a `SubscriptionEngine` of its own, or
+two of them evict each other's cached rows on every render; a second tab reaches the worker only
+through the arrangement below; and the teardown has an order, because the Web Lock has to be handed
+back after the worker has released the access handle.
 
 `hydrate()` loads the scope's rows out of the worker and resolves once they are on the page. It is
 the one round trip that grows with the data: hydrating 10,000 rows takes 361 ms in Firefox over
@@ -252,7 +318,9 @@ const status = useSyncExternalStore(
 ## Reaching the worker from another tab
 
 One tab at a time may hold the OPFS access handle, so one tab at a time may hold the worker.
-[Using weftdb with React](/guides/react/) covers the election that decides which tab that is.
+`openWeftDatabase` elects the tab, names the channel from the scope, and builds whichever half this
+tab needs, so an application that opens through it writes none of what follows.
+[Using weftdb with React](/guides/react/) covers the election itself.
 
 A follower tab reaches the leader's worker over a `BroadcastChannel`. `BroadcastDbProxy` satisfies
 the same transport interface `OpfsWorkerTransport` does, so a follower's mirror is built the same
@@ -273,6 +341,9 @@ export const mirror = new WeftClientMirror({
 
 await mirror.hydrate();
 ```
+
+Both halves take the same channel name, and `databaseChannelName(scopeId)` is what
+`openWeftDatabase` derives it with.
 
 The leader relays its worker's deltas onto the same channel, or a follower's mirror answers the
 first hydrate and then never moves again:
