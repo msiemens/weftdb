@@ -19,6 +19,14 @@ import { demoToken } from "./auth.ts";
 /** Namespaces every key these demos write, so nothing collides with the host page. */
 const NAMESPACE = "weftdb-demo";
 
+/**
+ * What every key a demo writes begins with. `reset.ts` clears a demo by this prefix and names its
+ * databases from it, so a key written outside it survives a reset the visitor asked for.
+ */
+export function demoKeyPrefix(demo: string): string {
+  return `${NAMESPACE}/${demo}/`;
+}
+
 export interface TabIdentity {
   readonly scopeId: ScopeId;
   readonly deviceId: DeviceId;
@@ -43,8 +51,8 @@ export interface TabIdentityOptions {
 
 export function tabIdentity(session: StorageLike, local: StorageLike, options: TabIdentityOptions): TabIdentity {
   const scope = options.scope ?? visitorScope(local, options.demo);
-  const deviceKey = `${NAMESPACE}/${options.demo}/device`;
-  const counterKey = `${NAMESPACE}/${options.demo}/tab-counter`;
+  const deviceKey = `${demoKeyPrefix(options.demo)}device`;
+  const counterKey = `${demoKeyPrefix(options.demo)}tab-counter`;
 
   const existing = session.getItem(deviceKey);
   if (existing !== null) {
@@ -73,7 +81,7 @@ export function tabIdentity(session: StorageLike, local: StorageLike, options: T
  * belongs on loopback or behind something that knows who is asking.
  */
 function visitorScope(local: StorageLike, demo: string): ScopeId {
-  const key = `${NAMESPACE}/${demo}/scope`;
+  const key = `${demoKeyPrefix(demo)}scope`;
   const existing = local.getItem(key);
   if (existing !== null && existing !== "") return scopeId(existing);
   const id = `${demo}-${randomToken(4)}`;

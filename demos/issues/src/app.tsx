@@ -17,6 +17,7 @@ import {
 } from "react";
 import { Diff3EditorBuffer } from "weftdb/client";
 import { fieldName, hasConflictMarkers, rowId as toRowId, tableName, type TableName } from "weftdb/core";
+import { resetDemoData, watchDemoReset } from "weftdb-demo-shared/reset";
 import {
   issues_commentsRelation,
   issues_projectRelation,
@@ -37,6 +38,7 @@ import {
   type Status,
   type StoreStatus,
 } from "./store.ts";
+import { DEMO } from "./scope.ts";
 
 /**
  * Every join the page makes, built once per render from the rows the hooks return.
@@ -630,6 +632,54 @@ function CommentComposer({ store, issue }: { readonly store: IssueStore; readonl
 }
 
 /**
+ * Clearing the demo, behind a second click.
+ *
+ * There is no undo, and this sits beside a button people press to read something, so the
+ * confirmation is the label: a first click arms it and a second carries it out. Arming lapses,
+ * which is what keeps a click made and forgotten from arming the click after it.
+ *
+ * A reset in another tab retires the scope this one is on, so this is also where a tab hears that
+ * and reloads onto the new one.
+ */
+function ResetData(): ReactNode {
+  const [armed, setArmed] = useState(false);
+
+  useEffect(() => watchDemoReset(DEMO, () => window.location.reload()), []);
+
+  useEffect(() => {
+    if (!armed) return undefined;
+    const timer = setTimeout(() => setArmed(false), RESET_ARM_MS);
+    return () => clearTimeout(timer);
+  }, [armed]);
+
+  return (
+    <button
+      type="button"
+      className="reset"
+      data-armed={armed ? "" : undefined}
+      aria-label={armed ? "Confirm resetting this demo's data" : "Reset this demo's data"}
+      onClick={() => {
+        if (!armed) {
+          setArmed(true);
+          return;
+        }
+        void resetDemoData({
+          demo: DEMO,
+          local: window.localStorage,
+          session: window.sessionStorage,
+          databases: window.indexedDB,
+        });
+      }}
+    >
+      {armed ? "Really reset?" : "Reset data"}
+    </button>
+  );
+}
+
+/** How long a click stays armed before the reset has to be asked for again. */
+const RESET_ARM_MS = 4000;
+
+/**
  * The guide is a modal rather than a panel: it is read once, at the start, and then it is in the
  * way of the thing it is describing.
  */
@@ -644,6 +694,7 @@ function Guide(): ReactNode {
         <button type="button" onClick={modal.open}>
           Things worth trying
         </button>
+        <ResetData />
       </footer>
       {/* A sibling of the trigger, not a child of it: nesting the dialog inside the trigger's
           wrapper let `.guide-open button` reach the dialog's own button and repaint it. */}

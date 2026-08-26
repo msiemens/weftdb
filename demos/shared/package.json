@@ -17,6 +17,7 @@
     "./open": "./src/open.ts",
     "./port-transport": "./src/port-transport.ts",
     "./relay-worker": "./src/relay-worker.ts",
+    "./reset": "./src/reset.ts",
     "./relay-worker-entry": "./src/relay-worker-entry.ts",
     "./storage-worker": "./src/storage-worker.ts",
     "./dev": "./src/dev.ts",

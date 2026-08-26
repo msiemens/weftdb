@@ -578,6 +578,25 @@ button.danger {
 .guide-open {
   display: flex;
   justify-content: center;
+  gap: 10px;
+}
+
+/*
+ * Quiet until it is armed. This one clears the demo, and it sits beside a button people press to
+ * read something, so it carries the weight of what it does only once it has been asked for.
+ */
+.guide-open > button.reset {
+  --btn-fg: var(--ink-3);
+  --btn-border: var(--rule);
+  --btn-fg-hover: var(--bad);
+  --btn-bg-hover: var(--bad-wash);
+  --btn-border-hover: color-mix(in srgb, var(--bad) 35%, transparent);
+}
+
+.guide-open > button.reset[data-armed] {
+  --btn-fg: var(--bad);
+  --btn-border: color-mix(in srgb, var(--bad) 45%, transparent);
+  --btn-bg: var(--bad-wash);
 }
 
 /*
