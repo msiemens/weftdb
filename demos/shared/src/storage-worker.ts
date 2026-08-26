@@ -2,31 +2,29 @@
 //
 // A demo's own worker module is two lines — its schema, its SQLite build — because everything
 // interesting here is the same for all three. What that is: this worker's relay is not at a URL.
-// It is a `WeftServer` in a `SharedWorker` of the same browser (`relay-worker.ts`), reachable only
-// over a `MessagePort`, and the page is the only side that can construct a `SharedWorker` and get
-// one. So the port is handed in from the page, transferred into this worker in the same breath as
-// the worker is constructed, and turned into the transport `serveWeftWorkerDefaults` runs its
-// session over.
+// It is a `WeftServer` in a second `SharedWorker` of the same browser (`relay-worker.ts`), reachable
+// only over a `MessagePort`, and the page is the only side that can construct a `SharedWorker` and
+// get one. So the port is transferred in from the page over its own connection to this worker, and
+// turned into the transport the sync session runs over.
 //
-// Two messages arrive here that are not part of the worker protocol, and both are tagged so that
-// `serveWeftWorker`'s own listener on this same global drops them: the relay port, once, before
-// anything else; and the demo's online switch, whenever somebody clicks it. The switch is here
-// rather than on the page because the session is here — cutting the line where the calls are made
-// is what makes an offline tab an offline *device*, with its work piling up in the outbox exactly
-// as it would with the network gone.
+// Two messages arrive on each connecting port that are not part of the worker protocol, and both are
+// tagged so that `WeftStorageWorker`'s own listener drops them: the relay port, from whichever tab
+// connects first; and the demo's online switch, whenever somebody clicks it. The switch is here
+// rather than on the page because the session is here — cutting the line where the calls are made is
+// what makes an offline tab an offline *device*, with its work piling up in the outbox exactly as it
+// would with the network gone.
 import type { ScopeId, WeftOp } from "weftdb/core";
 import type { SchemaDefinition } from "weftdb/schema";
 import type { HandshakeRequest, HandshakeResponse, PullBatch, PushOutcome, Snapshot } from "weftdb/server";
 import type { AsyncSyncTransport, SocketHandlers, SocketTransport, WorkerHostPortLike } from "weftdb/client";
-import type { Sqlite3Module } from "weftdb/client/wasm-sqlite";
-import { serveWeftWorkerDefaults } from "weftdb/client/worker-entry";
+import type { WaSqliteBuild } from "weftdb/client/wasm-sqlite";
+import { serveWeftStorageWorker, type WeftStorageWorker } from "weftdb/client/worker-entry";
 import { RelayPortTransport, type RelayPortLike } from "./port-transport.ts";
 
 /**
- * The page handing this worker its line to the relay. Sent exactly once, immediately after the
- * worker is constructed and before anything else is said to it, so this module can wait for it
- * rather than guess how long to listen. A `port` of `undefined` is a browser with no `SharedWorker`
- * to run a relay in: the database is served all the same, with no session at all.
+ * A tab handing this worker its line to the relay. Sent on the tab's own connection port, before
+ * anything else on it. A `port` of `undefined` is a browser with no `SharedWorker` to run a relay
+ * in: the database is served all the same, with no session at all.
  */
 export const DEMO_RELAY_MESSAGE = "weft-demo-relay";
 
@@ -43,81 +41,57 @@ export interface DemoOnlineMessage {
   readonly online: boolean;
 }
 
-/** The worker's own global, as much of it as this module uses. */
-export interface DemoWorkerScope {
-  addEventListener(type: "message", listener: (event: MessageEvent<unknown>) => void): void;
-  removeEventListener(type: "message", listener: (event: MessageEvent<unknown>) => void): void;
-}
-
 export interface DemoStorageWorkerOptions {
   readonly schema: SchemaDefinition;
-  /** The `@sqlite.org/sqlite-wasm` default export, uncalled. */
-  readonly sqlite3InitModule: () => Promise<Sqlite3Module>;
-  /**
-   * The global to listen on for the two messages above, and the port to serve the worker protocol
-   * on. Both default to the worker's own global, which is what a real worker wants and what makes
-   * them one thing; a test drives the shipped module over a `MessageChannel` by passing the far end
-   * as each.
-   */
-  readonly scope?: DemoWorkerScope;
-  readonly port?: WorkerHostPortLike;
+  /** This demo's wa-sqlite build, uninitialised. */
+  readonly sqlite: () => Promise<WaSqliteBuild>;
   /** How long a blind device waits between polls. Short, because a relay in this browser is near. */
   readonly pollWhileBlindMs?: number;
 }
 
+/** A demo's storage worker: the library's, plus the line to the relay and the switch on it. */
+export interface DemoStorageWorker {
+  /** Serves one arriving port, and reads the two demo messages off it. */
+  connect(port: WorkerHostPortLike): void;
+  /** Every database this worker has open, by key. For a test to read. */
+  readonly serving: readonly string[];
+  stop(): Promise<void>;
+}
+
 /**
- * Waits for the page's relay port, then opens this device's database and serves it.
+ * Serves every database this demo's origin opens, over a relay handed in on the first port.
  *
- * The listener is attached before the first `await`, which is what makes the wait raceless: a
- * dedicated worker queues what the page posted while its module was still evaluating, and delivers
- * it only once evaluation has finished.
+ * The line exists before the port does, and reports itself unreachable until one arrives, so a
+ * session started by a tab that signed in before the relay was transferred is a device that is
+ * offline for a moment rather than one with no session at all.
  */
-export async function serveDemoStorageWorker(options: DemoStorageWorkerOptions): Promise<void> {
-  const scope: DemoWorkerScope = options.scope ?? (globalThis as Partial<DemoWorkerScope> as DemoWorkerScope);
-  // The switch, and the line it is on once there is one. Kept as a value rather than acted on
-  // straight away, so a toggle that arrives before the port does — or before the module has
-  // finished opening a database — is still the state the line comes up in. It also outlives every
-  // session the worker builds: a token change rebuilds the session around the same line, and a page
-  // that had gone offline must not come back online by signing in again.
-  const state: { online: boolean; line: DemoRelayLine | undefined } = { online: true, line: undefined };
-  let arrived: (port: RelayPortLike | undefined) => void = () => undefined;
-  const arrival = new Promise<RelayPortLike | undefined>((resolve) => {
-    arrived = resolve;
-  });
-
-  scope.addEventListener("message", (event) => {
-    const message: unknown = event.data;
-    if (isRelayMessage(message)) arrived(message.port);
-    else if (isOnlineMessage(message)) {
-      state.online = message.online;
-      state.line?.setOnline(message.online);
-    }
-  });
-
-  const port = await arrival;
-  const served = {
+export function serveDemoStorageWorker(options: DemoStorageWorkerOptions): DemoStorageWorker {
+  const line = new DemoRelayLine();
+  const worker: WeftStorageWorker = serveWeftStorageWorker({
     schema: options.schema,
-    sqlite3InitModule: options.sqlite3InitModule,
-    ...(options.port === undefined ? {} : { port: options.port }),
-  };
-  if (port === undefined) {
-    // No relay in this browser, and therefore no session. Everything else works: the database
-    // opens, statements answer, and writes queue in the outbox for a device that never syncs.
-    await serveWeftWorkerDefaults(served);
-    return;
-  }
-
-  const opened = new DemoRelayLine(port);
-  opened.setOnline(state.online);
-  state.line = opened;
-  await serveWeftWorkerDefaults({
-    ...served,
+    sqlite: options.sqlite,
     relay: {
-      transport: () => opened,
-      openSocket: (handlers: SocketHandlers) => opened.listen(handlers.onWake),
+      transport: () => line,
+      openSocket: (handlers: SocketHandlers) => line.listen(handlers.onWake),
       pollWhileBlindMs: options.pollWhileBlindMs ?? 1_000,
     },
   });
+  return {
+    get serving() {
+      return worker.serving;
+    },
+    connect: (port) => {
+      // Attached before the library's, so this listener sees the demo's own messages on a port the
+      // library is about to take over reading.
+      port.addEventListener("message", (event: MessageEvent<unknown>) => {
+        const message: unknown = event.data;
+        if (isRelayMessage(message)) line.adopt(message.port);
+        else if (isOnlineMessage(message)) line.setOnline(message.online);
+      });
+      worker.connect(port);
+    },
+    stop: () => worker.stop(),
+  };
 }
 
 /**
@@ -135,10 +109,16 @@ export async function serveDemoStorageWorker(options: DemoStorageWorkerOptions):
  */
 class DemoRelayLine implements SocketTransport, AsyncSyncTransport {
   online = true;
-  readonly #relay: RelayPortTransport;
+  #relay: RelayPortTransport | undefined;
   #wake: (() => void) | undefined;
 
-  constructor(port: RelayPortLike) {
+  get connected(): boolean {
+    return this.online && this.#relay !== undefined && this.#relay.connected;
+  }
+
+  /** Takes the port the first connecting tab transferred in. Later tabs bring one this already has. */
+  adopt(port: RelayPortLike | undefined): void {
+    if (port === undefined || this.#relay !== undefined) return;
     this.#relay = new RelayPortTransport({
       port,
       onWake: () => {
@@ -147,10 +127,6 @@ class DemoRelayLine implements SocketTransport, AsyncSyncTransport {
         if (this.online) this.#wake?.();
       },
     });
-  }
-
-  get connected(): boolean {
-    return this.online && this.#relay.connected;
   }
 
   setOnline(online: boolean): void {
@@ -164,19 +140,19 @@ class DemoRelayLine implements SocketTransport, AsyncSyncTransport {
   }
 
   async handshake(request: HandshakeRequest): Promise<HandshakeResponse> {
-    return this.#reachable(async () => this.#relay.handshake(request));
+    return this.#reachable(async (relay) => relay.handshake(request));
   }
 
   async push(scopeId: ScopeId, ops: WeftOp[]): Promise<PushOutcome> {
-    return this.#reachable(async () => this.#relay.push(scopeId, ops));
+    return this.#reachable(async (relay) => relay.push(scopeId, ops));
   }
 
   async pull(scopeId: ScopeId, lastServerSeq: number): Promise<PullBatch> {
-    return this.#reachable(async () => this.#relay.pull(scopeId, lastServerSeq));
+    return this.#reachable(async (relay) => relay.pull(scopeId, lastServerSeq));
   }
 
   async snapshot(scopeId: ScopeId): Promise<Snapshot> {
-    return this.#reachable(async () => this.#relay.snapshot(scopeId));
+    return this.#reachable(async (relay) => relay.snapshot(scopeId));
   }
 
   /** Ends this session's use of the line. The port itself outlives every session on it. */
@@ -184,9 +160,11 @@ class DemoRelayLine implements SocketTransport, AsyncSyncTransport {
     this.#wake = undefined;
   }
 
-  async #reachable<T>(call: () => Promise<T>): Promise<T> {
+  async #reachable<T>(call: (relay: RelayPortTransport) => Promise<T>): Promise<T> {
     if (!this.online) throw new Error("this device is offline, so the relay was not reached");
-    return call();
+    const relay = this.#relay;
+    if (relay === undefined) throw new Error("this device has no line to the relay yet");
+    return call(relay);
   }
 }
 
@@ -198,7 +176,7 @@ function isOnlineMessage(value: unknown): value is DemoOnlineMessage {
   return tagged(value) === DEMO_ONLINE_MESSAGE && typeof (value as DemoOnlineMessage).online === "boolean";
 }
 
-/** The `weft` tag, since the worker protocol's own traffic arrives on this same global. */
+/** The `weft` tag, since the worker protocol's own traffic arrives on this same port. */
 function tagged(value: unknown): unknown {
   return typeof value === "object" && value !== null ? (value as { readonly weft?: unknown }).weft : undefined;
 }

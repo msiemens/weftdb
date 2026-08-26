@@ -167,7 +167,7 @@ test("a subscription reaches only the scope its token names", async () => {
         const neighbourTransport = running.http("token-d");
         for (const [index, edit] of edits.entries()) {
           if (edit.kind === "create" || edit.kind === "edit") {
-            seed(neighbour, `neighbour-${index}`, edit.title);
+            await seed(neighbour, `neighbour-${index}`, edit.title);
             await neighbourTransport
               .push(OTHER_SCOPE, [...neighbour.outbox])
               .then(() => neighbour.syncWith(neighbourTransport, HASH));
@@ -219,7 +219,7 @@ test("a connection that dies catches up on what it missed rather than from where
           // Re-delivery is the price of a cursor that moves on send, so applying a batch twice
           // has to leave the device where applying it once did.
           const before = rowState(subscriber);
-          for (const batch of delivered) subscriber.applyPull(batch);
+          for (const batch of delivered) await subscriber.applyPull(batch);
           assert.deepEqual(rowState(subscriber), before, "applying a batch a second time changed the device");
         } finally {
           running.closeSockets();
@@ -238,7 +238,7 @@ test("a pushed batch too big for one message reassembles into the batch that was
       try {
         const long = "x".repeat(Math.ceil((CHUNK_BYTES * multiplier) / 2));
         const writer = new WeftClient(SCOPE, deviceId("device-a"), schema);
-        seed(writer, "todo-big", "big", long);
+        await seed(writer, "todo-big", "big", long);
         await writer.syncWith(running.http("token-a"), HASH);
         await running.settle(subscriber, 30_000);
 
@@ -304,9 +304,9 @@ async function relay(): Promise<Relay> {
         token: "token-b",
         // Exactly what the session does with a pushed batch, and nothing else: this device
         // never pulls, so anything it ends up holding arrived unasked.
-        onBatch: (batch) => {
+        onBatch: async (batch) => {
           delivered.push(batch);
-          subscriber.applyPull(batch);
+          await subscriber.applyPull(batch);
           onApplied?.(subscriber);
         },
         cursor: () => subscriber.lastServerSeq,
@@ -324,18 +324,18 @@ async function relay(): Promise<Relay> {
             // history generates one, not the application's behaviour.
             if (!used.has(String(id))) {
               used.add(String(id));
-              seed(writer, String(id), edit.title);
+              await seed(writer, String(id), edit.title);
             }
             break;
           }
           case "edit": {
             if (writer.getRow(TODOS, id) !== undefined) {
-              writer.update(TODOS, id, values({ title: edit.title }), txnId(`edit-${index}`));
+              await writer.update(TODOS, id, values({ title: edit.title }), txnId(`edit-${index}`));
             }
             break;
           }
           case "delete": {
-            if (writer.getRow(TODOS, id) !== undefined) writer.delete(TODOS, id, txnId(`delete-${index}`));
+            if (writer.getRow(TODOS, id) !== undefined) await writer.delete(TODOS, id, txnId(`delete-${index}`));
             break;
           }
           case "drop": {
@@ -368,8 +368,8 @@ async function relay(): Promise<Relay> {
   return running;
 }
 
-function seed(target: WeftClient, id: string, title: string, notes = "line one\nline two"): void {
-  target.create(
+async function seed(target: WeftClient, id: string, title: string, notes = "line one\nline two"): Promise<void> {
+  await target.create(
     TODOS,
     rowId(id),
     values({ title, notes, done: false, rank: "a0", due_at: null, auto_delete_days: null }),

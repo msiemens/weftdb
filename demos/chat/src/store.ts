@@ -10,9 +10,8 @@ import { openDemoDatabase, DemoSync, type DemoDatabase, type DemoOpenOverrides }
 import { tabIdentity, type TabIdentity } from "weftdb-demo-shared/identity";
 import { schema } from "./schema.ts";
 import { DEMO } from "./scope.ts";
-import brokerUrl from "./broker.ts?sharedworker&url";
 import relayWorkerUrl from "./relay-worker.ts?sharedworker&url";
-import storageWorkerUrl from "./storage-worker.ts?worker&url";
+import storageWorkerUrl from "./storage-worker.ts?sharedworker&url";
 import {
   decodeDevices,
   decodeMessages,
@@ -99,7 +98,7 @@ export class ChatStore {
    *
    * The scope comes from local storage, so every tab of this browser joins the same room while
    * another visitor gets their own. The namespace comes from session storage, so **each tab is a
-   * database of its own** — its own election, its own storage worker, its own OPFS pool and its own
+   * database of its own** — its own client in the storage worker, its own file and its own
    * device id — which is what puts a second chip on the device strip when you open a second tab.
    */
   static async open(window: WindowLike, overrides?: DemoOpenOverrides): Promise<ChatStore> {
@@ -109,7 +108,6 @@ export class ChatStore {
       scopeId: identity.scopeId,
       namespace: `weftdb-demo/${DEMO}/${identity.deviceId}`,
       worker: storageWorkerUrl,
-      broker: brokerUrl,
       relayWorker: relayWorkerUrl,
       ...(overrides === undefined ? {} : { overrides }),
     });
@@ -118,8 +116,8 @@ export class ChatStore {
 
   /** Starts the heartbeat that puts this tab on the device strip. */
   start(): () => void {
-    this.touch();
-    const timer = setInterval(() => this.touch(), HEARTBEAT_MS);
+    void this.touch();
+    const timer = setInterval(() => void this.touch(), HEARTBEAT_MS);
     return () => clearInterval(timer);
   }
 
@@ -128,14 +126,14 @@ export class ChatStore {
    * an update, which is the whole difference between this collection and the message log: a
    * device record is a current value, a message is a fact that already happened.
    */
-  touch(): void {
+  async touch(): Promise<void> {
     const id = String(this.deviceId);
     const values = { label: this.identity.label, last_seen: this.now() };
     if (this.source.getRow(devicesTable, rowId(id)) === undefined) {
-      this.devices.create(id, values);
+      await this.devices.create(id, values);
       return;
     }
-    this.devices.update(id, values);
+    await this.devices.update(id, values);
   }
 
   /** Adds what only the client knows to a decoded message. */
@@ -196,15 +194,15 @@ export class ChatStore {
     this.connection.setOnline(online);
   }
 
-  discardQuarantine(): void {
-    this.connection.discardQuarantine();
+  async discardQuarantine(): Promise<void> {
+    await this.connection.discardQuarantine();
   }
 
   /** Posts a message. Append-class rows carry no update, so this is the only write there is. */
-  send(body: string): void {
+  async send(body: string): Promise<void> {
     const trimmed = body.trim();
     if (trimmed === "") return;
-    this.messages.create(newMessageId(), {
+    await this.messages.create(newMessageId(), {
       body: trimmed,
       device: String(this.deviceId),
       author: this.identity.label,

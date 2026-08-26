@@ -4,6 +4,7 @@
 // prediction — Node's structured clone and its worker scheduling are a different implementation
 // from a browser's, and the browser harness is what says what a tab actually pays.
 import { MessageChannel, Worker, type MessagePort } from "node:worker_threads";
+import { asyncSqlExecutor } from "weftdb/shared";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import type { QueryDelta, WorkerRequest, WorkerResponse } from "weftdb/client";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
@@ -17,15 +18,7 @@ import {
   updateTxn,
   type TempDirectory,
 } from "../fixtures.ts";
-import {
-  consume,
-  duration,
-  repeat,
-  repeatAsync,
-  type BenchConfig,
-  type BenchGroup,
-  type CaseResult,
-} from "../harness.ts";
+import { consume, duration, repeatAsync, type BenchConfig, type BenchGroup, type CaseResult } from "../harness.ts";
 
 const GROUP = "Worker boundary";
 
@@ -53,7 +46,7 @@ export const workerBoundary: BenchGroup = {
       ...(await messageChannelCases(config)),
       await realWorkerCase(config),
       await brokeredPortCase(config),
-      ...sqliteCommitCases(config, directory),
+      ...(await sqliteCommitCases(config, directory)),
     ];
   },
 };
@@ -85,7 +78,7 @@ async function messageChannelCases(config: BenchConfig): Promise<readonly CaseRe
           label: `Request/response over a MessageChannel, ${rows.toLocaleString("en-US")}-row delta`,
           note: `the same hop, answered with a QueryDelta carrying ${rows} materialized six-field todo ${rows === 1 ? "row" : "rows"} — the difference from the empty case is the structured clone; ${NOT_A_BROWSER}`,
         },
-        await roundTripOverChannel(config, deltaOf(rows)),
+        await roundTripOverChannel(config, await deltaOf(rows)),
       ),
     );
   }
@@ -177,31 +170,33 @@ async function brokeredPortCase(config: BenchConfig): Promise<CaseResult> {
  * The durability window on the other side of the boundary: one `update` on a client whose store is
  * attached, so the timed region contains the mutation and the SQLite transaction it commits.
  */
-function sqliteCommitCases(config: BenchConfig, directory: TempDirectory): readonly CaseResult[] {
-  return config.persistenceSizes.map((rows, index) =>
-    sqliteCommitCase(config, rows, directory.file(`commit-${index}.sqlite`)),
-  );
+async function sqliteCommitCases(config: BenchConfig, directory: TempDirectory): Promise<readonly CaseResult[]> {
+  const results: CaseResult[] = [];
+  for (const [index, rows] of config.persistenceSizes.entries()) {
+    results.push(await sqliteCommitCase(config, rows, directory.file(`commit-${index}.sqlite`)));
+  }
+  return results;
 }
 
-function sqliteCommitCase(config: BenchConfig, rows: number, path: string): CaseResult {
-  using executor = openSqliteExecutor(path);
-  const store = new SqliteClientStore(executor, schema);
-  const client = syncedClient(rows);
-  store.installSchema();
-  store.attach(client);
+async function sqliteCommitCase(config: BenchConfig, rows: number, path: string): Promise<CaseResult> {
+  using file = openSqliteExecutor(path);
+  const store = new SqliteClientStore(asyncSqlExecutor(file), schema);
+  const client = await syncedClient(rows);
+  await store.installSchema();
+  await store.attach(client);
   const row = todoId(0);
   let counter = 0;
-  const commit = (): void => {
+  const commit = async (): Promise<void> => {
     counter += 1;
-    client.update(TODOS, row, { [TITLE]: `title ${counter}` }, updateTxn(row));
+    await client.update(TODOS, row, { [TITLE]: `title ${counter}` }, updateTxn(row));
   };
   // The database is opened once here rather than per sample, so the first few commits against it
   // pay for creating the write-ahead log and preparing each statement — a cost a running
   // application pays once at startup, not per keystroke. Those commits happen off the clock.
-  for (let index = 0; index < COMMITS_BEFORE_MEASURING; index += 1) commit();
-  const samples = repeat(() => {
+  for (let index = 0; index < COMMITS_BEFORE_MEASURING; index += 1) await commit();
+  const samples = await repeatAsync(async () => {
     const start = performance.now();
-    commit();
+    await commit();
     return performance.now() - start;
   }, config.heavyBudget);
   return duration(
@@ -267,6 +262,6 @@ function changedRows(value: unknown): number {
 }
 
 /** A delta shaped the way a subscription hands one out: every row of a synced client, changed. */
-function deltaOf(rows: number): QueryDelta {
-  return { added: [], removed: [], changed: syncedClient(rows).listRows(TODOS) };
+async function deltaOf(rows: number): Promise<QueryDelta> {
+  return { added: [], removed: [], changed: (await syncedClient(rows)).listRows(TODOS) };
 }

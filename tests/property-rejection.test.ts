@@ -23,7 +23,7 @@ import {
   type WireValue,
 } from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
-import { WeftClient } from "weftdb/client";
+import { inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import {
   BASE_NOTES,
@@ -49,9 +49,9 @@ import {
 const lineArb = fc.integer({ min: 0, max: BASE_NOTES.split("\n").length - 1 });
 const editArb = fc.string({ minLength: 1, maxLength: 10 }).map((text) => `edit ${text}`);
 
-test("§9.9 a merge_required rebase loses no edit from either side", () => {
-  fc.assert(
-    fc.property(lineArb, lineArb, editArb, editArb, (firstLine, offset, firstEdit, secondEdit) => {
+test("§9.9 a merge_required rebase loses no edit from either side", async () => {
+  await fc.assert(
+    fc.asyncProperty(lineArb, lineArb, editArb, editArb, async (firstLine, offset, firstEdit, secondEdit) => {
       fc.pre(firstEdit !== secondEdit);
       const lines = BASE_NOTES.split("\n").length;
       const secondLine = (firstLine + 1 + offset) % lines;
@@ -61,15 +61,15 @@ test("§9.9 a merge_required rebase loses no edit from either side", () => {
       const first = deviceAt(world, 0).client;
       const second = deviceAt(world, 1).client;
       const row = rowId("notes");
-      seedTask(world, first, row);
-      second.sync(world.server, propertySchemaHash);
+      await seedTask(world, first, row);
+      await second.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
       world.now += 1;
-      first.update(TASKS, row, { [NOTES]: replaceLine(BASE_NOTES, firstLine, firstEdit) }, txnId("first"));
-      first.sync(world.server, propertySchemaHash);
+      await first.update(TASKS, row, { [NOTES]: replaceLine(BASE_NOTES, firstLine, firstEdit) }, txnId("first"));
+      await first.syncWith(inProcessTransport(world.server), propertySchemaHash);
       world.now += 1;
-      second.update(TASKS, row, { [NOTES]: replaceLine(BASE_NOTES, secondLine, secondEdit) }, txnId("second"));
-      second.sync(world.server, propertySchemaHash);
+      await second.update(TASKS, row, { [NOTES]: replaceLine(BASE_NOTES, secondLine, secondEdit) }, txnId("second"));
+      await second.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
       const merged = wireText(serverField(world, row, NOTES) ?? "");
       assert.equal(second.quarantine.length, 0, "a mergeable edit was quarantined");
@@ -80,20 +80,20 @@ test("§9.9 a merge_required rebase loses no edit from either side", () => {
   );
 });
 
-test("§9.10 rebase retries at most three times, then quarantines", () => {
-  fc.assert(
-    fc.property(editArb, (edit) => {
+test("§9.10 rebase retries at most three times, then quarantines", async () => {
+  await fc.assert(
+    fc.asyncProperty(editArb, async (edit) => {
       const world = createWorld(1);
       const client = deviceAt(world, 0).client;
       const row = rowId("racing");
-      seedTask(world, client, row);
+      await seedTask(world, client, row);
 
       // A competitor landing a fresh write ahead of every push keeps the base hash stale,
       // so the rebase loop can only ever end by giving up.
       const rejections = interposeCompetingWrites(world, row);
       world.now += 1;
-      client.update(TASKS, row, { [NOTES]: replaceLine(BASE_NOTES, 0, edit) }, txnId("racing-edit"));
-      client.sync(world.server, propertySchemaHash);
+      await client.update(TASKS, row, { [NOTES]: replaceLine(BASE_NOTES, 0, edit) }, txnId("racing-edit"));
+      await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
       assert.equal(rejections.count, 4, "expected one push plus exactly three retries");
       assert.equal(client.outbox.length, 0, "the exhausted rebase left the outbox undrained");
@@ -107,15 +107,15 @@ test("§9.10 rebase retries at most three times, then quarantines", () => {
   );
 });
 
-test("§9.11 a quarantined transaction is never applied and never dropped", () => {
-  fc.assert(
-    fc.property(fc.constantFrom(...QUARANTINE_SCENARIOS), (scenario) => {
+test("§9.11 a quarantined transaction is never applied and never dropped", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.constantFrom(...QUARANTINE_SCENARIOS), async (scenario) => {
       const name = scenario.name;
       const world = createWorld(2);
-      const client = scenario.arrange(world);
+      const client = await scenario.arrange(world);
       const before = serverRowFingerprints(world);
 
-      client.sync(world.server, propertySchemaHash);
+      await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
       const quarantined = client.quarantine.filter((op) => op.txnId === scenario.txnId);
       assert.equal(quarantined.length > 0, true, `${name}: nothing was quarantined`);
@@ -136,12 +136,12 @@ test("§9.11 a quarantined transaction is never applied and never dropped", () =
   );
 });
 
-test("§9.12 a skew rejection leaves no server trace and converges as if accepted", () => {
-  fc.assert(
-    fc.property(
+test("§9.12 a skew rejection leaves no server trace and converges as if accepted", async () => {
+  await fc.assert(
+    fc.asyncProperty(
       fc.integer({ min: 6 * 60 * 1000, max: 8 * 60 * 60 * 1000 }),
       fc.string({ minLength: 1, maxLength: 10 }),
-      (skewMs, title) => {
+      async (skewMs, title) => {
         const world = createWorld(1);
         const skewed = new WeftClient(
           world.scopeId,
@@ -150,7 +150,7 @@ test("§9.12 a skew rejection leaves no server trace and converges as if accepte
           () => world.now + skewMs,
         );
         const row = rowId("skewed");
-        skewed.create(TASKS, row, taskValues(title), txnId("skewed"));
+        await skewed.create(TASKS, row, taskValues(title), txnId("skewed"));
 
         const before = serverRowFingerprints(world);
         const rejected = world.server.push(world.scopeId, [...skewed.outbox]);
@@ -158,14 +158,14 @@ test("§9.12 a skew rejection leaves no server trace and converges as if accepte
         assert.equal(rejected.ok ? "" : rejected.rejection.reason, "clock_skew");
         assert.deepEqual(serverRowFingerprints(world), before, "the rejection left a server trace");
 
-        skewed.sync(world.server, propertySchemaHash);
+        await skewed.syncWith(inProcessTransport(world.server), propertySchemaHash);
         assert.equal(skewed.quarantine.length, 0, "re-stamped ops were quarantined");
         assert.equal(skewed.outbox.length, 0, "re-stamped ops were not accepted");
 
         const control = createWorld(1);
         const inSync = deviceAt(control, 0).client;
-        inSync.create(TASKS, row, taskValues(title), txnId("skewed"));
-        inSync.sync(control.server, propertySchemaHash);
+        await inSync.create(TASKS, row, taskValues(title), txnId("skewed"));
+        await inSync.syncWith(inProcessTransport(control.server), propertySchemaHash);
         assert.deepEqual(valueState(world), valueState(control), "a re-stamped history diverged from a clean one");
       },
     ),
@@ -173,49 +173,53 @@ test("§9.12 a skew rejection leaves no server trace and converges as if accepte
   );
 });
 
-test("§9.13 a schema_mismatch session leaves the outbox byte-identical", () => {
-  fc.assert(
-    fc.property(fc.integer({ min: 2, max: 6 }), fc.string({ minLength: 1, maxLength: 10 }), (newerVersion, title) => {
-      const newerSchema = defineSchema(
-        {
-          tasks: S.collection({
-            title: S.string(),
-            priority: S.number({ nullable: true }),
-          }),
-        },
-        newerVersion,
-      );
+test("§9.13 a schema_mismatch session leaves the outbox byte-identical", async () => {
+  await fc.assert(
+    fc.asyncProperty(
+      fc.integer({ min: 2, max: 6 }),
+      fc.string({ minLength: 1, maxLength: 10 }),
+      async (newerVersion, title) => {
+        const newerSchema = defineSchema(
+          {
+            tasks: S.collection({
+              title: S.string(),
+              priority: S.number({ nullable: true }),
+            }),
+          },
+          newerVersion,
+        );
 
-      const world = createWorld(1);
-      const stale = deviceAt(world, 0).client;
-      const upgraded = new WeftClient(world.scopeId, stale.deviceId, newerSchema, () => world.now);
-      upgraded.create(TASKS, rowId("upgraded"), { [TITLE]: "upgraded" }, txnId("upgraded"));
-      upgraded.sync(world.server, schemaHash(newerSchema));
+        const world = createWorld(1);
+        const stale = deviceAt(world, 0).client;
+        const upgraded = new WeftClient(world.scopeId, stale.deviceId, newerSchema, () => world.now);
+        await upgraded.create(TASKS, rowId("upgraded"), { [TITLE]: "upgraded" }, txnId("upgraded"));
+        await upgraded.syncWith(inProcessTransport(world.server), schemaHash(newerSchema));
 
-      stale.create(TASKS, rowId("stale"), taskValues(title), txnId("stale"));
-      const outbox = JSON.stringify(stale.outbox);
-      const attempts = new Map(stale.outboxAttempts);
-      stale.sync(world.server, propertySchemaHash);
+        await stale.create(TASKS, rowId("stale"), taskValues(title), txnId("stale"));
+        const outbox = JSON.stringify(stale.outbox);
+        const attempts = new Map(stale.outboxAttempts);
+        await stale.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
-      assert.equal(JSON.stringify(stale.outbox), outbox, "the outbox changed");
-      assert.deepEqual(new Map(stale.outboxAttempts), attempts, "retry accounting changed");
-      assert.equal(stale.quarantine.length, 0, "a blocked session quarantined ops");
-    }),
+        assert.equal(JSON.stringify(stale.outbox), outbox, "the outbox changed");
+        assert.deepEqual(new Map(stale.outboxAttempts), attempts, "retry accounting changed");
+        assert.equal(stale.quarantine.length, 0, "a blocked session quarantined ops");
+      },
+    ),
     { numRuns: SCENARIO_RUNS },
   );
 });
 
-test("§9.14 rejection is all-or-nothing per transaction", () => {
-  fc.assert(
-    fc.property(
+test("§9.14 rejection is all-or-nothing per transaction", async () => {
+  await fc.assert(
+    fc.asyncProperty(
       fc.integer({ min: 0, max: 2 }),
       fc.constantFrom<InvalidOpKind[]>("foreign-scope", "base-field", "absent-row", "clock-skew"),
       fc.string({ minLength: 1, maxLength: 10 }),
-      (position, kind, value) => {
+      async (position, kind, value) => {
         const world = createWorld(1);
         const client = deviceAt(world, 0).client;
         const row = rowId("atomic");
-        seedTask(world, client, row);
+        await seedTask(world, client, row);
 
         const before = serverRowFingerprints(world);
         const batch = mixedTransaction(world, row, position, kind, value);
@@ -270,11 +274,11 @@ const malformedHlcArb = fc
     }
   });
 
-test("§5.3 the server accepts a generated op exactly when the rules allow it", () => {
-  fc.assert(
-    fc.property(generatedOpArb, fc.string({ minLength: 1, maxLength: 10 }), (shape, value) => {
+test("§5.3 the server accepts a generated op exactly when the rules allow it", async () => {
+  await fc.assert(
+    fc.asyncProperty(generatedOpArb, fc.string({ minLength: 1, maxLength: 10 }), async (shape, value) => {
       const world = createWorld(1);
-      const fixtures = seedFixtures(world);
+      const fixtures = await seedFixtures(world);
       const row = fixtures[shape.fixture];
       const before = serverRowFingerprints(world);
 
@@ -300,9 +304,9 @@ test("§5.3 the server accepts a generated op exactly when the rules allow it", 
   );
 });
 
-test("§5.3 a malformed HLC is never accepted or stored", () => {
-  fc.assert(
-    fc.property(malformedHlcArb, fc.boolean(), (hlc, asCreate) => {
+test("§5.3 a malformed HLC is never accepted or stored", async () => {
+  await fc.assert(
+    fc.asyncProperty(malformedHlcArb, fc.boolean(), async (hlc, asCreate) => {
       const world = createWorld(1);
       const before = serverRowFingerprints(world);
       const op: WeftOp = asCreate
@@ -382,7 +386,7 @@ function generatedOp(world: PropertyWorld, shape: GeneratedOp, row: RowId, value
   return { ...set, baseHash: stableHash(current) };
 }
 
-function seedFixtures(world: PropertyWorld): Record<RowFixture, RowId> {
+async function seedFixtures(world: PropertyWorld): Promise<Record<RowFixture, RowId>> {
   const client = deviceAt(world, 0).client;
   const fixtures: Record<RowFixture, RowId> = {
     live: rowId("fixture-live"),
@@ -393,19 +397,19 @@ function seedFixtures(world: PropertyWorld): Record<RowFixture, RowId> {
   };
 
   for (const row of [fixtures.live, fixtures.tombstoned, fixtures.purged]) {
-    client.create(TASKS, row, taskValues(String(row)), txnId(`seed-${row}`));
+    await client.create(TASKS, row, taskValues(String(row)), txnId(`seed-${row}`));
   }
-  client.append(TASKS, fixtures.append, taskValues("append"), txnId("seed-append"));
-  client.sync(world.server, propertySchemaHash);
+  await client.append(TASKS, fixtures.append, taskValues("append"), txnId("seed-append"));
+  await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
   // Only the purged row's delete is old enough for the floor to take it; the tombstoned
   // row is deleted after the clock has moved on, so it survives the same prune.
-  client.delete(TASKS, fixtures.purged, txnId("delete-purged"));
-  client.sync(world.server, propertySchemaHash);
+  await client.delete(TASKS, fixtures.purged, txnId("delete-purged"));
+  await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
   world.now += TOMBSTONE_FLOOR_MS + DAY_MS;
   world.server.pruneTombstones(world.scopeId);
-  client.delete(TASKS, fixtures.tombstoned, txnId("delete-tombstoned"));
-  client.sync(world.server, propertySchemaHash);
+  await client.delete(TASKS, fixtures.tombstoned, txnId("delete-tombstoned"));
+  await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
   return fixtures;
 }
 
@@ -417,7 +421,7 @@ interface QuarantineScenario {
   readonly name: string;
   readonly reason: Rejection["reason"];
   readonly txnId: TxnId;
-  arrange(world: PropertyWorld): WeftClient;
+  arrange(world: PropertyWorld): Promise<WeftClient>;
 }
 
 const QUARANTINE_SCENARIOS: readonly QuarantineScenario[] = [
@@ -425,11 +429,11 @@ const QUARANTINE_SCENARIOS: readonly QuarantineScenario[] = [
     name: "base field violation",
     reason: "base_field_violation",
     txnId: txnId("violation"),
-    arrange: (world) => {
+    arrange: async (world) => {
       const client = deviceAt(world, 0).client;
       const row = rowId("violation-row");
-      seedTask(world, client, row);
-      client.update(TASKS, row, { [fieldName("created")]: "rewritten" }, txnId("violation"));
+      await seedTask(world, client, row);
+      await client.update(TASKS, row, { [fieldName("created")]: "rewritten" }, txnId("violation"));
       return client;
     },
   },
@@ -437,10 +441,10 @@ const QUARANTINE_SCENARIOS: readonly QuarantineScenario[] = [
     name: "append class violation",
     reason: "append_class_violation",
     txnId: txnId("append-violation"),
-    arrange: (world) => {
+    arrange: async (world) => {
       const client = deviceAt(world, 0).client;
       const event = rowId("append-violation-row");
-      client.append(
+      await client.append(
         EVENTS,
         event,
         {
@@ -449,7 +453,7 @@ const QUARANTINE_SCENARIOS: readonly QuarantineScenario[] = [
         },
         txnId("append-create"),
       );
-      client.sync(world.server, propertySchemaHash);
+      await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
       // A current client refuses to queue an edit to an append row at all, so the op is put on
       // the outbox directly: this is what reaches a server from a build that predates the rule,
       // and what happens to it afterwards is the point of the test.
@@ -470,12 +474,12 @@ const QUARANTINE_SCENARIOS: readonly QuarantineScenario[] = [
     name: "row exists",
     reason: "row_exists",
     txnId: txnId("duplicate-create"),
-    arrange: (world) => {
+    arrange: async (world) => {
       const first = deviceAt(world, 0).client;
       const second = deviceAt(world, 1).client;
       const row = rowId("duplicate-row");
-      seedTask(world, first, row);
-      second.create(TASKS, row, taskValues("second"), txnId("duplicate-create"));
+      await seedTask(world, first, row);
+      await second.create(TASKS, row, taskValues("second"), txnId("duplicate-create"));
       return second;
     },
   },
@@ -483,17 +487,17 @@ const QUARANTINE_SCENARIOS: readonly QuarantineScenario[] = [
     name: "row absent",
     reason: "row_absent",
     txnId: txnId("absent-write"),
-    arrange: (world) => {
+    arrange: async (world) => {
       const owner = deviceAt(world, 0).client;
       const writer = deviceAt(world, 1).client;
       const row = rowId("absent-row");
-      seedTask(world, owner, row);
-      writer.sync(world.server, propertySchemaHash);
-      owner.delete(TASKS, row, txnId("absent-delete"));
-      owner.sync(world.server, propertySchemaHash);
+      await seedTask(world, owner, row);
+      await writer.syncWith(inProcessTransport(world.server), propertySchemaHash);
+      await owner.delete(TASKS, row, txnId("absent-delete"));
+      await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
       world.now += TOMBSTONE_FLOOR_MS + DAY_MS;
       world.server.pruneTombstones(world.scopeId);
-      writer.update(TASKS, row, { [TITLE]: "written into a void" }, txnId("absent-write"));
+      await writer.update(TASKS, row, { [TITLE]: "written into a void" }, txnId("absent-write"));
       return writer;
     },
   },
@@ -501,20 +505,20 @@ const QUARANTINE_SCENARIOS: readonly QuarantineScenario[] = [
     name: "scope mismatch",
     reason: "scope_mismatch",
     txnId: txnId("foreign-scope"),
-    arrange: (world) => {
+    arrange: async (world) => {
       const client = deviceAt(world, 0).client;
       const row = rowId("foreign-row");
-      seedTask(world, client, row);
-      client.update(TASKS, row, { [TITLE]: "foreign" }, txnId("foreign-scope"));
+      await seedTask(world, client, row);
+      await client.update(TASKS, row, { [TITLE]: "foreign" }, txnId("foreign-scope"));
       for (const op of client.outbox) op.scopeId = scopeId("other-scope");
       return client;
     },
   },
 ];
 
-function seedTask(world: PropertyWorld, client: WeftClient, row: RowId): void {
-  client.create(TASKS, row, taskValues(String(row)), txnId(`seed-${row}`));
-  client.sync(world.server, propertySchemaHash);
+async function seedTask(world: PropertyWorld, client: WeftClient, row: RowId): Promise<void> {
+  await client.create(TASKS, row, taskValues(String(row)), txnId(`seed-${row}`));
+  await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
 }
 
 function taskValues(label: string): Record<FieldName, WireValue> {

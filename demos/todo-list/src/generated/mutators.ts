@@ -9,9 +9,9 @@ export interface TodosMutation {
   readonly auto_delete_days?: number | null;
 }
 export interface TodosMutators {
-  create(id: string, values: TodosMutation, txnId?: TxnId): void;
-  update(id: string, values: TodosMutation, txnId?: TxnId): void;
-  delete(id: string, txnId?: TxnId): void;
+  create(id: string, values: TodosMutation, txnId?: TxnId): Promise<void>;
+  update(id: string, values: TodosMutation, txnId?: TxnId): Promise<void>;
+  delete(id: string, txnId?: TxnId): Promise<void>;
 }
 
 export interface TodoEventsMutation {
@@ -20,5 +20,5 @@ export interface TodoEventsMutation {
   readonly actor?: string;
 }
 export interface TodoEventsMutators {
-  create(id: string, values: TodoEventsMutation, txnId?: TxnId): void;
+  create(id: string, values: TodoEventsMutation, txnId?: TxnId): Promise<void>;
 }

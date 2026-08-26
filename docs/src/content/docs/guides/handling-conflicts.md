@@ -63,8 +63,8 @@ const reasons = client.listQuarantine().map((op) => op.reason);
 ```
 
 Once whatever caused a rejection is believed fixed, `WeftClient.retryQuarantinedTxn(txnId)`
-returns that transaction's operations to the outbox for the next sync to try again. Nothing in
-quarantine retries on its own.
+returns that transaction's operations to the outbox for the next sync to try again, and resolves
+once the move has been stored. Nothing in quarantine retries on its own.
 
 ## Deciding a deleted row
 
@@ -91,11 +91,11 @@ import { fieldName, rowId, tableName } from "weftdb/core";
 import type { WeftClient } from "weftdb/client";
 
 // keepEdits is the answer to the question the interface asked the person.
-function resolveDeletedWhileEditing(client: WeftClient, keepEdits: boolean): void {
+async function resolveDeletedWhileEditing(client: WeftClient, keepEdits: boolean): Promise<void> {
   const task = tableName("tasks");
   const id = rowId("task-1");
   if (keepEdits) {
-    client.restore(task, id, {
+    await client.restore(task, id, {
       [fieldName("title")]: "Write the quick start",
       [fieldName("notes")]: "",
       [fieldName("rank")]: "a0",
@@ -103,7 +103,7 @@ function resolveDeletedWhileEditing(client: WeftClient, keepEdits: boolean): voi
     return;
   }
   for (const op of client.listQuarantine()) {
-    if (op.rowId === id) client.discardQuarantinedTxn(op.txnId);
+    if (op.rowId === id) await client.discardQuarantinedTxn(op.txnId);
   }
 }
 ```

@@ -1,26 +1,17 @@
 // What is left of an application's data layer once the library and codegen have taken their
 // halves. Rows, decoding, mutators, hooks and reordering come from `src/generated`, which
-// `weft generate` writes from the schema; the database, the worker that holds it, the election
-// between tabs and the sync session all come from `openWeftDatabase`. What is genuinely this
-// application's is here: which scope this visitor is on, what a row looks like once the client's
-// own knowledge is added to it, and the list a first visit arrives at.
-import {
-  deviceId as toDeviceId,
-  hasConflictMarkers,
-  rankBetween,
-  rankString,
-  rowId,
-  type DeviceId,
-  type RowId,
-} from "weftdb/core";
+// `weft generate` writes from the schema; the database, the worker that holds it and the sync
+// session all come from `openWeftDatabase`. What is genuinely this application's is here: which
+// scope this visitor is on, what a row looks like once the client's own knowledge is added to it,
+// and the list a first visit arrives at.
+import { deviceId as toDeviceId, hasConflictMarkers, rowId, type DeviceId, type RowId } from "weftdb/core";
 import type { SessionStatus, StorageLike, WeftClientMirror } from "weftdb/client";
 import { openDemoDatabase, DemoSync, type DemoDatabase, type DemoOpenOverrides } from "weftdb-demo-shared/open";
 import { tabIdentity, type TabIdentity } from "weftdb-demo-shared/identity";
 import { schema } from "./schema.ts";
 import { DEMO } from "./scope.ts";
-import brokerUrl from "./broker.ts?sharedworker&url";
 import relayWorkerUrl from "./relay-worker.ts?sharedworker&url";
-import storageWorkerUrl from "./storage-worker.ts?worker&url";
+import storageWorkerUrl from "./storage-worker.ts?sharedworker&url";
 import {
   decodeTodos,
   moveTodos,
@@ -136,8 +127,8 @@ export class TodoStore {
    *
    * The scope comes from local storage, so every tab of this browser opens the same list while
    * another visitor opens their own. The namespace comes from session storage, so **each tab is a
-   * database of its own** — its own election, its own storage worker, its own OPFS pool and its own
-   * device id — which is what makes a second tab a second device rather than a second view.
+   * database of its own** — its own client in the storage worker, its own file and its own device
+   * id — which is what makes a second tab a second device rather than a second view.
    */
   static async open(window: WindowLike, overrides?: DemoOpenOverrides): Promise<TodoStore> {
     const identity = tabIdentity(window.sessionStorage, window.localStorage, { demo: DEMO });
@@ -146,7 +137,6 @@ export class TodoStore {
       scopeId: identity.scopeId,
       namespace: `weftdb-demo/${DEMO}/${identity.deviceId}`,
       worker: storageWorkerUrl,
-      broker: brokerUrl,
       relayWorker: relayWorkerUrl,
       ...(overrides === undefined ? {} : { overrides }),
     });
@@ -154,7 +144,7 @@ export class TodoStore {
   }
 
   start(): () => void {
-    this.#seed();
+    void this.#seed();
     return () => undefined;
   }
 
@@ -167,11 +157,10 @@ export class TodoStore {
    * and so does a reload. Deleting the rows leaves them deleted, and emptying the list is a state
    * the visitor asked for rather than one to fill back in.
    *
-   * Ranks are chained here rather than read back per row. A mutator posts to the worker and returns
-   * before the row it wrote has come back, so asking the list where it ends after each write would
-   * give every seeded row the same rank and leave the order to a tie-break on row id.
+   * Each write is awaited, so the next row's rank is taken from a list that already holds the one
+   * before it.
    */
-  #seed(): void {
+  async #seed(): Promise<void> {
     const storage = this.#seedStorage;
     if (storage === undefined) return;
     const key = `${SEED_MARK}/${this.identity.scopeId}`;
@@ -180,19 +169,17 @@ export class TodoStore {
     // A scope holding rows already has a list, whether they were typed here or hydrated from
     // storage this mark has outlived.
     if (this.rows().length > 0) return;
-    let rank: string | null = null;
     for (const seed of SEED) {
       const id = newTodoId();
-      rank = rankBetween(rank === null ? null : rankString(rank), null, this.deviceId);
-      this.todos.create(id, {
+      await this.todos.create(id, {
         title: seed.title,
         notes: seed.notes,
         done: seed.done,
-        rank,
+        rank: this.nextRank(),
         due_at: null,
         auto_delete_days: null,
       });
-      this.todoEvents.create(`event-${crypto.randomUUID()}`, {
+      await this.todoEvents.create(`event-${crypto.randomUUID()}`, {
         todo_id: id,
         kind: "added",
         actor: this.identity.label,
@@ -237,16 +224,16 @@ export class TodoStore {
     return nextTodosRank(this.rows(), this.deviceId);
   }
 
-  moveUp(index: number): void {
-    moveTodos(this.todos, this.rows(), index, "up", this.deviceId);
+  async moveUp(index: number): Promise<void> {
+    await moveTodos(this.todos, this.rows(), index, "up", this.deviceId);
   }
 
-  moveDown(index: number): void {
-    moveTodos(this.todos, this.rows(), index, "down", this.deviceId);
+  async moveDown(index: number): Promise<void> {
+    await moveTodos(this.todos, this.rows(), index, "down", this.deviceId);
   }
 
-  discardQuarantine(): void {
-    this.connection.discardQuarantine();
+  async discardQuarantine(): Promise<void> {
+    await this.connection.discardQuarantine();
   }
 
   async sync(): Promise<void> {

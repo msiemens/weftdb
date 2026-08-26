@@ -23,30 +23,31 @@ import {
   worldCommands,
 } from "./property-model.ts";
 import { assertSettledInvariants, STEP_INVARIANTS, SETTLED_INVARIANTS } from "./property-invariants.ts";
+import { inProcessTransport } from "weftdb/client";
 
-test("generated histories uphold every continuously-checked §9 invariant", () => {
-  fc.assert(
-    fc.property(worldCommands(120), (commands) => {
-      const world = runWorld(commands);
-      quiesce(world);
-      assertSettledInvariants(world);
+test("generated histories uphold every continuously-checked §9 invariant", async () => {
+  await fc.assert(
+    fc.asyncProperty(worldCommands(120), async (commands) => {
+      const world = await runWorld(commands);
+      await quiesce(world);
+      await assertSettledInvariants(world);
     }),
     { numRuns: WORLD_RUNS },
   );
 });
 
-test("generated histories converge with more devices than partitions", () => {
-  fc.assert(
-    fc.property(worldCommands(80), (commands) => {
-      const world = runWorld(commands, 5);
-      quiesce(world);
-      assertSettledInvariants(world);
+test("generated histories converge with more devices than partitions", async () => {
+  await fc.assert(
+    fc.asyncProperty(worldCommands(80), async (commands) => {
+      const world = await runWorld(commands, 5);
+      await quiesce(world);
+      await assertSettledInvariants(world);
     }),
     { numRuns: WORLD_RUNS },
   );
 });
 
-test("the invariant registry covers the world-checkable §9 invariants", () => {
+test("the invariant registry covers the world-checkable §9 invariants", async () => {
   const covered = new Set([...STEP_INVARIANTS, ...SETTLED_INVARIANTS].map((invariant) => invariant.id));
   const expected = [
     "§9.3",
@@ -75,7 +76,7 @@ test("the invariant registry covers the world-checkable §9 invariants", () => {
   }
 });
 
-test("a restore competing with an independent create of the same id settles without a false alarm", () => {
+test("a restore competing with an independent create of the same id settles without a false alarm", async () => {
   // The arrangement three generated histories shrank to, written out so it does not depend on
   // a seed. Two devices make the same id independently; only the first push wins the id, and
   // the loser's create is quarantined as `row_exists` (§5.5). Its queued delete and restore are
@@ -101,21 +102,21 @@ test("a restore competing with an independent create of the same id settles with
     [AUTO_DELETE_DAYS]: 30,
   });
 
-  loser.create(TASKS, row, values("loser-title", "a:loser"), txnId("create-loser"));
+  await loser.create(TASKS, row, values("loser-title", "a:loser"), txnId("create-loser"));
   // Enough for the two creates to be told apart by their stamps, and no more: the restore that
   // follows is emitted in this same millisecond, which is what puts it under the winning create.
   world.now += 1;
-  winner.create(TASKS, row, values("winner-title", "a:winner"), txnId("create-winner"));
-  loser.delete(TASKS, row, txnId("delete-loser"));
-  loser.restore(TASKS, row, { [TITLE]: "restored-title" }, txnId("restore-loser"));
-  winner.sync(world.server, propertySchemaHash);
+  await winner.create(TASKS, row, values("winner-title", "a:winner"), txnId("create-winner"));
+  await loser.delete(TASKS, row, txnId("delete-loser"));
+  await loser.restore(TASKS, row, { [TITLE]: "restored-title" }, txnId("restore-loser"));
+  await winner.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
-  quiesce(world);
-  assertSettledInvariants(world);
+  await quiesce(world);
+  await assertSettledInvariants(world);
 });
 
-test("a settled world reports no disagreements for a trivially empty history", () => {
-  const world = runWorld([]);
-  quiesce(world);
+test("a settled world reports no disagreements for a trivially empty history", async () => {
+  const world = await runWorld([]);
+  await quiesce(world);
   if (disagreements(world).length !== 0) throw new Error("an empty history disagreed with itself");
 });

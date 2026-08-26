@@ -18,7 +18,8 @@ import {
   decodeWireValue,
   encodeFieldValue,
   encodeWireValue,
-  type SqlExecutor,
+  type AsyncSqlExecutor,
+  type AsyncSqlTransaction,
   type SqlRow,
   type SqlValue,
 } from "weftdb/shared";
@@ -28,43 +29,44 @@ import { splitSql } from "../sql.ts";
 import { WeftClient, type LocalRow, type LocalRowInternals, type QuarantinedOp, type Tombstone } from "./index.ts";
 
 export class SqliteClientStore {
-  readonly executor: SqlExecutor;
+  readonly executor: AsyncSqlExecutor;
   readonly schema: SchemaDefinition;
   /** Whether this store has established that the database agrees with the client it writes. */
   private matched = false;
   private installed = false;
+  private installing: Promise<void> | undefined;
 
-  constructor(executor: SqlExecutor, schema: SchemaDefinition) {
+  constructor(executor: AsyncSqlExecutor, schema: SchemaDefinition) {
     this.executor = executor;
     this.schema = schema;
   }
 
-  installSchema(): void {
-    this.executor.transaction(() => {
+  async installSchema(): Promise<void> {
+    await this.executor.transaction(async (tx) => {
       for (const sql of splitSql(generateClientDdl(this.schema))) {
-        this.executor.run({ sql, parameters: [] });
+        await tx.run({ sql, parameters: [] });
       }
       for (const [tableNameValue, collection] of Object.entries(this.schema.collections)) {
         for (const sql of generateClientAddMissingColumnDdl(
           tableNameValue,
           collection,
-          this.tableColumns(tableNameValue),
+          await this.tableColumns(tx, tableNameValue),
         )) {
-          this.executor.run({ sql, parameters: [] });
+          await tx.run({ sql, parameters: [] });
         }
       }
-      this.installed = true;
     });
+    this.installed = true;
   }
 
   /**
    * Makes this store the client's durable state: every change is written through, so a
    * process that dies between a local edit and its push loses nothing (§4.1, §10).
    */
-  attach(client: WeftClient): WeftClient {
-    this.ensureSchema();
+  async attach(client: WeftClient): Promise<WeftClient> {
+    await this.ensureSchema();
     client.persistence = this;
-    this.save(client);
+    await this.save(client);
     return client;
   }
 
@@ -74,20 +76,20 @@ export class SqliteClientStore {
    * and a hydrate that read the lot would load another scope's rows, another scope's unsent
    * outbox and another scope's tombstones into this client — and push them on the next flush.
    */
-  hydrate(scopeIdValue: ScopeId, deviceIdValue: import("weftdb/core").DeviceId): WeftClient {
-    this.ensureSchema();
+  async hydrate(scopeIdValue: ScopeId, deviceIdValue: import("weftdb/core").DeviceId): Promise<WeftClient> {
+    await this.ensureSchema();
     const client = new WeftClient(scopeIdValue, deviceIdValue, this.schema);
     for (const [tableNameValue, collection] of Object.entries(this.schema.collections)) {
-      for (const row of this.loadRows(scopeIdValue, tableName(tableNameValue), collection.fields)) {
+      for (const row of await this.loadRows(scopeIdValue, tableName(tableNameValue), collection.fields)) {
         client.rows.set(localKey(tableName(tableNameValue), row.id), row);
       }
     }
-    client.outbox.push(...this.loadOutbox(scopeIdValue));
-    client.quarantine.push(...this.loadQuarantine(scopeIdValue));
-    for (const tombstone of this.loadTombstones(scopeIdValue)) {
+    client.outbox.push(...(await this.loadOutbox(scopeIdValue)));
+    client.quarantine.push(...(await this.loadQuarantine(scopeIdValue)));
+    for (const tombstone of await this.loadTombstones(scopeIdValue)) {
       client.tombstones.set(localKey(tombstone.tableName, tombstone.rowId), tombstone);
     }
-    const syncState = this.executor.get(syncStateStatement(scopeIdValue));
+    const syncState = await this.executor.get(syncStateStatement(scopeIdValue));
     if (syncState !== undefined) {
       client.lastServerSeq = syncState.lastServerSeq;
       client.resyncRequired = syncState.resyncRequired;
@@ -111,17 +113,22 @@ export class SqliteClientStore {
    * the list. The outbox and quarantine are rewritten whole: they hold unsent work, so their
    * size is what a device has yet to push rather than what it has ever written.
    */
-  save(client: WeftClient): void {
-    this.ensureSchema();
-    this.executor.transaction(() => {
-      if (this.matched) this.saveChangedRows(client);
-      else this.saveEveryRow(client);
-      this.matched = true;
-      this.clearFrameworkTables(client.scopeId);
-      for (const op of client.outbox) this.saveOutbox(op);
-      for (const op of client.quarantine) this.saveQuarantine(op);
-      this.executor.run({
-        sql: `INSERT INTO sync_state (scope_id, last_server_seq, schema_hash, schema_version, device_id, hlc_last, resync_required)
+  async save(client: WeftClient): Promise<void> {
+    await this.ensureSchema();
+    // Taken before the transaction opens, because a statement that throws half way through rolls
+    // the write back: keys drained inside it would name rows nothing had written and nothing would
+    // write again. The catch below hands them back on the path where that happens.
+    const matched = this.matched;
+    const touched = matched ? client.drainTouchedRows() : [];
+    try {
+      await this.executor.transaction(async (tx) => {
+        if (matched) await this.saveChangedRows(tx, client, touched);
+        else await this.saveEveryRow(tx, client);
+        await this.clearFrameworkTables(tx, client.scopeId);
+        for (const op of client.outbox) await this.saveOutbox(tx, op);
+        for (const op of client.quarantine) await this.saveQuarantine(tx, op);
+        await tx.run({
+          sql: `INSERT INTO sync_state (scope_id, last_server_seq, schema_hash, schema_version, device_id, hlc_last, resync_required)
 VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(scope_id) DO UPDATE SET
   last_server_seq = excluded.last_server_seq,
@@ -130,64 +137,71 @@ ON CONFLICT(scope_id) DO UPDATE SET
   device_id = excluded.device_id,
   hlc_last = excluded.hlc_last,
   resync_required = excluded.resync_required`,
-        parameters: [
-          client.scopeId,
-          client.lastServerSeq,
-          "",
-          client.schema.schemaVersion,
-          client.deviceId,
-          client.clock.highest(),
-          // A required resync is a fact about this device's cursor, not about the session that
-          // discovered it. Losing it on restart leaves the client pulling incrementally from a
-          // point the relay has already purged, which is the state the flag exists to leave.
-          client.resyncRequired ? 1 : 0,
-        ],
+          parameters: [
+            client.scopeId,
+            client.lastServerSeq,
+            "",
+            client.schema.schemaVersion,
+            client.deviceId,
+            client.clock.highest(),
+            // A required resync is a fact about this device's cursor, not about the session that
+            // discovered it. Losing it on restart leaves the client pulling incrementally from a
+            // point the relay has already purged, which is the state the flag exists to leave.
+            client.resyncRequired ? 1 : 0,
+          ],
+        });
       });
-    });
+    } catch (error) {
+      client.touchRows(touched);
+      throw error;
+    }
+    // After the commit, so a database that rejected the write is one this store still knows it
+    // disagrees with.
+    if (!matched) client.drainTouchedRows();
+    this.matched = true;
   }
 
   /** Only what the client says has moved since the last save. */
-  private saveChangedRows(client: WeftClient): void {
-    for (const key of client.drainTouchedRows()) {
+  private async saveChangedRows(tx: AsyncSqlTransaction, client: WeftClient, keys: readonly string[]): Promise<void> {
+    for (const key of keys) {
       const { tableName: tableNameValue, rowId: rowIdValue } = parseLocalKey(key);
       // A key is either a live row, a tombstone, or neither; clearing both first means one path
       // covers a write, a delete, a restore and a prune alike.
-      this.executor.run({
+      await tx.run({
         sql: `DELETE FROM ${quoteIdent(tableNameValue)} WHERE scope_id = ? AND id = ?`,
         parameters: [client.scopeId, rowIdValue],
       });
-      this.executor.run({
+      await tx.run({
         sql: "DELETE FROM tombstones WHERE scope_id = ? AND table_name = ? AND row_id = ?",
         parameters: [client.scopeId, tableNameValue, rowIdValue],
       });
       const row = client.rows.get(key);
-      if (row !== undefined) this.saveRow(tableNameValue, row);
+      if (row !== undefined) await this.saveRow(tx, tableNameValue, row);
       const tombstone = client.tombstones.get(key);
-      if (tombstone !== undefined) this.saveTombstone(tombstone);
+      if (tombstone !== undefined) await this.saveTombstone(tx, tombstone);
     }
   }
 
   /** The first save against a database this store has not established agreement with. */
-  private saveEveryRow(client: WeftClient): void {
-    this.executor.run({ sql: "DELETE FROM tombstones WHERE scope_id = ?", parameters: [client.scopeId] });
+  private async saveEveryRow(tx: AsyncSqlTransaction, client: WeftClient): Promise<void> {
+    await tx.run({ sql: "DELETE FROM tombstones WHERE scope_id = ?", parameters: [client.scopeId] });
     for (const tableNameValue of Object.keys(this.schema.collections).map(tableName)) {
-      this.executor.run({
+      await tx.run({
         sql: `DELETE FROM ${quoteIdent(tableNameValue)} WHERE scope_id = ?`,
         parameters: [client.scopeId],
       });
     }
     for (const [key, row] of client.rows) {
-      this.saveRow(parseLocalKey(key).tableName, row);
+      await this.saveRow(tx, parseLocalKey(key).tableName, row);
     }
-    for (const tombstone of client.tombstones.values()) this.saveTombstone(tombstone);
-    client.drainTouchedRows();
+    for (const tombstone of client.tombstones.values()) await this.saveTombstone(tx, tombstone);
   }
 
-  private loadRows(
+  private async loadRows(
     scopeIdValue: ScopeId,
     tableNameValue: TableName,
     fields: Readonly<Record<string, FieldDefinition>>,
-  ): readonly LocalRow[] {
+  ): Promise<readonly LocalRow[]> {
     return this.executor.all({
       sql: `SELECT * FROM ${quoteIdent(tableNameValue)} WHERE scope_id = ?`,
       parameters: [scopeIdValue],
@@ -195,7 +209,7 @@ ON CONFLICT(scope_id) DO UPDATE SET
     });
   }
 
-  private saveRow(tableNameValue: TableName, row: LocalRow): void {
+  private async saveRow(tx: AsyncSqlTransaction, tableNameValue: TableName, row: LocalRow): Promise<void> {
     const fields = this.schema.collections[tableNameValue]?.fields ?? {};
     const domainEntries: Array<[string, SqlValue]> = [
       // Base fields are columns in their own right and are stored raw. They also appear in
@@ -227,14 +241,14 @@ ON CONFLICT(scope_id) DO UPDATE SET
       [NULL_FIELDS_COLUMN, encodeNullFields(row)],
     ];
     const entries = dedupeEntries([...domainEntries, ...internalEntries]);
-    this.executor.run({
+    await tx.run({
       sql: `INSERT INTO ${quoteIdent(tableNameValue)} (${entries.map(([name]) => quoteIdent(name)).join(", ")})
 VALUES (${entries.map(() => "?").join(", ")})`,
       parameters: entries.map(([, value]) => value),
     });
   }
 
-  private loadOutbox(scopeIdValue: ScopeId): readonly WeftOp[] {
+  private async loadOutbox(scopeIdValue: ScopeId): Promise<readonly WeftOp[]> {
     return this.executor.all({
       sql: "SELECT * FROM outbox WHERE scope_id = ? ORDER BY seq",
       parameters: [scopeIdValue],
@@ -242,7 +256,7 @@ VALUES (${entries.map(() => "?").join(", ")})`,
     });
   }
 
-  private loadQuarantine(scopeIdValue: ScopeId): readonly QuarantinedOp[] {
+  private async loadQuarantine(scopeIdValue: ScopeId): Promise<readonly QuarantinedOp[]> {
     return this.executor.all({
       sql: "SELECT * FROM outbox_quarantine WHERE scope_id = ? ORDER BY seq",
       parameters: [scopeIdValue],
@@ -250,7 +264,7 @@ VALUES (${entries.map(() => "?").join(", ")})`,
     });
   }
 
-  private loadTombstones(scopeIdValue: ScopeId): readonly Tombstone[] {
+  private async loadTombstones(scopeIdValue: ScopeId): Promise<readonly Tombstone[]> {
     return this.executor.all({
       sql: "SELECT scope_id, table_name, row_id, hlc, server_seq FROM tombstones WHERE scope_id = ?",
       parameters: [scopeIdValue],
@@ -258,22 +272,22 @@ VALUES (${entries.map(() => "?").join(", ")})`,
     });
   }
 
-  private clearFrameworkTables(scopeIdValue: ScopeId): void {
+  private async clearFrameworkTables(tx: AsyncSqlTransaction, scopeIdValue: ScopeId): Promise<void> {
     for (const table of ["outbox", "outbox_quarantine", "sync_state"]) {
-      this.executor.run({ sql: `DELETE FROM ${table} WHERE scope_id = ?`, parameters: [scopeIdValue] });
+      await tx.run({ sql: `DELETE FROM ${table} WHERE scope_id = ?`, parameters: [scopeIdValue] });
     }
   }
 
-  private saveOutbox(op: WeftOp): void {
-    this.executor.run({
+  private async saveOutbox(tx: AsyncSqlTransaction, op: WeftOp): Promise<void> {
+    await tx.run({
       sql: `INSERT INTO outbox (scope_id, table_name, row_id, field, value, hlc, base_hash, txn_id, kind, attempts)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       parameters: encodeOutboxParameters(op, 0),
     });
   }
 
-  private saveQuarantine(op: QuarantinedOp): void {
-    this.executor.run({
+  private async saveQuarantine(tx: AsyncSqlTransaction, op: QuarantinedOp): Promise<void> {
+    await tx.run({
       sql: `INSERT INTO outbox_quarantine (scope_id, table_name, row_id, field, value, hlc, base_hash, txn_id, kind, attempts, rejected_at, reason, server_value)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       parameters: [
@@ -285,21 +299,30 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     });
   }
 
-  private saveTombstone(tombstone: Tombstone): void {
-    this.executor.run({
+  private async saveTombstone(tx: AsyncSqlTransaction, tombstone: Tombstone): Promise<void> {
+    await tx.run({
       sql: `INSERT INTO tombstones (scope_id, table_name, row_id, hlc, server_seq)
 VALUES (?, ?, ?, ?, ?)`,
       parameters: [tombstone.scopeId, tombstone.tableName, tombstone.rowId, tombstone.hlc, tombstone.serverSeq],
     });
   }
 
-  private ensureSchema(): void {
-    if (!this.installed) this.installSchema();
+  /**
+   * The schema, installed once.
+   *
+   * The latch holds the install in flight, because two callers can reach here before either has
+   * finished: `generateClientAddMissingColumnDdl` emits an `ALTER TABLE ADD COLUMN` for a column
+   * that is missing, and running it twice is an error.
+   */
+  private async ensureSchema(): Promise<void> {
+    if (this.installed) return;
+    this.installing ??= this.installSchema();
+    await this.installing;
   }
 
-  private tableColumns(tableNameValue: string): ReadonlySet<string> {
+  private async tableColumns(tx: AsyncSqlTransaction, tableNameValue: string): Promise<ReadonlySet<string>> {
     return new Set(
-      this.executor.all({
+      await tx.all({
         sql: `PRAGMA table_info(${quoteIdent(tableNameValue)})`,
         parameters: [],
         decode: (row): string => requiredString(column(row, "name")),

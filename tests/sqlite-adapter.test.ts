@@ -6,9 +6,17 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import fc from "fast-check";
 import { compareHlc, deviceId, fieldName, rowId, scopeId, tableName, txnId, type HlcString } from "weftdb/core";
-import { type SqlExecutor, type SqlParameters, type SqlRow, type SqlStatement, type SqlValue } from "weftdb/shared";
+import {
+  asyncSqlExecutor,
+  type AsyncSqlExecutor,
+  type AsyncSqlTransaction,
+  type SqlParameters,
+  type SqlRow,
+  type SqlStatement,
+  type SqlValue,
+} from "weftdb/shared";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
-import { WeftClient } from "weftdb/client";
+import { inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { SqliteWeftServer } from "weftdb/server/sqlite";
@@ -23,7 +31,7 @@ const schema = defineSchema({
 const SQLITE_PROPERTY_RUNS = Number(process.env["WEFT_SQLITE_PROPERTY_RUNS"] ?? 25);
 const tokenArb = fc.stringMatching(/^[a-z][a-z0-9_-]{0,8}$/u);
 
-test("the generated SQL runs on a SQLite that is not the Node binding", () => {
+test("the generated SQL runs on a SQLite that is not the Node binding", async () => {
   // The one test that pays for the `sqlite3` binary. Everything else here runs on
   // `openSqliteExecutor`, which is what a device and a relay actually use — but running only on
   // that would leave the generated DDL and statements free to depend on whatever `node:sqlite`
@@ -34,32 +42,32 @@ test("the generated SQL runs on a SQLite that is not the Node binding", () => {
   const store = new SqliteClientStore(db.executor, schema);
 
   const client = new WeftClient(scopeId("sqlite-portable"), deviceId("device"), schema, () => 1_000);
-  client.create(tableName("tasks"), rowId("task-1"), { [fieldName("title")]: "portable" }, txnId("txn"));
-  store.save(client);
+  await client.create(tableName("tasks"), rowId("task-1"), { [fieldName("title")]: "portable" }, txnId("txn"));
+  await store.save(client);
 
-  const hydrated = store.hydrate(scopeId("sqlite-portable"), deviceId("device"));
+  const hydrated = await store.hydrate(scopeId("sqlite-portable"), deviceId("device"));
   assert.equal(hydrated.getRow(tableName("tasks"), rowId("task-1"))?.fields.get(fieldName("title")), "portable");
   assert.deepEqual(
-    tableColumns(db.executor, "tasks").includes("_weft_base_notes"),
+    (await tableColumns(db.executor, "tasks")).includes("_weft_base_notes"),
     true,
     "the generated DDL did not survive stock sqlite3",
   );
 });
 
-test("client SQLite adapter installs itself, persists, and hydrates rows and outbox", () => {
+test("client SQLite adapter installs itself, persists, and hydrates rows and outbox", async () => {
   using db = TempSqlite.open();
   const store = new SqliteClientStore(db.executor, schema);
 
   const client = new WeftClient(scopeId("sqlite-client"), deviceId("device"), schema, () => 1_000);
-  client.create(tableName("tasks"), rowId("task-1"), { [fieldName("title")]: "persisted" }, txnId("txn"));
-  store.save(client);
+  await client.create(tableName("tasks"), rowId("task-1"), { [fieldName("title")]: "persisted" }, txnId("txn"));
+  await store.save(client);
 
-  const hydrated = store.hydrate(scopeId("sqlite-client"), deviceId("device"));
+  const hydrated = await store.hydrate(scopeId("sqlite-client"), deviceId("device"));
   assert.equal(hydrated.getRow(tableName("tasks"), rowId("task-1"))?.fields.get(fieldName("title")), "persisted");
   assert.equal(hydrated.outbox.length, client.outbox.length);
 });
 
-test("client SQLite adapter adds missing columns for a newer additive schema", () => {
+test("client SQLite adapter adds missing columns for a newer additive schema", async () => {
   using db = TempSqlite.open();
   const firstSchema = defineSchema(
     {
@@ -83,11 +91,11 @@ test("client SQLite adapter adds missing columns for a newer additive schema", (
 
   const firstStore = new SqliteClientStore(db.executor, firstSchema);
   const client = new WeftClient(scopeId("sqlite-upgrade"), deviceId("device"), firstSchema, () => 1_000);
-  client.create(tableName("tasks"), rowId("task-1"), { [fieldName("title")]: "persisted" }, txnId("txn"));
-  firstStore.save(client);
+  await client.create(tableName("tasks"), rowId("task-1"), { [fieldName("title")]: "persisted" }, txnId("txn"));
+  await firstStore.save(client);
 
   const nextStore = new SqliteClientStore(db.executor, nextSchema);
-  const hydrated = nextStore.hydrate(scopeId("sqlite-upgrade"), deviceId("device"));
+  const hydrated = await nextStore.hydrate(scopeId("sqlite-upgrade"), deviceId("device"));
   const row = hydrated.getRow(tableName("tasks"), rowId("task-1"));
 
   assert.equal(row?.fields.get(fieldName("title")), "persisted");
@@ -95,19 +103,19 @@ test("client SQLite adapter adds missing columns for a newer additive schema", (
   assert.equal(row?.fields.get(fieldName("status")), "open");
   assert.equal(row?.fields.has(fieldName("notes")), false);
   assert.deepEqual(
-    tableColumns(db.executor, "tasks").filter((name) => name.startsWith("_weft_base_")),
+    (await tableColumns(db.executor, "tasks")).filter((name) => name.startsWith("_weft_base_")),
     ["_weft_base_notes"],
   );
 });
 
-test("server SQLite adapter persists scope, device, and snapshot rows", () => {
+test("server SQLite adapter persists scope, device, and snapshot rows", async () => {
   using db = TempSqlite.open();
-  const server = new SqliteWeftServer(db.executor, () => 1_000);
+  const server = new SqliteWeftServer(db.connection, () => 1_000);
   const client = new WeftClient(scopeId("sqlite-server"), deviceId("device"), schema, () => 1_000);
-  client.create(tableName("tasks"), rowId("task-1"), { [fieldName("title")]: "server" }, txnId("txn"));
-  client.sync(server, schemaHash(schema));
+  await client.create(tableName("tasks"), rowId("task-1"), { [fieldName("title")]: "server" }, txnId("txn"));
+  await client.syncWith(inProcessTransport(server), schemaHash(schema));
 
-  const reloaded = new SqliteWeftServer(db.executor, () => 2_000);
+  const reloaded = new SqliteWeftServer(db.connection, () => 2_000);
   const snapshot = reloaded.snapshotInReadTransaction(scopeId("sqlite-server"));
   assert.equal(snapshot.rows.length, 1);
   assert.equal(
@@ -117,9 +125,9 @@ test("server SQLite adapter persists scope, device, and snapshot rows", () => {
   assert.equal(reloaded.devices.size, 1);
 });
 
-test("client SQLite hydrate only restores state for the requested scope", () => {
-  fc.assert(
-    fc.property(
+test("client SQLite hydrate only restores state for the requested scope", async () => {
+  await fc.assert(
+    fc.asyncProperty(
       fc.uniqueArray(tokenArb, { minLength: 2, maxLength: 4 }),
       fc.uniqueArray(fc.tuple(tokenArb, tokenArb), {
         minLength: 1,
@@ -127,7 +135,7 @@ test("client SQLite hydrate only restores state for the requested scope", () => 
         selector: ([rowToken]) => rowToken,
       }),
       fc.integer({ min: 0, max: 3 }),
-      (scopeTokens, rowEntries, targetIndex) => {
+      async (scopeTokens, rowEntries, targetIndex) => {
         using db = TempSqlite.open();
         const tasks = tableName("tasks");
         const title = fieldName("title");
@@ -136,15 +144,15 @@ test("client SQLite hydrate only restores state for the requested scope", () => 
         for (const scope of scopeTokens) {
           const server = new WeftServer(() => 1_000);
           const store = new SqliteClientStore(db.executor, schema);
-          const client = store.attach(new WeftClient(scopeId(scope), deviceId("device"), schema, () => 1_000));
+          const client = await store.attach(new WeftClient(scopeId(scope), deviceId("device"), schema, () => 1_000));
           const synced = rowId(`${scope}-synced`);
-          client.create(tasks, synced, { [title]: `${scope}-synced` }, txnId(`create-synced-${scope}`));
-          client.sync(server, schemaHash(schema));
-          client.update(tasks, synced, { [fieldName("created")]: `${scope}-bad` }, txnId(`bad-${scope}`));
-          client.sync(server, schemaHash(schema));
+          await client.create(tasks, synced, { [title]: `${scope}-synced` }, txnId(`create-synced-${scope}`));
+          await client.syncWith(inProcessTransport(server), schemaHash(schema));
+          await client.update(tasks, synced, { [fieldName("created")]: `${scope}-bad` }, txnId(`bad-${scope}`));
+          await client.syncWith(inProcessTransport(server), schemaHash(schema));
 
           for (const [rowToken, titleToken] of rowEntries) {
-            client.create(
+            await client.create(
               tasks,
               rowId(`${scope}-${rowToken}`),
               { [title]: `${scope}-${titleToken}` },
@@ -152,11 +160,14 @@ test("client SQLite hydrate only restores state for the requested scope", () => 
             );
           }
           const deleted = rowId(`${scope}-deleted`);
-          client.create(tasks, deleted, { [title]: `${scope}-deleted` }, txnId(`create-deleted-${scope}`));
-          client.delete(tasks, deleted, txnId(`delete-${scope}`));
+          await client.create(tasks, deleted, { [title]: `${scope}-deleted` }, txnId(`create-deleted-${scope}`));
+          await client.delete(tasks, deleted, txnId(`delete-${scope}`));
         }
 
-        const hydrated = new SqliteClientStore(db.executor, schema).hydrate(scopeId(targetScope), deviceId("device"));
+        const hydrated = await new SqliteClientStore(db.executor, schema).hydrate(
+          scopeId(targetScope),
+          deviceId("device"),
+        );
         assert.deepEqual(
           [...new Set([...hydrated.rows.values()].map((record) => record.scopeId))],
           [scopeId(targetScope)],
@@ -190,16 +201,16 @@ test("client SQLite hydrate only restores state for the requested scope", () => 
   );
 });
 
-test("client SQLite hydrate filters framework tables for the requested scope", () => {
+test("client SQLite hydrate filters framework tables for the requested scope", async () => {
   using db = TempSqlite.open();
   const store = new SqliteClientStore(db.executor, schema);
-  store.installSchema();
+  await store.installSchema();
   for (const [scope, title] of [
     ["target", "keep"],
     ["other", "drop"],
   ] as const) {
     const client = new WeftClient(scopeId(scope), deviceId("device"), schema, () => 1_000);
-    client.create(
+    await client.create(
       tableName("tasks"),
       rowId(`task-${scope}`),
       { [fieldName("title")]: title },
@@ -209,10 +220,10 @@ test("client SQLite hydrate filters framework tables for the requested scope", (
     // tombstones and sync_state must still be scoped even when no domain rows are involved.
     client.rows.clear();
     client.drainTouchedRows();
-    store.save(client);
+    await store.save(client);
   }
 
-  const hydrated = store.hydrate(scopeId("target"), deviceId("device"));
+  const hydrated = await store.hydrate(scopeId("target"), deviceId("device"));
   assert.deepEqual(
     [...new Set(hydrated.outbox.map((op) => op.scopeId))],
     [scopeId("target")],
@@ -220,59 +231,64 @@ test("client SQLite hydrate filters framework tables for the requested scope", (
   );
 });
 
-test("client SQLite storage keeps the same row id distinct across scopes", () => {
+test("client SQLite storage keeps the same row id distinct across scopes", async () => {
   using db = TempSqlite.open();
   for (const [scope, title] of [
     ["scope-a", "from a"],
     ["scope-b", "from b"],
   ] as const) {
     const client = new WeftClient(scopeId(scope), deviceId("device"), schema, () => 1_000);
-    client.create(tableName("tasks"), rowId("shared"), { [fieldName("title")]: title }, txnId(`create-${scope}`));
-    new SqliteClientStore(db.executor, schema).save(client);
+    await client.create(tableName("tasks"), rowId("shared"), { [fieldName("title")]: title }, txnId(`create-${scope}`));
+    await new SqliteClientStore(db.executor, schema).save(client);
   }
 
   for (const [scope, title] of [
     ["scope-a", "from a"],
     ["scope-b", "from b"],
   ] as const) {
-    const hydrated = new SqliteClientStore(db.executor, schema).hydrate(scopeId(scope), deviceId("device"));
+    const hydrated = await new SqliteClientStore(db.executor, schema).hydrate(scopeId(scope), deviceId("device"));
     assert.equal(hydrated.getRow(tableName("tasks"), rowId("shared"))?.fields.get(fieldName("title")), title);
   }
 });
 
-test("client SQLite hydrate preserves a pending resync requirement", () => {
+test("client SQLite hydrate preserves a pending resync requirement", async () => {
   using db = TempSqlite.open();
   const store = new SqliteClientStore(db.executor, schema);
   const client = new WeftClient(scopeId("resync-scope"), deviceId("device"), schema, () => 1_000);
-  client.create(tableName("tasks"), rowId("task-1"), { [fieldName("title")]: "local" }, txnId("create"));
+  await client.create(tableName("tasks"), rowId("task-1"), { [fieldName("title")]: "local" }, txnId("create"));
   client.resyncRequired = true;
-  store.save(client);
+  await store.save(client);
 
-  const hydrated = new SqliteClientStore(db.executor, schema).hydrate(scopeId("resync-scope"), deviceId("device"));
+  const hydrated = await new SqliteClientStore(db.executor, schema).hydrate(
+    scopeId("resync-scope"),
+    deviceId("device"),
+  );
   assert.equal(hydrated.resyncRequired, true, "a restart dropped the pending snapshot requirement");
 });
 
-test("client SQLite hydrate preserves the clock across a reload", () => {
-  fc.assert(
-    fc.property(fc.integer({ min: 0, max: 5 }), (edits) => {
+test("client SQLite hydrate preserves the clock across a reload", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.integer({ min: 0, max: 5 }), async (edits) => {
       using db = TempSqlite.open();
       const store = new SqliteClientStore(db.executor, schema);
       const tasks = tableName("tasks");
       const title = fieldName("title");
       const row = rowId("clocked");
       const frozen = 1_000;
-      const client = store.attach(new WeftClient(scopeId("clock-scope"), deviceId("device"), schema, () => frozen));
-      client.create(tasks, row, { [title]: "initial" }, txnId("create"));
+      const client = await store.attach(
+        new WeftClient(scopeId("clock-scope"), deviceId("device"), schema, () => frozen),
+      );
+      await client.create(tasks, row, { [title]: "initial" }, txnId("create"));
       for (let index = 0; index < edits; index += 1) {
-        client.update(tasks, row, { [title]: `before-${index}` }, txnId(`before-${index}`));
+        await client.update(tasks, row, { [title]: `before-${index}` }, txnId(`before-${index}`));
       }
       const highest = client.outbox.map((op) => op.hlc).reduce(maxHlc);
 
       const originalNow = Date.now;
       Date.now = () => frozen;
       try {
-        const hydrated = store.hydrate(scopeId("clock-scope"), deviceId("device"));
-        hydrated.update(tasks, row, { [title]: "after reload" }, txnId("after"));
+        const hydrated = await store.hydrate(scopeId("clock-scope"), deviceId("device"));
+        await hydrated.update(tasks, row, { [title]: "after reload" }, txnId("after"));
         const afterReload = hydrated.outbox.at(-1)?.hlc;
         assert.ok(afterReload !== undefined, "the post-reload edit was not queued");
         assert.equal(
@@ -292,16 +308,24 @@ function maxHlc(left: HlcString, right: HlcString): HlcString {
   return compareHlc(left, right) >= 0 ? left : right;
 }
 
-/** A throwaway database on the binding a deployed device and server actually run. */
+/**
+ * A throwaway database on the binding a deployed device and server actually run.
+ *
+ * Both ports over the one connection: the server takes the synchronous executor, the client store
+ * takes the asynchronous one. A second `asyncSqlExecutor` over the same connection would hold a
+ * second transaction queue, and the two would issue overlapping `BEGIN`s.
+ */
 class TempSqlite implements Disposable {
   readonly dir: string;
   readonly path: string;
-  readonly executor: SqliteExecutor;
+  readonly connection: SqliteExecutor;
+  readonly executor: AsyncSqlExecutor;
 
   private constructor(dir: string) {
     this.dir = dir;
     this.path = join(dir, "weft.sqlite");
-    this.executor = openSqliteExecutor(this.path);
+    this.connection = openSqliteExecutor(this.path);
+    this.executor = asyncSqlExecutor(this.connection);
   }
 
   static open(): TempSqlite {
@@ -309,7 +333,7 @@ class TempSqlite implements Disposable {
   }
 
   [Symbol.dispose](): void {
-    this.executor.close();
+    this.connection.close();
     rmSync(this.dir, { recursive: true, force: true });
   }
 }
@@ -336,7 +360,7 @@ class TempCliSqlite implements Disposable {
 }
 
 /**
- * `SqlExecutor` over the `sqlite3` binary, one process per statement.
+ * `AsyncSqlExecutor` over the `sqlite3` binary, one process per statement.
  *
  * It exists to run the generated SQL through a SQLite that is not `node:sqlite`, which is the
  * only way to tell a portable statement from one the Node binding happens to accept. It is not a
@@ -345,14 +369,14 @@ class TempCliSqlite implements Disposable {
  * below says so rather than pretending. Anything whose meaning depends on atomicity, isolation
  * or rollback belongs on `node:sqlite`.
  */
-class SqliteCliExecutor implements SqlExecutor {
+class SqliteCliExecutor implements AsyncSqlExecutor {
   readonly path: string;
 
   constructor(path: string) {
     this.path = path;
   }
 
-  all<Decoded>(statement: SqlStatement<Decoded>): readonly Decoded[] {
+  async all<Decoded>(statement: SqlStatement<Decoded>): Promise<readonly Decoded[]> {
     const output = execFileSync("sqlite3", ["-json", this.path, bind(statement.sql, statement.parameters)], {
       encoding: "utf8",
     });
@@ -360,18 +384,19 @@ class SqliteCliExecutor implements SqlExecutor {
     return rows.map(statement.decode);
   }
 
-  get<Decoded>(statement: SqlStatement<Decoded>): Decoded | undefined {
-    return this.all(statement)[0];
+  async get<Decoded>(statement: SqlStatement<Decoded>): Promise<Decoded | undefined> {
+    return (await this.all(statement))[0];
   }
 
-  run(statement: { readonly sql: string; readonly parameters: SqlParameters }): void {
+  async run(statement: { readonly sql: string; readonly parameters: SqlParameters }): Promise<void> {
     execFileSync("sqlite3", [this.path, bind(statement.sql, statement.parameters)]);
   }
 
-  transaction<Result>(body: () => Result): Result {
+  async transaction<Result>(body: (tx: AsyncSqlTransaction) => Result | PromiseLike<Result>): Promise<Result> {
     // Each statement is its own process and therefore its own implicit transaction. Emitting a
-    // `BEGIN` here would be a lie the next `execFileSync` immediately breaks.
-    return body();
+    // `BEGIN` here would be a lie the next `execFileSync` immediately breaks, so the handle the
+    // body is given is this executor: a statement issued through it is one more process.
+    return body(this);
   }
 }
 
@@ -411,7 +436,7 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function tableColumns(executor: SqlExecutor, tableName: string): readonly string[] {
+async function tableColumns(executor: AsyncSqlExecutor, tableName: string): Promise<readonly string[]> {
   return executor.all({
     sql: `PRAGMA table_info("${tableName}")`,
     parameters: [],

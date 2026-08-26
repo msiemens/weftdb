@@ -39,7 +39,7 @@ async function disjointConvergence(config: BenchConfig, devices: number): Promis
     try {
       const world = openWorld(relay, devices);
       const start = performance.now();
-      for (const [index, client] of world.clients.entries()) seedRows(client, edits, index * edits);
+      for (const [index, client] of world.clients.entries()) await seedRows(client, edits, index * edits);
       const rounds = await settle(world);
       const elapsed = performance.now() - start;
       const expected = devices * edits;
@@ -73,11 +73,11 @@ async function contendedConvergence(config: BenchConfig, devices: number): Promi
       const world = openWorld(relay, devices);
       const [first] = world.clients;
       if (first === undefined) throw new Error("a convergence world needs at least one device");
-      seedRows(first, 1);
+      await seedRows(first, 1);
       await settle(world);
       const start = performance.now();
       for (const [index, client] of world.clients.entries()) {
-        client.update(TODOS, row, { [TITLE]: `title from device ${index}` }, updateTxn(row));
+        await client.update(TODOS, row, { [TITLE]: `title from device ${index}` }, updateTxn(row));
       }
       const rounds = await settle(world);
       const elapsed = performance.now() - start;

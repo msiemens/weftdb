@@ -19,7 +19,13 @@ import {
   type WeftOp,
   type WireValue,
 } from "weftdb/core";
-import { planRetentionDeletes, visibleChildren, WeftClient, type MaterializedRow } from "weftdb/client";
+import {
+  inProcessTransport,
+  type MaterializedRow,
+  planRetentionDeletes,
+  visibleChildren,
+  WeftClient,
+} from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import {
   AMOUNT,
@@ -59,16 +65,16 @@ import {
 const overrideArb = fc.option(fc.integer({ min: 0, max: 900 }));
 const amountsArb = fc.array(fc.integer({ min: 0, max: 400 }), { maxLength: 6 });
 
-test("§9.App14 a child row always carries its parent's scope", () => {
-  fc.assert(
-    fc.property(fc.array(fc.integer({ min: 0, max: 3 }), { minLength: 1, maxLength: 4 }), (childCounts) => {
+test("§9.App14 a child row always carries its parent's scope", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.array(fc.integer({ min: 0, max: 3 }), { minLength: 1, maxLength: 4 }), async (childCounts) => {
       const world = createWorld(2);
       const owner = deviceAt(world, 0).client;
       for (const [index, children] of childCounts.entries()) {
         const invoice = rowId(`invoice-${index}`);
-        owner.create(INVOICES, invoice, { [OVERRIDE]: null }, txnId(`invoice-${index}`));
+        await owner.create(INVOICES, invoice, { [OVERRIDE]: null }, txnId(`invoice-${index}`));
         for (let child = 0; child < children; child += 1) {
-          owner.create(
+          await owner.create(
             LINE_ITEMS,
             rowId(`line-${index}-${child}`),
             { [INVOICE_ID]: invoice, [AMOUNT]: 100 },
@@ -76,7 +82,7 @@ test("§9.App14 a child row always carries its parent's scope", () => {
           );
         }
       }
-      quiesce(world);
+      await quiesce(world);
 
       for (const device of world.devices) {
         for (const child of device.client.listRows(LINE_ITEMS)) {
@@ -92,26 +98,26 @@ test("§9.App14 a child row always carries its parent's scope", () => {
   );
 });
 
-test("§9.App15 no child row is visible under a tombstoned parent", () => {
-  fc.assert(
-    fc.property(fc.array(fc.boolean(), { minLength: 1, maxLength: 4 }), (doomed) => {
+test("§9.App15 no child row is visible under a tombstoned parent", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 4 }), async (doomed) => {
       const world = createWorld(2);
       const owner = deviceAt(world, 0).client;
       for (const [index] of doomed.entries()) {
         const invoice = rowId(`invoice-${index}`);
-        owner.create(INVOICES, invoice, { [OVERRIDE]: null }, txnId(`invoice-${index}`));
-        owner.create(
+        await owner.create(INVOICES, invoice, { [OVERRIDE]: null }, txnId(`invoice-${index}`));
+        await owner.create(
           LINE_ITEMS,
           rowId(`line-${index}`),
           { [INVOICE_ID]: invoice, [AMOUNT]: 100 },
           txnId(`line-${index}`),
         );
       }
-      quiesce(world);
+      await quiesce(world);
       for (const [index, remove] of doomed.entries()) {
-        if (remove) owner.delete(INVOICES, rowId(`invoice-${index}`), txnId(`delete-${index}`));
+        if (remove) await owner.delete(INVOICES, rowId(`invoice-${index}`), txnId(`delete-${index}`));
       }
-      quiesce(world);
+      await quiesce(world);
 
       for (const device of world.devices) {
         const visible = visibleChildren(
@@ -134,9 +140,9 @@ test("§9.App15 no child row is visible under a tombstoned parent", () => {
   );
 });
 
-test("§9.16 overriddenness is exactly total_override IS NOT NULL", () => {
-  fc.assert(
-    fc.property(overrideArb, (override) => {
+test("§9.16 overriddenness is exactly total_override IS NOT NULL", async () => {
+  await fc.assert(
+    fc.asyncProperty(overrideArb, async (override) => {
       const invoice = materialized(rowId("invoice"), [[OVERRIDE, override]]);
       assert.equal(isOverridden(invoice, OVERRIDE), override !== null);
     }),
@@ -144,9 +150,9 @@ test("§9.16 overriddenness is exactly total_override IS NOT NULL", () => {
   );
 });
 
-test("§9.17 the derived total is the override, otherwise the sum of visible children", () => {
-  fc.assert(
-    fc.property(overrideArb, amountsArb, (override, amounts) => {
+test("§9.17 the derived total is the override, otherwise the sum of visible children", async () => {
+  await fc.assert(
+    fc.asyncProperty(overrideArb, amountsArb, async (override, amounts) => {
       const invoiceId = rowId("invoice");
       const invoice = materialized(invoiceId, [[OVERRIDE, override]]);
       const children = amounts.map((value, index) =>
@@ -167,11 +173,11 @@ test("§9.17 the derived total is the override, otherwise the sum of visible chi
   );
 });
 
-test("§9.18 event-log rows are removed by no path", () => {
-  fc.assert(
-    fc.property(worldCommands(60), (commands) => {
-      const world = runWorld(commands);
-      quiesce(world);
+test("§9.18 event-log rows are removed by no path", async () => {
+  await fc.assert(
+    fc.asyncProperty(worldCommands(60), async (commands) => {
+      const world = await runWorld(commands);
+      await quiesce(world);
       const events = world.server.snapshot(world.scopeId).rows.filter((row) => row.tableName === EVENTS);
       fc.pre(events.length > 0);
 
@@ -190,7 +196,7 @@ test("§9.18 event-log rows are removed by no path", () => {
       const client = deviceAt(world, 0).client;
       const event = events[0]?.rowId;
       if (event !== undefined) {
-        assert.throws(() => client.delete(EVENTS, event, txnId("delete-event")), /append-class/u);
+        await assert.rejects(() => client.delete(EVENTS, event, txnId("delete-event")), /append-class/u);
       }
       assert.equal(
         planRetentionDeletes(client, propertySchema, { defaultAutoDeleteDays: 1 }, world.now).some(
@@ -228,22 +234,22 @@ test("§9.19 ranks are a total order under plain lexicographic comparison", () =
   );
 });
 
-test("§9.22 a dirty row deleted remotely is quarantined, never dropped", () => {
-  fc.assert(
-    fc.property(fc.string({ minLength: 1, maxLength: 10 }), (edit) => {
+test("§9.22 a dirty row deleted remotely is quarantined, never dropped", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.string({ minLength: 1, maxLength: 10 }), async (edit) => {
       const world = createWorld(2);
       const owner = deviceAt(world, 0).client;
       const editor = deviceAt(world, 1).client;
       const row = rowId("contested");
-      owner.create(TASKS, row, taskValues("contested"), txnId("create"));
-      owner.sync(world.server, propertySchemaHash);
-      editor.sync(world.server, propertySchemaHash);
+      await owner.create(TASKS, row, taskValues("contested"), txnId("create"));
+      await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
+      await editor.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
       world.now += 1;
-      editor.update(TASKS, row, { [TITLE]: edit }, txnId("unsynced"));
-      owner.delete(TASKS, row, txnId("remote-delete"));
-      owner.sync(world.server, propertySchemaHash);
-      editor.applyPull(world.server.pull(world.scopeId, editor.lastServerSeq));
+      await editor.update(TASKS, row, { [TITLE]: edit }, txnId("unsynced"));
+      await owner.delete(TASKS, row, txnId("remote-delete"));
+      await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
+      await editor.applyPull(world.server.pull(world.scopeId, editor.lastServerSeq));
 
       assert.equal(
         editor.quarantine.some((op) => op.txnId === txnId("unsynced")),
@@ -258,18 +264,23 @@ test("§9.22 a dirty row deleted remotely is quarantined, never dropped", () => 
   );
 });
 
-test("§9.23 an append row accepts neither set nor delete from any client", () => {
-  fc.assert(
-    fc.property(fc.string({ minLength: 1, maxLength: 10 }), (status) => {
+test("§9.23 an append row accepts neither set nor delete from any client", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.string({ minLength: 1, maxLength: 10 }), async (status) => {
       const world = createWorld(2);
       const author = deviceAt(world, 0).client;
       const other = deviceAt(world, 1).client;
       const event = rowId("event");
-      author.append(EVENTS, event, { [fieldName("task_id")]: "task", [fieldName("status")]: "open" }, txnId("append"));
-      author.sync(world.server, propertySchemaHash);
-      other.sync(world.server, propertySchemaHash);
+      await author.append(
+        EVENTS,
+        event,
+        { [fieldName("task_id")]: "task", [fieldName("status")]: "open" },
+        txnId("append"),
+      );
+      await author.syncWith(inProcessTransport(world.server), propertySchemaHash);
+      await other.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
-      assert.throws(() => other.delete(EVENTS, event, txnId("delete")), /append-class/u);
+      await assert.rejects(() => other.delete(EVENTS, event, txnId("delete")), /append-class/u);
       const rawDelete = world.server.push(world.scopeId, [
         {
           scopeId: world.scopeId,
@@ -285,7 +296,7 @@ test("§9.23 an append row accepts neither set nor delete from any client", () =
       // A client refuses to queue the edit at all, for the same reason it refuses the delete:
       // the work could only ever be rejected, and quarantining it would ask a person to decide
       // about something that was never going to land.
-      assert.throws(
+      await assert.rejects(
         () => other.update(EVENTS, event, { [fieldName("status")]: status }, txnId("late-set")),
         /append-class/u,
       );
@@ -311,18 +322,18 @@ test("§9.23 an append row accepts neither set nor delete from any client", () =
   );
 });
 
-test("§9.23a no sequence of field writes resurrects a tombstoned row", () => {
-  fc.assert(
-    fc.property(
+test("§9.23a no sequence of field writes resurrects a tombstoned row", async () => {
+  await fc.assert(
+    fc.asyncProperty(
       fc.array(fc.tuple(fc.boolean(), fc.string({ minLength: 1, maxLength: 8 })), { minLength: 1, maxLength: 8 }),
-      (writes) => {
+      async (writes) => {
         const world = createWorld(1);
         const client = deviceAt(world, 0).client;
         const row = rowId("buried");
-        client.create(TASKS, row, taskValues("buried"), txnId("create"));
-        client.sync(world.server, propertySchemaHash);
-        client.delete(TASKS, row, txnId("delete"));
-        client.sync(world.server, propertySchemaHash);
+        await client.create(TASKS, row, taskValues("buried"), txnId("create"));
+        await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
+        await client.delete(TASKS, row, txnId("delete"));
+        await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
         const deletedHlc = serverRow(world, row)?.deletedHlc;
 
         for (const [index, [onTitle, value]] of writes.entries()) {
@@ -413,60 +424,60 @@ test("§9.23b delete and restore converge by HLC under any interleaving", () => 
   );
 });
 
-test("§9.23c a restored row comes back with every field it had at deletion", () => {
-  fc.assert(
-    fc.property(fc.string({ minLength: 1, maxLength: 10 }), (title) => {
+test("§9.23c a restored row comes back with every field it had at deletion", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.string({ minLength: 1, maxLength: 10 }), async (title) => {
       const world = createWorld(2);
       const owner = deviceAt(world, 0).client;
       const watcher = deviceAt(world, 1).client;
       const row = rowId("revived");
-      owner.create(TASKS, row, taskValues(title), txnId("create"));
-      owner.sync(world.server, propertySchemaHash);
-      watcher.sync(world.server, propertySchemaHash);
+      await owner.create(TASKS, row, taskValues(title), txnId("create"));
+      await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
+      await watcher.syncWith(inProcessTransport(world.server), propertySchemaHash);
       const atDeletion = fieldsOf(watcher, row);
 
-      owner.delete(TASKS, row, txnId("delete"));
-      owner.sync(world.server, propertySchemaHash);
-      watcher.sync(world.server, propertySchemaHash);
+      await owner.delete(TASKS, row, txnId("delete"));
+      await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
+      await watcher.syncWith(inProcessTransport(world.server), propertySchemaHash);
       assert.equal(localState(watcher, TASKS, row), "tombstoned", "the delete never reached the watcher");
 
       world.now += 1;
-      owner.restore(TASKS, row, {}, txnId("restore"));
-      owner.sync(world.server, propertySchemaHash);
-      watcher.sync(world.server, propertySchemaHash);
+      await owner.restore(TASKS, row, {}, txnId("restore"));
+      await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
+      await watcher.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
       assert.deepEqual(fieldsOf(watcher, row), atDeletion, "an incremental pull returned a partial row");
       const fresh = new WeftClient(world.scopeId, owner.deviceId, propertySchema, () => world.now);
-      fresh.applySnapshot(world.server.snapshot(world.scopeId));
+      await fresh.applySnapshot(world.server.snapshot(world.scopeId));
       assert.deepEqual(fieldsOf(fresh, row), atDeletion, "a snapshot returned a partial row");
     }),
     { numRuns: PROPERTY_RUNS },
   );
 });
 
-test("§9.23c restoring with field values sends those values with the restore", () => {
-  fc.assert(
-    fc.property(
+test("§9.23c restoring with field values sends those values with the restore", async () => {
+  await fc.assert(
+    fc.asyncProperty(
       fc.string({ minLength: 1, maxLength: 10 }),
       fc.string({ minLength: 1, maxLength: 10 }),
-      (before, after) => {
+      async (before, after) => {
         fc.pre(before !== after);
         const world = createWorld(2);
         const owner = deviceAt(world, 0).client;
         const watcher = deviceAt(world, 1).client;
         const row = rowId("revived-with-values");
-        owner.create(TASKS, row, taskValues(before), txnId("create"));
-        owner.sync(world.server, propertySchemaHash);
-        watcher.sync(world.server, propertySchemaHash);
+        await owner.create(TASKS, row, taskValues(before), txnId("create"));
+        await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
+        await watcher.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
-        owner.delete(TASKS, row, txnId("delete"));
-        owner.sync(world.server, propertySchemaHash);
-        watcher.sync(world.server, propertySchemaHash);
+        await owner.delete(TASKS, row, txnId("delete"));
+        await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
+        await watcher.syncWith(inProcessTransport(world.server), propertySchemaHash);
         assert.equal(localState(watcher, TASKS, row), "tombstoned", "the delete never reached the watcher");
 
-        watcher.restore(TASKS, row, { [TITLE]: after, [STATUS]: "restored" }, txnId("restore"));
-        watcher.sync(world.server, propertySchemaHash);
-        owner.sync(world.server, propertySchemaHash);
+        await watcher.restore(TASKS, row, { [TITLE]: after, [STATUS]: "restored" }, txnId("restore"));
+        await watcher.syncWith(inProcessTransport(world.server), propertySchemaHash);
+        await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
         for (const device of world.devices) {
           assert.equal(
@@ -486,22 +497,22 @@ test("§9.23c restoring with field values sends those values with the restore", 
   );
 });
 
-test("§9.23c a locally restored row exposes its base fields before sync", () => {
-  fc.assert(
-    fc.property(fc.string({ minLength: 1, maxLength: 10 }), (title) => {
+test("§9.23c a locally restored row exposes its base fields before sync", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.string({ minLength: 1, maxLength: 10 }), async (title) => {
       const world = createWorld(2);
       const owner = deviceAt(world, 0).client;
       const restorer = deviceAt(world, 1).client;
       const row = rowId("locally-restored");
-      owner.create(TASKS, row, taskValues("before"), txnId("create"));
-      owner.sync(world.server, propertySchemaHash);
-      restorer.sync(world.server, propertySchemaHash);
+      await owner.create(TASKS, row, taskValues("before"), txnId("create"));
+      await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
+      await restorer.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
-      owner.delete(TASKS, row, txnId("delete"));
-      owner.sync(world.server, propertySchemaHash);
-      restorer.sync(world.server, propertySchemaHash);
+      await owner.delete(TASKS, row, txnId("delete"));
+      await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
+      await restorer.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
-      restorer.restore(TASKS, row, { [TITLE]: title }, txnId("restore"));
+      await restorer.restore(TASKS, row, { [TITLE]: title }, txnId("restore"));
       const restored = restorer.getRow(TASKS, row);
       assert.notEqual(restored, undefined, "restore did not materialize a local row");
       assert.equal(restored?.fields.get(fieldName("id")), row, "restored row did not expose id");
@@ -512,28 +523,28 @@ test("§9.23c a locally restored row exposes its base fields before sync", () =>
   );
 });
 
-test("§9.23c restoring a diff3 field value sends that value with the restore", () => {
-  fc.assert(
-    fc.property(
+test("§9.23c restoring a diff3 field value sends that value with the restore", async () => {
+  await fc.assert(
+    fc.asyncProperty(
       fc.string({ minLength: 1, maxLength: 20 }),
       fc.string({ minLength: 1, maxLength: 20 }),
-      (before, after) => {
+      async (before, after) => {
         fc.pre(before !== after);
         const world = createWorld(2);
         const owner = deviceAt(world, 0).client;
         const watcher = deviceAt(world, 1).client;
         const row = rowId("revived-diff3");
-        owner.create(TASKS, row, taskValues(before), txnId("create"));
-        owner.sync(world.server, propertySchemaHash);
-        watcher.sync(world.server, propertySchemaHash);
+        await owner.create(TASKS, row, taskValues(before), txnId("create"));
+        await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
+        await watcher.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
-        owner.delete(TASKS, row, txnId("delete"));
-        owner.sync(world.server, propertySchemaHash);
-        watcher.sync(world.server, propertySchemaHash);
+        await owner.delete(TASKS, row, txnId("delete"));
+        await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
+        await watcher.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
-        watcher.restore(TASKS, row, { [NOTES]: after }, txnId("restore"));
-        watcher.sync(world.server, propertySchemaHash);
-        owner.sync(world.server, propertySchemaHash);
+        await watcher.restore(TASKS, row, { [NOTES]: after }, txnId("restore"));
+        await watcher.syncWith(inProcessTransport(world.server), propertySchemaHash);
+        await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
         assert.equal(
           owner.getRow(TASKS, row)?.fields.get(NOTES),
@@ -547,7 +558,7 @@ test("§9.23c restoring a diff3 field value sends that value with the restore", 
   );
 });
 
-test("§9.23c a restore does not reset a field: its opening writes are resolved by HLC like any other", () => {
+test("§9.23c a restore does not reset a field: its opening writes are resolved by HLC like any other", async () => {
   // The failure this pins: a restore's opening `set` is accepted, the pushing device is told
   // the push succeeded, and the field still ends on somebody else's value. That looks like
   // silent loss, and §5.1.acked read it as one for three separate generated histories — but it
@@ -662,7 +673,7 @@ test("§9.23c a restore does not reset a field: its opening writes are resolved 
   }
 });
 
-test("§9.23c a restore's opening write still wins when its stamp is the highest", () => {
+test("§9.23c a restore's opening write still wins when its stamp is the highest", async () => {
   // The other half of the rule above, so narrowing it cannot be mistaken for dropping it: a
   // restore's `set` is an ordinary write, which means it takes the field whenever it is the
   // later one. Losing to *nothing* would be the real silent loss.
@@ -730,17 +741,17 @@ test("§9.23c a restore's opening write still wins when its stamp is the highest
   );
 });
 
-test("§9.23d a set against an absent row is rejected, and only a create brings the id back", () => {
+test("§9.23d a set against an absent row is rejected, and only a create brings the id back", async () => {
   type AbsentOpKind = Extract<WeftOp["kind"], "set" | "delete" | "restore">;
-  fc.assert(
-    fc.property(fc.constantFrom<AbsentOpKind[]>("set", "delete", "restore"), (kind) => {
+  await fc.assert(
+    fc.asyncProperty(fc.constantFrom<AbsentOpKind[]>("set", "delete", "restore"), async (kind) => {
       const world = createWorld(1);
       const client = deviceAt(world, 0).client;
       const row = rowId("purged");
-      client.create(TASKS, row, taskValues("purged"), txnId("create"));
-      client.sync(world.server, propertySchemaHash);
-      client.delete(TASKS, row, txnId("delete"));
-      client.sync(world.server, propertySchemaHash);
+      await client.create(TASKS, row, taskValues("purged"), txnId("create"));
+      await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
+      await client.delete(TASKS, row, txnId("delete"));
+      await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
       world.now += TOMBSTONE_FLOOR_MS + DAY_MS;
       world.server.pruneTombstones(world.scopeId);
 
@@ -795,39 +806,43 @@ test("§9.23d a set against an absent row is rejected, and only a create brings 
   );
 });
 
-test("§9.23e a tombstoned row keeps its fields until prune takes both", () => {
-  fc.assert(
-    fc.property(fc.string({ minLength: 1, maxLength: 10 }), fc.integer({ min: 1, max: 60 }), (title, extraDays) => {
-      const world = createWorld(1);
-      const client = deviceAt(world, 0).client;
-      const row = rowId("retained");
-      client.create(TASKS, row, taskValues(title), txnId("create"));
-      client.sync(world.server, propertySchemaHash);
-      const beforeDelete = serverFieldNames(world, row);
+test("§9.23e a tombstoned row keeps its fields until prune takes both", async () => {
+  await fc.assert(
+    fc.asyncProperty(
+      fc.string({ minLength: 1, maxLength: 10 }),
+      fc.integer({ min: 1, max: 60 }),
+      async (title, extraDays) => {
+        const world = createWorld(1);
+        const client = deviceAt(world, 0).client;
+        const row = rowId("retained");
+        await client.create(TASKS, row, taskValues(title), txnId("create"));
+        await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
+        const beforeDelete = serverFieldNames(world, row);
 
-      client.delete(TASKS, row, txnId("delete"));
-      client.sync(world.server, propertySchemaHash);
-      assert.deepEqual(serverFieldNames(world, row), beforeDelete, "delete purged fields");
+        await client.delete(TASKS, row, txnId("delete"));
+        await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
+        assert.deepEqual(serverFieldNames(world, row), beforeDelete, "delete purged fields");
 
-      world.now += TOMBSTONE_FLOOR_MS + extraDays * DAY_MS;
-      world.server.pruneTombstones(world.scopeId);
-      assert.deepEqual(serverFieldNames(world, row), [], "prune left orphaned fields");
-      assert.equal(serverRow(world, row), undefined, "prune left the row record");
-    }),
+        world.now += TOMBSTONE_FLOOR_MS + extraDays * DAY_MS;
+        world.server.pruneTombstones(world.scopeId);
+        assert.deepEqual(serverFieldNames(world, row), [], "prune left orphaned fields");
+        assert.equal(serverRow(world, row), undefined, "prune left the row record");
+      },
+    ),
     { numRuns: SCENARIO_RUNS },
   );
 });
 
-test("§9.23g liveness is never inferred from presence in a snapshot", () => {
-  fc.assert(
-    fc.property(fc.string({ minLength: 1, maxLength: 10 }), (title) => {
+test("§9.23g liveness is never inferred from presence in a snapshot", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.string({ minLength: 1, maxLength: 10 }), async (title) => {
       const world = createWorld(2);
       const owner = deviceAt(world, 0).client;
       const row = rowId("presence");
-      owner.create(TASKS, row, taskValues(title), txnId("create"));
-      owner.sync(world.server, propertySchemaHash);
-      owner.delete(TASKS, row, txnId("delete"));
-      owner.sync(world.server, propertySchemaHash);
+      await owner.create(TASKS, row, taskValues(title), txnId("create"));
+      await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
+      await owner.delete(TASKS, row, txnId("delete"));
+      await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
       const snapshot = world.server.snapshot(world.scopeId);
       assert.equal(
@@ -837,12 +852,12 @@ test("§9.23g liveness is never inferred from presence in a snapshot", () => {
       );
 
       const clean = new WeftClient(world.scopeId, owner.deviceId, propertySchema, () => world.now);
-      clean.applySnapshot(snapshot);
+      await clean.applySnapshot(snapshot);
       assert.equal(localState(clean, TASKS, row), "tombstoned", "a tombstoned row was applied as live");
 
       const dirty = deviceAt(world, 1).client;
-      dirty.create(TASKS, rowId("local-only"), taskValues(title), txnId("local-only"));
-      dirty.applySnapshot(snapshot);
+      await dirty.create(TASKS, rowId("local-only"), taskValues(title), txnId("local-only"));
+      await dirty.applySnapshot(snapshot);
       assert.equal(
         dirty.quarantine.some((op) => op.rowId === rowId("local-only")),
         true,
@@ -853,13 +868,13 @@ test("§9.23g liveness is never inferred from presence in a snapshot", () => {
   );
 });
 
-test("§9.R23 a row with no first_synced_at is never a retention candidate", () => {
-  fc.assert(
-    fc.property(fc.integer({ min: 100, max: 800 }), (ageDays) => {
+test("§9.R23 a row with no first_synced_at is never a retention candidate", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.integer({ min: 100, max: 800 }), async (ageDays) => {
       const world = createWorld(1);
       const client = deviceAt(world, 0).client;
       const row = rowId("unsynced");
-      client.create(
+      await client.create(
         TASKS,
         row,
         {
@@ -875,7 +890,7 @@ test("§9.R23 a row with no first_synced_at is never a retention candidate", () 
         [],
         "an unsynced row was planned for purge",
       );
-      client.sync(world.server, propertySchemaHash);
+      await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
       assert.equal(
         planRetentionDeletes(client, propertySchema, { defaultAutoDeleteDays: 1 }, world.now + 2 * DAY_MS).length,
         1,
@@ -886,13 +901,13 @@ test("§9.R23 a row with no first_synced_at is never a retention candidate", () 
   );
 });
 
-test("§9.R24 purge is anchored on the later of the anchor field and first_synced_at", () => {
-  fc.assert(
-    fc.property(fc.integer({ min: 31, max: 500 }), fc.integer({ min: 1, max: 120 }), (ageDays, days) => {
+test("§9.R24 purge is anchored on the later of the anchor field and first_synced_at", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.integer({ min: 31, max: 500 }), fc.integer({ min: 1, max: 120 }), async (ageDays, days) => {
       const world = createWorld(1);
       const client = deviceAt(world, 0).client;
       const row = rowId("ancient");
-      client.create(
+      await client.create(
         TASKS,
         row,
         {
@@ -902,7 +917,7 @@ test("§9.R24 purge is anchored on the later of the anchor field and first_synce
         },
         txnId("create"),
       );
-      client.sync(world.server, propertySchemaHash);
+      await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
       const firstSyncedAt = client.rows.get(localKey(TASKS, row))?.internals._weft_first_synced_at ?? 0;
 
       assert.deepEqual(
@@ -918,19 +933,19 @@ test("§9.R24 purge is anchored on the later of the anchor field and first_synce
   );
 });
 
-test("§9.R25b first_synced_at is server-authoritative and identical per row in a transaction", () => {
-  fc.assert(
-    fc.property(fc.string({ minLength: 1, maxLength: 10 }), (title) => {
+test("§9.R25b first_synced_at is server-authoritative and identical per row in a transaction", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.string({ minLength: 1, maxLength: 10 }), async (title) => {
       const world = createWorld(3);
       const owner = deviceAt(world, 0).client;
       const row = rowId("stamped");
-      owner.create(TASKS, row, taskValues(title), txnId("create"));
+      await owner.create(TASKS, row, taskValues(title), txnId("create"));
       const ack = world.server.push(world.scopeId, [...owner.outbox]);
       assert.equal(ack.ok, true);
       const stamps = ack.ok ? (ack.acks[0]?.firstSeenAtByRow.filter((entry) => entry.rowId === row) ?? []) : [];
       assert.equal(stamps.length, 1, "one row was stamped more than once in a transaction");
 
-      quiesce(world);
+      await quiesce(world);
       const perDevice = world.devices.map(
         (device) => device.client.rows.get(localKey(TASKS, row))?.internals._weft_first_synced_at,
       );
@@ -941,67 +956,71 @@ test("§9.R25b first_synced_at is server-authoritative and identical per row in 
   );
 });
 
-test("§9.R26 purge uses the converged auto_delete_days", () => {
-  fc.assert(
-    fc.property(fc.integer({ min: 2, max: 90 }), fc.integer({ min: 2, max: 90 }), (firstDays, secondDays) => {
-      fc.pre(firstDays !== secondDays);
-      const world = createWorld(2);
-      const first = deviceAt(world, 0).client;
-      const second = deviceAt(world, 1).client;
-      const row = rowId("policy");
-      first.create(TASKS, row, { ...taskValues("policy"), [AUTO_DELETE_DAYS]: 1 }, txnId("create"));
-      quiesce(world);
+test("§9.R26 purge uses the converged auto_delete_days", async () => {
+  await fc.assert(
+    fc.asyncProperty(
+      fc.integer({ min: 2, max: 90 }),
+      fc.integer({ min: 2, max: 90 }),
+      async (firstDays, secondDays) => {
+        fc.pre(firstDays !== secondDays);
+        const world = createWorld(2);
+        const first = deviceAt(world, 0).client;
+        const second = deviceAt(world, 1).client;
+        const row = rowId("policy");
+        await first.create(TASKS, row, { ...taskValues("policy"), [AUTO_DELETE_DAYS]: 1 }, txnId("create"));
+        await quiesce(world);
 
-      world.now += 1;
-      first.update(TASKS, row, { [AUTO_DELETE_DAYS]: firstDays }, txnId("policy-first"));
-      world.now += 1;
-      second.update(TASKS, row, { [AUTO_DELETE_DAYS]: secondDays }, txnId("policy-second"));
-      quiesce(world);
+        world.now += 1;
+        await first.update(TASKS, row, { [AUTO_DELETE_DAYS]: firstDays }, txnId("policy-first"));
+        world.now += 1;
+        await second.update(TASKS, row, { [AUTO_DELETE_DAYS]: secondDays }, txnId("policy-second"));
+        await quiesce(world);
 
-      const converged = world.devices.map((device) => device.client.getRow(TASKS, row)?.fields.get(AUTO_DELETE_DAYS));
-      assert.equal(new Set(converged).size, 1, "auto_delete_days did not converge");
-      const days = Number(converged[0]);
-      for (const device of world.devices) {
-        const anchor = device.client.rows.get(localKey(TASKS, row))?.internals._weft_first_synced_at ?? 0;
-        assert.deepEqual(
-          planRetentionDeletes(device.client, propertySchema, {}, anchor + days * DAY_MS - 1).map(
-            (entry) => entry.rowId,
-          ),
-          [],
-          "purged before the converged window closed",
-        );
-        assert.deepEqual(
-          planRetentionDeletes(device.client, propertySchema, {}, anchor + days * DAY_MS).map((entry) => entry.rowId),
-          [row],
-          "the converged window never expired",
-        );
-      }
-    }),
+        const converged = world.devices.map((device) => device.client.getRow(TASKS, row)?.fields.get(AUTO_DELETE_DAYS));
+        assert.equal(new Set(converged).size, 1, "auto_delete_days did not converge");
+        const days = Number(converged[0]);
+        for (const device of world.devices) {
+          const anchor = device.client.rows.get(localKey(TASKS, row))?.internals._weft_first_synced_at ?? 0;
+          assert.deepEqual(
+            planRetentionDeletes(device.client, propertySchema, {}, anchor + days * DAY_MS - 1).map(
+              (entry) => entry.rowId,
+            ),
+            [],
+            "purged before the converged window closed",
+          );
+          assert.deepEqual(
+            planRetentionDeletes(device.client, propertySchema, {}, anchor + days * DAY_MS).map((entry) => entry.rowId),
+            [row],
+            "the converged window never expired",
+          );
+        }
+      },
+    ),
     { numRuns: SCENARIO_RUNS },
   );
 });
 
-test("§9.R27 a purged row never resurrects through a device returning from below the floor", () => {
-  fc.assert(
-    fc.property(fc.string({ minLength: 1, maxLength: 10 }), (edit) => {
+test("§9.R27 a purged row never resurrects through a device returning from below the floor", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.string({ minLength: 1, maxLength: 10 }), async (edit) => {
       const world = createWorld(2);
       const owner = deviceAt(world, 0).client;
       const stale = deviceAt(world, 1).client;
       const row = rowId("buried");
-      owner.create(TASKS, row, taskValues("buried"), txnId("create"));
-      owner.sync(world.server, propertySchemaHash);
-      stale.sync(world.server, propertySchemaHash);
+      await owner.create(TASKS, row, taskValues("buried"), txnId("create"));
+      await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
+      await stale.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
-      owner.delete(TASKS, row, txnId("delete"));
-      owner.sync(world.server, propertySchemaHash);
+      await owner.delete(TASKS, row, txnId("delete"));
+      await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
       world.now += TOMBSTONE_FLOOR_MS + DAY_MS;
       world.server.pruneTombstones(world.scopeId);
       // Enough traffic to lift the floor above the stale device's cursor.
-      owner.create(TASKS, rowId("fresh"), taskValues("fresh"), txnId("fresh"));
-      owner.sync(world.server, propertySchemaHash);
+      await owner.create(TASKS, rowId("fresh"), taskValues("fresh"), txnId("fresh"));
+      await owner.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
-      stale.update(TASKS, row, { [TITLE]: edit }, txnId("offline-edit"));
-      stale.sync(world.server, propertySchemaHash);
+      await stale.update(TASKS, row, { [TITLE]: edit }, txnId("offline-edit"));
+      await stale.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
       assert.equal(serverRow(world, row), undefined, "the purged row came back");
       assert.equal(

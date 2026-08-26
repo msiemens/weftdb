@@ -92,6 +92,12 @@ CREATE TABLE IF NOT EXISTS "issues" (
   PRIMARY KEY (scope_id, id)
 );
 
+CREATE INDEX IF NOT EXISTS "issues_project_id" ON "issues" (scope_id, "project_id");
+
+CREATE INDEX IF NOT EXISTS "issues_status" ON "issues" (scope_id, "status");
+
+CREATE INDEX IF NOT EXISTS "issues_rank" ON "issues" (scope_id, "rank");
+
 CREATE TABLE IF NOT EXISTS "comments" (
   "id" TEXT NOT NULL,
   "scope_id" TEXT NOT NULL,
@@ -115,3 +121,5 @@ CREATE TABLE IF NOT EXISTS "comments" (
   _weft_null_fields TEXT,
   PRIMARY KEY (scope_id, id)
 );
+
+CREATE INDEX IF NOT EXISTS "comments_issue_id" ON "comments" (scope_id, "issue_id");

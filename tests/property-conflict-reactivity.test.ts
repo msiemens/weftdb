@@ -20,17 +20,14 @@ import {
   AuthorizerDependencyRecorder,
   compileQuery,
   invalidatesQuery,
-  MultiTabCoordinator,
   RowIdentityCache,
   SubscriptionEngine,
   WeftClient,
   type LocalRow,
-  type LockManagerLike,
   type MaterializedRow,
   type QueryDelta,
   type QueryKey,
   type QuerySnapshot,
-  type TabRole,
 } from "weftdb/client";
 import {
   BASE_NOTES,
@@ -55,9 +52,9 @@ import {
 const lineArb = fc.integer({ min: 0, max: BASE_NOTES.split("\n").length - 1 });
 const textArb = fc.string({ minLength: 1, maxLength: 10 }).map((text) => `text ${text}`);
 
-test("§9.34 diff3 on non-overlapping hunks keeps both edits and raises no markers", () => {
-  fc.assert(
-    fc.property(lineArb, fc.integer({ min: 0, max: 2 }), textArb, textArb, (line, offset, local, remote) => {
+test("§9.34 diff3 on non-overlapping hunks keeps both edits and raises no markers", async () => {
+  await fc.assert(
+    fc.asyncProperty(lineArb, fc.integer({ min: 0, max: 2 }), textArb, textArb, async (line, offset, local, remote) => {
       const lines = BASE_NOTES.split("\n").length;
       const otherLine = (line + 1 + offset) % lines;
       fc.pre(otherLine !== line && local !== remote);
@@ -76,9 +73,9 @@ test("§9.34 diff3 on non-overlapping hunks keeps both edits and raises no marke
   );
 });
 
-test("§9.35 diff3 on overlapping hunks emits markers holding both sides verbatim", () => {
-  fc.assert(
-    fc.property(lineArb, textArb, textArb, (line, local, remote) => {
+test("§9.35 diff3 on overlapping hunks emits markers holding both sides verbatim", async () => {
+  await fc.assert(
+    fc.asyncProperty(lineArb, textArb, textArb, async (line, local, remote) => {
       fc.pre(local !== remote);
       const merged = diff3(BASE_NOTES, replaceLine(BASE_NOTES, line, local), replaceLine(BASE_NOTES, line, remote));
       assert.equal(merged.conflicted, true, "an overlapping edit merged silently");
@@ -90,13 +87,13 @@ test("§9.35 diff3 on overlapping hunks emits markers holding both sides verbati
   );
 });
 
-test("§9.36 a marker scan finds every conflicted note on every device", () => {
-  fc.assert(
-    fc.property(
+test("§9.36 a marker scan finds every conflicted note on every device", async () => {
+  await fc.assert(
+    fc.asyncProperty(
       fc.array(fc.boolean(), { minLength: 1, maxLength: 4 }),
       textArb,
       textArb,
-      (conflicts, first, second) => {
+      async (conflicts, first, second) => {
         fc.pre(first !== second);
         const world = createWorld(2);
         const firstDevice = deviceAt(world, 0).client;
@@ -105,16 +102,26 @@ test("§9.36 a marker scan finds every conflicted note on every device", () => {
 
         for (const [index, conflicted] of conflicts.entries()) {
           const row = rowId(`note-${index}`);
-          firstDevice.create(TASKS, row, taskValues(`note-${index}`), txnId(`create-${index}`));
-          quiesce(world);
+          await firstDevice.create(TASKS, row, taskValues(`note-${index}`), txnId(`create-${index}`));
+          await quiesce(world);
           if (conflicted) {
             world.now += 1;
-            firstDevice.update(TASKS, row, { [NOTES]: replaceLine(BASE_NOTES, 1, first) }, txnId(`first-${index}`));
+            await firstDevice.update(
+              TASKS,
+              row,
+              { [NOTES]: replaceLine(BASE_NOTES, 1, first) },
+              txnId(`first-${index}`),
+            );
             world.now += 1;
-            secondDevice.update(TASKS, row, { [NOTES]: replaceLine(BASE_NOTES, 1, second) }, txnId(`second-${index}`));
+            await secondDevice.update(
+              TASKS,
+              row,
+              { [NOTES]: replaceLine(BASE_NOTES, 1, second) },
+              txnId(`second-${index}`),
+            );
             expected.add(row);
           }
-          quiesce(world);
+          await quiesce(world);
         }
 
         for (const device of world.devices) {
@@ -132,22 +139,22 @@ test("§9.36 a marker scan finds every conflicted note on every device", () => {
   );
 });
 
-test("§9.37 removing the markers by hand clears the conflict with no residue", () => {
-  fc.assert(
-    fc.property(textArb, textArb, textArb, (first, second, resolvedLine) => {
+test("§9.37 removing the markers by hand clears the conflict with no residue", async () => {
+  await fc.assert(
+    fc.asyncProperty(textArb, textArb, textArb, async (first, second, resolvedLine) => {
       fc.pre(first !== second);
       const world = createWorld(2);
       const firstDevice = deviceAt(world, 0).client;
       const secondDevice = deviceAt(world, 1).client;
       const row = rowId("resolved");
-      firstDevice.create(TASKS, row, taskValues("resolved"), txnId("create"));
-      quiesce(world);
+      await firstDevice.create(TASKS, row, taskValues("resolved"), txnId("create"));
+      await quiesce(world);
 
       world.now += 1;
-      firstDevice.update(TASKS, row, { [NOTES]: replaceLine(BASE_NOTES, 2, first) }, txnId("first"));
+      await firstDevice.update(TASKS, row, { [NOTES]: replaceLine(BASE_NOTES, 2, first) }, txnId("first"));
       world.now += 1;
-      secondDevice.update(TASKS, row, { [NOTES]: replaceLine(BASE_NOTES, 2, second) }, txnId("second"));
-      quiesce(world);
+      await secondDevice.update(TASKS, row, { [NOTES]: replaceLine(BASE_NOTES, 2, second) }, txnId("second"));
+      await quiesce(world);
       assert.equal(
         world.devices.some((device) =>
           hasConflictMarkers(wireText(device.client.getRow(TASKS, row)?.fields.get(NOTES) ?? "")),
@@ -158,8 +165,8 @@ test("§9.37 removing the markers by hand clears the conflict with no residue", 
 
       world.now += 1;
       const resolution = replaceLine(BASE_NOTES, 2, resolvedLine);
-      secondDevice.update(TASKS, row, { [NOTES]: resolution }, txnId("resolve"));
-      quiesce(world);
+      await secondDevice.update(TASKS, row, { [NOTES]: resolution }, txnId("resolve"));
+      await quiesce(world);
 
       for (const device of world.devices) {
         assert.equal(
@@ -180,15 +187,15 @@ test("§9.37 removing the markers by hand clears the conflict with no residue", 
   );
 });
 
-test("§9.38 recorded dependencies cover every table the query reads", () => {
+test("§9.38 recorded dependencies cover every table the query reads", async () => {
   const candidates: readonly TableName[] = [
     TASKS,
     tableName("invoices"),
     tableName("line_items"),
     tableName("task_status_history"),
   ];
-  fc.assert(
-    fc.property(fc.subarray([...candidates], { minLength: 1 }), (tables) => {
+  await fc.assert(
+    fc.asyncProperty(fc.subarray([...candidates], { minLength: 1 }), async (tables) => {
       const recorder = new AuthorizerDependencyRecorder();
       for (const table of tables) {
         recorder.recordRead(table, TITLE);
@@ -218,16 +225,21 @@ test("§9.38 recorded dependencies cover every table the query reads", () => {
   );
 });
 
-test("§9.38 a query returns rows from its table, not every row with matching fields", () => {
-  fc.assert(
-    fc.property(textArb, textArb, (taskStatus, eventStatus) => {
+test("§9.38 a query returns rows from its table, not every row with matching fields", async () => {
+  await fc.assert(
+    fc.asyncProperty(textArb, textArb, async (taskStatus, eventStatus) => {
       const client = new WeftClient(propertyScope, deviceId("query-device"), propertySchema, () => BASE_TIME);
       const engine = new SubscriptionEngine();
       const task = rowId("task-query-row");
       const event = rowId("event-query-row");
-      client.create(TASKS, task, taskValues("query"), txnId("create-task"));
-      client.update(TASKS, task, { [STATUS]: taskStatus }, txnId("status-task"));
-      client.append(EVENTS, event, { [STATUS]: eventStatus, [fieldName("task_id")]: task }, txnId("append-event"));
+      await client.create(TASKS, task, taskValues("query"), txnId("create-task"));
+      await client.update(TASKS, task, { [STATUS]: taskStatus }, txnId("status-task"));
+      await client.append(
+        EVENTS,
+        event,
+        { [STATUS]: eventStatus, [fieldName("task_id")]: task },
+        txnId("append-event"),
+      );
 
       const snapshot = engine.getSnapshot(
         { tableName: TASKS, fields: [STATUS], orderBy: STATUS },
@@ -244,9 +256,9 @@ test("§9.38 a query returns rows from its table, not every row with matching fi
   );
 });
 
-test("§9.39 an unchanged _weft_rev yields the identical row object", () => {
-  fc.assert(
-    fc.property(fc.array(fc.boolean(), { minLength: 1, maxLength: 25 }), (revise) => {
+test("§9.39 an unchanged _weft_rev yields the identical row object", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 25 }), async (revise) => {
       const cache = new RowIdentityCache();
       const row = localRow(rowId("identity"), [[TITLE, "title"]]);
       let previous = cache.materialize(row);
@@ -267,9 +279,9 @@ test("§9.39 an unchanged _weft_rev yields the identical row object", () => {
   );
 });
 
-test("§9.39 row identity caching does not conflate equal ids from different collections", () => {
-  fc.assert(
-    fc.property(textArb, textArb, (title, status) => {
+test("§9.39 row identity caching does not conflate equal ids from different collections", async () => {
+  await fc.assert(
+    fc.asyncProperty(textArb, textArb, async (title, status) => {
       const cache = new RowIdentityCache();
       const shared = rowId("shared-row-id");
       const task = localRow(shared, [[TITLE, title]], TASKS);
@@ -298,7 +310,7 @@ type RowMutation =
   | { readonly kind: "remove"; readonly index: number }
   | { readonly kind: "edit"; readonly index: number; readonly value: string };
 
-test("§9.40 applying a delta to the previous result equals a full re-fetch", () => {
+test("§9.40 applying a delta to the previous result equals a full re-fetch", async () => {
   const mutationArb: fc.Arbitrary<RowMutation> = fc.oneof(
     fc.record({ kind: fc.constant("add" as const) }),
     fc.record({ kind: fc.constant("remove" as const), index: fc.nat() }),
@@ -309,8 +321,8 @@ test("§9.40 applying a delta to the previous result equals a full re-fetch", ()
     }),
   );
 
-  fc.assert(
-    fc.property(fc.array(mutationArb, { minLength: 1, maxLength: 30 }), (mutations) => {
+  await fc.assert(
+    fc.asyncProperty(fc.array(mutationArb, { minLength: 1, maxLength: 30 }), async (mutations) => {
       const engine = new SubscriptionEngine();
       const key: QueryKey = { tableName: TASKS, fields: [TITLE], orderBy: TITLE };
       const rows = new Map<RowId, LocalRow>();
@@ -351,48 +363,6 @@ test("§9.41 no notification is emitted mid-transaction", async () => {
   assert.equal(notifications, 2, "a later transaction was swallowed");
   unsubscribe();
 });
-
-test("§9.42 exactly one tab holds the OPFS handle at any instant", async () => {
-  await fc.assert(
-    fc.asyncProperty(fc.integer({ min: 2, max: 6 }), async (tabs) => {
-      const locks = new ExclusiveLocks();
-      const coordinators = Array.from({ length: tabs }, () => new MultiTabCoordinator({ scopeId: "tabs", locks }));
-
-      const roles: TabRole[] = [];
-      for (const coordinator of coordinators) roles.push(await coordinator.elect());
-      assert.equal(roles.filter((role) => role === "leader").length, 1, "leadership was not exclusive");
-      assert.equal(roles.filter((role) => role === "follower").length, tabs - 1, "a tab was left without a role");
-
-      // The leader dies; exactly one successor takes the handle.
-      locks.releaseAll();
-      const successors: TabRole[] = [];
-      for (const coordinator of coordinators.slice(1)) successors.push(await coordinator.elect());
-      assert.equal(successors.filter((role) => role === "leader").length, 1, "succession was not exclusive");
-
-      for (const coordinator of coordinators) coordinator.close();
-    }),
-    { numRuns: SCENARIO_RUNS },
-  );
-});
-
-/** Web Locks semantics: the holder keeps the lock until its tab goes away. */
-class ExclusiveLocks implements LockManagerLike {
-  readonly #held = new Set<string>();
-
-  async request<T>(
-    name: string,
-    _options: { readonly ifAvailable: true },
-    callback: (lock: object | null) => T | Promise<T>,
-  ): Promise<T> {
-    if (this.#held.has(name)) return callback(null);
-    this.#held.add(name);
-    return callback({});
-  }
-
-  releaseAll(): void {
-    this.#held.clear();
-  }
-}
 
 interface ConflictRecord {
   readonly row: MaterializedRow;

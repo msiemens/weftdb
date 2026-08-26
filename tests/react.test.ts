@@ -156,7 +156,7 @@ test("§8.2 an unchanged revision hands the component the identical row object",
   await view.unmount();
 });
 
-test("§8.2 row identity is isolated by table as well as row id", () => {
+test("§8.2 row identity is isolated by table as well as row id", async () => {
   const engine = new SubscriptionEngine();
   const sharedId = rowId("shared");
   const first = localRow(sharedId, "from tasks", TASKS);

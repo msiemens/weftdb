@@ -99,10 +99,9 @@ second kind once it is set. It derives that distinction from the first operation
 row.
 
 Because the relay never learns table or column shapes, adding a field to an application's schema
-changes nothing it stores. The function that builds the relay's tables produces the same four
-tables, `fields`, `rows`, `scope_state`, and `devices`, regardless of what any schema declares, and
-takes no schema as an argument. There is no relay migration to write and none to run, for any
-change to any collection.
+changes nothing it stores. Its tables are the same four, `fields`, `rows`, `scope_state`, and
+`devices`, regardless of what any schema declares. There is no relay migration to write and none to
+run, for any change to any collection.
 
 ## Snapshot resync
 

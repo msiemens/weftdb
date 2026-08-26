@@ -53,22 +53,26 @@ function maskedFrame(opcode: number, payload: Buffer, fin = true): Buffer {
   return Buffer.concat([Buffer.from(header), mask, masked]);
 }
 
-test("a frame survives the trip through the codec whatever its size", () => {
-  fc.assert(
-    fc.property(fc.uint8Array({ maxLength: 300 }), fc.constantFrom(OPCODE.text, OPCODE.binary), (bytes, opcode) => {
-      const payload = Buffer.from(bytes);
-      const read = decodeFrame(maskedFrame(opcode, payload), true);
-      assert.equal(read.status, "frame");
-      if (read.status !== "frame") return;
-      assert.equal(read.frame.opcode, opcode);
-      assert.deepEqual([...read.frame.payload], [...payload], "unmasking changed the bytes");
-      assert.equal(read.rest.length, 0);
-    }),
+test("a frame survives the trip through the codec whatever its size", async () => {
+  await fc.assert(
+    fc.asyncProperty(
+      fc.uint8Array({ maxLength: 300 }),
+      fc.constantFrom(OPCODE.text, OPCODE.binary),
+      async (bytes, opcode) => {
+        const payload = Buffer.from(bytes);
+        const read = decodeFrame(maskedFrame(opcode, payload), true);
+        assert.equal(read.status, "frame");
+        if (read.status !== "frame") return;
+        assert.equal(read.frame.opcode, opcode);
+        assert.deepEqual([...read.frame.payload], [...payload], "unmasking changed the bytes");
+        assert.equal(read.rest.length, 0);
+      },
+    ),
     { numRuns: 500 },
   );
 });
 
-test("the three payload length encodings all decode to the same thing", () => {
+test("the three payload length encodings all decode to the same thing", async () => {
   // 125/126 and 65535/65536 are where the length stops fitting in the previous field, which is
   // exactly where an off-by-one turns the next frame's bytes into this frame's payload.
   for (const length of [0, 1, 125, 126, 127, 65_535, 65_536]) {
@@ -80,7 +84,7 @@ test("the three payload length encodings all decode to the same thing", () => {
   }
 });
 
-test("frames arriving in pieces are held until they are whole, and extras are kept", () => {
+test("frames arriving in pieces are held until they are whole, and extras are kept", async () => {
   const first = maskedFrame(OPCODE.text, Buffer.from("wake up", "utf8"));
   const second = maskedFrame(OPCODE.text, Buffer.from("again", "utf8"));
   const stream = Buffer.concat([first, second]);
@@ -96,7 +100,7 @@ test("frames arriving in pieces are held until they are whole, and extras are ke
   assert.deepEqual([...read.rest], [...second], "the bytes after the frame were discarded");
 });
 
-test("frames the protocol forbids are refused rather than guessed at", () => {
+test("frames the protocol forbids are refused rather than guessed at", async () => {
   const unmasked = encodeText("from a client");
   assert.equal(decodeFrame(unmasked, true).status, "invalid", "an unmasked client frame was accepted");
   assert.equal(decodeFrame(unmasked, false).status, "frame", "a server frame must not be masked");
@@ -116,7 +120,7 @@ test("frames the protocol forbids are refused rather than guessed at", () => {
   assert.equal(decodeFrame(maskedFrame(OPCODE.ping, Buffer.alloc(126)), true).status, "invalid");
 });
 
-test("an absurd declared length is refused before anything is allocated", () => {
+test("an absurd declared length is refused before anything is allocated", async () => {
   const header = Buffer.alloc(10);
   header[0] = 0x80 | OPCODE.text;
   header[1] = 0x80 | 127;
@@ -126,7 +130,7 @@ test("an absurd declared length is refused before anything is allocated", () => 
   if (read.status === "invalid") assert.match(read.reason, /too large/u);
 });
 
-test("a close frame carries its status where a peer expects it", () => {
+test("a close frame carries its status where a peer expects it", async () => {
   const read = decodeFrame(encodeClose(CLOSE.protocolError, "nope"), false);
   assert.equal(read.status, "frame");
   if (read.status !== "frame") return;
@@ -135,7 +139,7 @@ test("a close frame carries its status where a peer expects it", () => {
   assert.equal(read.frame.payload.subarray(2).toString("utf8"), "nope");
 });
 
-test("the encoder will not build a frame the decoder would refuse", () => {
+test("the encoder will not build a frame the decoder would refuse", async () => {
   // The limit is the same in both directions, so a server can never emit something a
   // conforming peer has to close the connection over.
   const atLimit = Buffer.alloc(MAX_PAYLOAD_BYTES, 0x62);
@@ -213,7 +217,7 @@ test("a push by one device wakes another, which then pulls it", async (t) => {
 
   // Alpha writes over HTTP, exactly as it would with no socket in the picture.
   const alpha = client("alpha");
-  alpha.create(
+  await alpha.create(
     TODOS,
     rowId("todo-1"),
     values({ title: "buy milk", notes: "", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
@@ -259,13 +263,13 @@ test("a change nobody pushed still wakes the devices it affects", async (t) => {
 
   // Something to prune: a row deleted long enough ago to be past the retention window.
   const alpha = client("alpha");
-  alpha.create(
+  await alpha.create(
     TODOS,
     rowId("todo-1"),
     values({ title: "temporary", notes: "", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
     txnId("create"),
   );
-  alpha.delete(TODOS, rowId("todo-1"), txnId("delete"));
+  await alpha.delete(TODOS, rowId("todo-1"), txnId("delete"));
   await alpha.syncWith(httpTransport({ baseUrl: running.url, token: "token-alpha" }), HASH);
   await pending.promise;
 
@@ -340,7 +344,7 @@ test("a wake-up never reaches a scope the token does not name", async (t) => {
   await connected.promise;
 
   const alpha = client("alpha");
-  alpha.create(
+  await alpha.create(
     TODOS,
     rowId("todo-1"),
     values({ title: "private", notes: "", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
@@ -427,7 +431,7 @@ test("a change on one device reaches another with nobody polling for it", async 
   // Both sockets up before anything is written, so the wake-up is the only way across.
   await waitFor(() => reader.session.status().live && writer.session.status().live, "the sockets never connected");
 
-  writer.client.create(
+  await writer.client.create(
     TODOS,
     rowId("todo-1"),
     values({ title: "buy milk", notes: "", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
@@ -469,7 +473,7 @@ test("a whole sync session runs over the socket", async (t) => {
   });
 
   const writer = client("alpha");
-  writer.create(
+  await writer.create(
     TODOS,
     rowId("todo-1"),
     values({
@@ -506,7 +510,7 @@ test("the socket transport ends where the HTTP one does", async (t) => {
     [overSocket, socket, "todo-socket"],
     [overHttp, http, "todo-http"],
   ] as const) {
-    target.create(
+    await target.create(
       TODOS,
       rowId(id),
       values({
@@ -520,9 +524,9 @@ test("the socket transport ends where the HTTP one does", async (t) => {
       txnId(`create-${id}`),
     );
     await target.syncWith(transport, HASH);
-    target.update(TODOS, rowId(id), values({ notes: "Monday: drafted" }), txnId(`edit-${id}`));
+    await target.update(TODOS, rowId(id), values({ notes: "Monday: drafted" }), txnId(`edit-${id}`));
     await target.syncWith(transport, HASH);
-    target.delete(TODOS, rowId(id), txnId(`delete-${id}`));
+    await target.delete(TODOS, rowId(id), txnId(`delete-${id}`));
     await target.syncWith(transport, HASH);
   }
 
@@ -554,7 +558,7 @@ test("a rejection comes back over the socket as a rejection, not an error", asyn
   t.onTestFinished(() => socket.close());
 
   const alpha = client("alpha");
-  alpha.create(
+  await alpha.create(
     TODOS,
     rowId("todo-1"),
     values({ title: "plan", notes: "", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
@@ -565,7 +569,7 @@ test("a rejection comes back over the socket as a rejection, not an error", asyn
   // A second create for a row that exists is refused by the server, and the client has to see
   // that as a rejection it can act on rather than as the connection failing.
   const other = client("beta");
-  other.create(
+  await other.create(
     TODOS,
     rowId("todo-1"),
     values({ title: "mine", notes: "", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
@@ -596,7 +600,7 @@ test("a large answer does not hold up everything behind it", async (t) => {
   const writer = await connected(running, "token-alpha");
   t.onTestFinished(() => writer.close());
   const seed = client("alpha");
-  seed.create(
+  await seed.create(
     TODOS,
     rowId("todo-1"),
     values({
@@ -627,7 +631,7 @@ test("a large answer does not hold up everything behind it", async (t) => {
   await new Promise<void>((resolve) => socket.addEventListener("open", () => resolve()));
   socket.send(JSON.stringify({ id: "snapshot-1", op: "snapshot" }));
   // Something else happens while that answer is going out.
-  seed.update(TODOS, rowId("todo-1"), values({ title: "changed" }), txnId("edit"));
+  await seed.update(TODOS, rowId("todo-1"), values({ title: "changed" }), txnId("edit"));
   await seed.syncWith(writer, HASH);
 
   assert.equal(await sawWakeDuringSnapshot, true, "the wake-up queued behind the whole snapshot");
@@ -677,16 +681,16 @@ test("a subscribed client is sent what changed, not a note saying something did"
     url: running.socketUrl,
     token: "token-beta",
     cursor: () => reader.lastServerSeq,
-    onBatch: (batch) => {
+    onBatch: async (batch) => {
       batches.push(batch.fields.length);
-      reader.applyPull(batch);
+      await reader.applyPull(batch);
     },
   });
   t.onTestFinished(() => transport.close());
   await waitFor(() => transport.connected, "the socket never connected");
 
   const writer = client("alpha");
-  writer.create(
+  await writer.create(
     TODOS,
     rowId("todo-1"),
     values({ title: "buy milk", notes: "", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
@@ -725,7 +729,7 @@ test("a subscribed socket cannot advance itself with a non-finite cursor", async
   socket.send('{"type":"subscribe","lastServerSeq":1e309}');
 
   const writer = client("alpha");
-  writer.create(
+  await writer.create(
     TODOS,
     rowId("todo-1"),
     values({ title: "must arrive", notes: "", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
@@ -758,7 +762,7 @@ test("a subscribed socket cannot advance itself with a future cursor", async (t)
   socket.send(JSON.stringify({ type: "subscribe", lastServerSeq: 999_999 }));
 
   const writer = client("alpha");
-  writer.create(
+  await writer.create(
     TODOS,
     rowId("todo-future"),
     values({ title: "must arrive", notes: "", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
@@ -812,7 +816,7 @@ test("a subscribed client that reconnects is sent what it missed", async (t) => 
   running.relay.sockets.close();
   await waitFor(() => !transport.connected, "the socket did not notice it had been dropped");
   const writer = client("alpha");
-  writer.create(
+  await writer.create(
     TODOS,
     rowId("todo-2"),
     values({ title: "while away", notes: "", done: false, rank: "a0", due_at: null, auto_delete_days: null }),

@@ -52,16 +52,16 @@ export function decodeProjects(row: MaterializedRow): ProjectsRow {
 
 export function projectsMutators(client: MutationTarget, notify: () => void = () => undefined): ProjectsMutators {
   return {
-    create(id: string, values: ProjectsMutation, transaction?: TxnId): void {
-      client.create(projectsTable, rowId(id), wire(values), transaction ?? txnId(`create-${id}`));
+    async create(id: string, values: ProjectsMutation, transaction?: TxnId): Promise<void> {
+      await client.create(projectsTable, rowId(id), wire(values), transaction ?? txnId(`create-${id}`));
       notify();
     },
-    update(id: string, values: ProjectsMutation, transaction?: TxnId): void {
-      client.update(projectsTable, rowId(id), wire(values), transaction ?? txnId(`update-${id}-${crypto.randomUUID()}`));
+    async update(id: string, values: ProjectsMutation, transaction?: TxnId): Promise<void> {
+      await client.update(projectsTable, rowId(id), wire(values), transaction ?? txnId(`update-${id}-${crypto.randomUUID()}`));
       notify();
     },
-    delete(id: string, transaction?: TxnId): void {
-      client.delete(projectsTable, rowId(id), transaction ?? txnId(`delete-${id}-${crypto.randomUUID()}`));
+    async delete(id: string, transaction?: TxnId): Promise<void> {
+      await client.delete(projectsTable, rowId(id), transaction ?? txnId(`delete-${id}-${crypto.randomUUID()}`));
       notify();
     },
   };
@@ -99,13 +99,13 @@ export function nextProjectsRank(rows: readonly ProjectsRow[], device: DeviceId)
  * taken from between the two rows it lands between — so nothing below it is renumbered and
  * two devices reordering at once do not undo each other.
  */
-export function moveProjects(
+export async function moveProjects(
   mutators: ProjectsMutators,
   rows: readonly ProjectsRow[],
   index: number,
   direction: "up" | "down",
   device: DeviceId,
-): void {
+): Promise<void> {
   const rankOf = (row: ProjectsRow | undefined) => (row === undefined ? null : rankString(String(row["rank"])));
   const moving = rows[index];
   const neighbour = rows[direction === "up" ? index - 1 : index + 1];
@@ -113,7 +113,7 @@ export function moveProjects(
   // Landing between the neighbour and whatever is on its far side.
   const beyond = rows[direction === "up" ? index - 2 : index + 2];
   const [before, after] = direction === "up" ? [beyond, neighbour] : [neighbour, beyond];
-  mutators.update(String(moving["id"]), { rank: rankBetween(rankOf(before), rankOf(after), device) });
+  await mutators.update(String(moving["id"]), { rank: rankBetween(rankOf(before), rankOf(after), device) });
 }
 // --- issues ----------------------------------------------------------------
 
@@ -145,16 +145,16 @@ export function decodeIssues(row: MaterializedRow): IssuesRow {
 
 export function issuesMutators(client: MutationTarget, notify: () => void = () => undefined): IssuesMutators {
   return {
-    create(id: string, values: IssuesMutation, transaction?: TxnId): void {
-      client.create(issuesTable, rowId(id), wire(values), transaction ?? txnId(`create-${id}`));
+    async create(id: string, values: IssuesMutation, transaction?: TxnId): Promise<void> {
+      await client.create(issuesTable, rowId(id), wire(values), transaction ?? txnId(`create-${id}`));
       notify();
     },
-    update(id: string, values: IssuesMutation, transaction?: TxnId): void {
-      client.update(issuesTable, rowId(id), wire(values), transaction ?? txnId(`update-${id}-${crypto.randomUUID()}`));
+    async update(id: string, values: IssuesMutation, transaction?: TxnId): Promise<void> {
+      await client.update(issuesTable, rowId(id), wire(values), transaction ?? txnId(`update-${id}-${crypto.randomUUID()}`));
       notify();
     },
-    delete(id: string, transaction?: TxnId): void {
-      client.delete(issuesTable, rowId(id), transaction ?? txnId(`delete-${id}-${crypto.randomUUID()}`));
+    async delete(id: string, transaction?: TxnId): Promise<void> {
+      await client.delete(issuesTable, rowId(id), transaction ?? txnId(`delete-${id}-${crypto.randomUUID()}`));
       notify();
     },
   };
@@ -192,13 +192,13 @@ export function nextIssuesRank(rows: readonly IssuesRow[], device: DeviceId): st
  * taken from between the two rows it lands between — so nothing below it is renumbered and
  * two devices reordering at once do not undo each other.
  */
-export function moveIssues(
+export async function moveIssues(
   mutators: IssuesMutators,
   rows: readonly IssuesRow[],
   index: number,
   direction: "up" | "down",
   device: DeviceId,
-): void {
+): Promise<void> {
   const rankOf = (row: IssuesRow | undefined) => (row === undefined ? null : rankString(String(row["rank"])));
   const moving = rows[index];
   const neighbour = rows[direction === "up" ? index - 1 : index + 1];
@@ -206,7 +206,7 @@ export function moveIssues(
   // Landing between the neighbour and whatever is on its far side.
   const beyond = rows[direction === "up" ? index - 2 : index + 2];
   const [before, after] = direction === "up" ? [beyond, neighbour] : [neighbour, beyond];
-  mutators.update(String(moving["id"]), { rank: rankBetween(rankOf(before), rankOf(after), device) });
+  await mutators.update(String(moving["id"]), { rank: rankBetween(rankOf(before), rankOf(after), device) });
 }
 // --- comments --------------------------------------------------------------
 
@@ -238,8 +238,8 @@ export function decodeComments(row: MaterializedRow): CommentsRow {
 
 export function commentsMutators(client: MutationTarget, notify: () => void = () => undefined): CommentsMutators {
   return {
-    create(id: string, values: CommentsMutation, transaction?: TxnId): void {
-      client.append(commentsTable, rowId(id), wire(values), transaction ?? txnId(`create-${id}`));
+    async create(id: string, values: CommentsMutation, transaction?: TxnId): Promise<void> {
+      await client.append(commentsTable, rowId(id), wire(values), transaction ?? txnId(`create-${id}`));
       notify();
     },
   };

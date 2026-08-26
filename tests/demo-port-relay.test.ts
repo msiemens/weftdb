@@ -27,7 +27,7 @@ test("two tabs of one browser converge through the relay running in it", async (
   const alpha = client("alpha");
   const beta = client("beta");
 
-  newTodo(alpha, "todo-1", "buy milk");
+  await newTodo(alpha, "todo-1", "buy milk");
   await alpha.syncWith(relay.connect(), HASH);
   await beta.syncWith(relay.connect(), HASH);
 
@@ -49,7 +49,7 @@ test("a wake reaches the tab that did not push, and never the tab that did", asy
 
   // Beta is connected and up to date, so the only thing that moves the scope is alpha's push.
   await beta.syncWith(betaPort, HASH);
-  newTodo(alpha, "todo-1", "buy milk");
+  await newTodo(alpha, "todo-1", "buy milk");
   await alpha.syncWith(alphaPort, HASH);
 
   // This is the whole reason a second tab updates without being touched: it is told, rather than
@@ -82,7 +82,7 @@ test("a push the relay refuses is an answer, not a failure", async () => {
   using relay = new Relay();
   const transport = relay.connect();
   const alpha = client("alpha");
-  newTodo(alpha, "todo-1", "buy milk");
+  await newTodo(alpha, "todo-1", "buy milk");
   const ops = [...alpha.outbox];
 
   assert.equal((await transport.push(SCOPE, ops)).ok, true);
@@ -177,11 +177,11 @@ class HeldReplies implements RelayPortLike {
     this.#inner.postMessage(message);
   }
 
-  addEventListener(_type: "message", listener: (event: MessageEvent<unknown>) => void): void {
+  addEventListener(type: "message" | "close", listener: (event: MessageEvent<unknown>) => void): void {
     this.#listeners.add(listener);
   }
 
-  removeEventListener(_type: "message", listener: (event: MessageEvent<unknown>) => void): void {
+  removeEventListener(type: "message" | "close", listener: (event: MessageEvent<unknown>) => void): void {
     this.#listeners.delete(listener);
   }
 
@@ -197,7 +197,7 @@ function client(device: string): WeftClient {
   return new WeftClient(SCOPE, deviceId(device), schema);
 }
 
-function newTodo(target: WeftClient, id: string, title: string, notes = ""): void {
+async function newTodo(target: WeftClient, id: string, title: string, notes = ""): Promise<void> {
   const values: Record<string, WireValue> = {
     title,
     notes,
@@ -206,5 +206,5 @@ function newTodo(target: WeftClient, id: string, title: string, notes = ""): voi
     due_at: null,
     auto_delete_days: null,
   };
-  target.create(TODOS, rowId(id), values, txnId(`create-${id}`));
+  await target.create(TODOS, rowId(id), values, txnId(`create-${id}`));
 }

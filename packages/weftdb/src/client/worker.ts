@@ -4,9 +4,8 @@ import type { SessionStatus } from "./session.ts";
 
 /**
  * A change the page asks the worker to carry out. Only the intent crosses, never the result: the
- * `WeftClient` lives in the worker under OPFS — `SqlExecutor` is synchronous and
- * `ClientPersistence.save` takes the live client — so the page has nothing to apply the mutation
- * to. What comes back is the rows that moved, as a `WorkerPush`.
+ * `WeftClient` lives in the worker, beside the database it writes itself through to, so the page
+ * has nothing to apply the mutation to. What comes back is the rows that moved, as a `WorkerPush`.
  *
  * `delete` and `restore` carry no values. A delete has none to carry, and a restore un-deletes a
  * row the scope still holds, so its fields come back on the next pull rather than being guessed
@@ -24,9 +23,7 @@ export type WorkerMutation =
 
 /**
  * What a page can ask for, without the correlation id. `execute` and `close` drive the database
- * alone; the rest drive the client the worker host owns. Every tab speaks the whole vocabulary,
- * because every tab holds a port straight to the worker — a follower that could only `execute` had
- * no way to drive a mirror.
+ * alone; the rest drive the client the worker host owns.
  */
 export type WorkerRequestBody =
   | { readonly type: "execute"; readonly query: CompiledQuery }
@@ -39,19 +36,29 @@ export type WorkerRequestBody =
    * fires nothing anywhere. So an orderly exit says so, and the host releases that port's watches
    * rather than recomputing statements for a tab that has gone.
    *
-   * Distinct from `close`, which closes the *database*. One tab leaving must not take the OPFS
-   * access handle away from the tabs that are staying.
+   * A `SharedWorker` outlives every tab of its origin, so a registration nobody released is a
+   * statement recomputed after every mutation for the rest of the browser's life. This is what
+   * stops that, and `WeftWorkerHost.watching` is what makes the leak visible when it does not.
+   *
+   * Distinct from `close`, which closes the *database*. One tab leaving must not take the database
+   * away from the tabs that are staying.
    */
   | { readonly type: "disconnect" }
   /**
-   * Every row of a scope, and what kind of database they are in. The first thing any tab sends.
+   * Every row of a scope. The first thing any tab sends, and the message that says which database
+   * this port is for: a `SharedWorker` is identified by its script URL alone, so one instance
+   * serves every tab of the origin and a port arrives carrying no statement of what it wants.
    *
-   * It doubles as a tab's proof that the port it was handed reached a document that is still there.
-   * The broker forwards a port and hears nothing back, and a registration left by a tab that has
-   * gone is indistinguishable from a live one, so the test is not whether the port was accepted but
-   * whether anything answers over it — and this is the answer a tab needs anyway.
+   * `schemaHash` comes back in the reply rather than being checked here, because the page is where
+   * a mismatch is refused and `WeftOpenError` lives.
    */
-  | { readonly type: "hydrate"; readonly scopeId: string; readonly deviceId: string }
+  | {
+      readonly type: "hydrate";
+      readonly scopeId: string;
+      readonly deviceId: string;
+      /** Which application in this origin these rows belong to. See `./database-key.ts`. */
+      readonly namespace: string;
+    }
   | { readonly type: "mutate"; readonly mutation: WorkerMutation }
   | { readonly type: "watch"; readonly cacheKey: string; readonly tableName: string; readonly query: CompiledQuery }
   | { readonly type: "unwatch"; readonly cacheKey: string }
@@ -105,7 +112,7 @@ export interface WireRow {
  * moved — the mirror keeps the rest, which is what preserves their object identity — and `removed`
  * names the `${tableName}\0${id}` keys the worker no longer holds.
  *
- * Rows and results are scoped differently on purpose. A row belongs to the scope, so every port
+ * Rows and results are scoped differently. A row belongs to the scope, so every port
  * serving that scope is told about it; a result belongs to whoever asked for the statement, and one
  * tab's list is nothing to the tab beside it.
  */
@@ -147,98 +154,22 @@ export type WorkerPush = WorkerDeltaPush | WorkerStatusPush;
 export type WorkerMessage = WorkerResponse | WorkerPush;
 
 /**
- * Whether the database this worker opened outlives the window it was opened in.
+ * What a `hydrate` is answered with: the scope's rows, and the schema the worker serves.
  *
- * `"durable"` is OPFS: the file is still there on the next visit, which is what every other part of
- * this design assumes. `"ephemeral"` is a browser that declined the synchronous access handle pool —
- * private browsing is the case that matters — and was served an in-memory SQLite instead. Rows, the
- * outbox and the quarantine all go when the window does, a reload included.
- *
- * It crosses the port because it cannot be worked out on the page: which of the two a device got is
- * decided inside the worker, by what the browser was willing to hand out. An application that wants
- * to tell the person this window will not remember has no other source for it.
- */
-export type WeftDurability = "durable" | "ephemeral";
-
-/**
- * The one thing a worker says before it is asked anything: whether it managed to open the database
- * at all, which schema it opened, and whether what it opened will still be there next time.
- *
- * It exists because the answer cannot be got any other way. Whether OPFS will hand out a synchronous
- * access handle pool is a property of the worker — Safari's private mode has no pool, and the page
- * has no way to find that out from where it stands — so the worker has to try and report. A
- * rejection thrown inside the worker reaches the page as an `error` event with no detail, which is
- * why this is an ordinary message rather than an unhandled one.
- *
- * It is announced rather than answered, because a request cannot be made yet: a dedicated worker
- * that spends its first turns awaiting a WebAssembly module has no `message` listener attached, and
- * anything the page posted before `serveWeftWorker` ran would be delivered to nobody.
- *
- * The `weft` tag is what keeps it inert to everything already on these ports. It carries neither the
- * numeric `id` a `WorkerResponse` is recognised by nor the `push` a `WorkerPush` is, so
- * `WorkerPortTransport` and `WeftWorkerHost` alike drop it untouched.
- */
-export type WeftWorkerReady =
-  | {
-      readonly weft: "ready";
-      readonly ok: true;
-      /** The schema the worker serves, so a page cannot open against a worker built from another. */
-      readonly schemaHash: string;
-      /** Absent means `"durable"`: a worker that says nothing about it opened an OPFS database. */
-      readonly durability?: WeftDurability;
-    }
-  | { readonly weft: "ready"; readonly ok: false; readonly error: string };
-
-/**
- * What a `hydrate` is answered with: the scope's rows, and what kind of database they are in.
- *
- * The durability rides along because this is the second path it has to travel, and it is not
- * decoration. A follower is never present for the announcement above — it is handed a `MessagePort`
- * to a worker another tab created — so without this the same database would be reported durable in
- * one tab and ephemeral in the next. A tab is already sending this and already waiting for its
- * reply, so carrying it here costs a field rather than a round trip.
+ * The hash rides along because a page and a worker built from different schemas have to be refused
+ * rather than left selecting columns the other has never had. A tab is already sending this and
+ * already waiting for its reply, so carrying it here costs a field rather than a round trip.
  */
 export interface WorkerHydrated extends WorkerDelta {
-  readonly durability: WeftDurability;
+  readonly schemaHash: string;
 }
 
 /** Reads a `hydrate` reply that crossed a structured clone, which types as `unknown` on arrival. */
 export function isWorkerHydrated(value: unknown): value is WorkerHydrated {
   if (typeof value !== "object" || value === null) return false;
-  const durability: unknown = (value as { readonly durability?: unknown }).durability;
-  return durability === "durable" || durability === "ephemeral";
-}
-
-export function isWeftWorkerReady(value: unknown): value is WeftWorkerReady {
-  if (typeof value !== "object" || value === null) return false;
-  const message = value as { readonly weft?: unknown; readonly ok?: unknown };
-  return message.weft === "ready" && typeof message.ok === "boolean";
-}
-
-/**
- * Another tab's end of a `MessageChannel`, handed to the worker to be served like the port the
- * worker was made with. It is how a tab that may not touch OPFS gets a connection of its own rather
- * than a proxy through the tab that may.
- *
- * The port travels *in the message* as well as in the transfer list, and that is deliberate. A
- * browser populates both `event.data` and `event.ports` for a transferred port; Node's
- * `worker_threads` populates only `event.data`, and the whole multi-tab assembly is tested under
- * Node. Reading it out of the message is therefore the one way that works in both, and reading
- * `event.ports` would have been a path exercised by nothing.
- *
- * Tagged `weft` for the same reason `WeftWorkerReady` is: it carries neither a numeric `id` nor a
- * `push`, so a transport that happens to see one drops it untouched.
- */
-export interface WeftWorkerConnect {
-  readonly weft: "connect";
-  /** A `MessagePort`. Untyped here because only the host, which serves it, needs its shape. */
-  readonly port: unknown;
-}
-
-export function isWeftWorkerConnect(value: unknown): value is WeftWorkerConnect {
-  if (typeof value !== "object" || value === null) return false;
-  const message = value as { readonly weft?: unknown; readonly port?: unknown };
-  return message.weft === "connect" && typeof message.port === "object" && message.port !== null;
+  const reply = value as Partial<WorkerHydrated>;
+  if (typeof reply.schemaHash !== "string") return false;
+  return Array.isArray(reply.rows) && Array.isArray(reply.removed) && Array.isArray(reply.results);
 }
 
 /**
@@ -246,7 +177,7 @@ export function isWeftWorkerConnect(value: unknown): value is WeftWorkerConnect 
  * whole test — and it has to be made, because a transport that read `id` off every message would
  * settle request number `undefined` for each push that went by.
  */
-export function isWorkerPush(message: WorkerMessage): message is WorkerPush {
+function isWorkerPush(message: WorkerMessage): message is WorkerPush {
   return "push" in message;
 }
 
@@ -260,26 +191,26 @@ export function isDeltaPush(message: WorkerMessage): message is WorkerDeltaPush 
 }
 
 /**
- * The far end of the protocol as the page holds it: a dedicated `Worker` in the tab that made one,
- * and a `MessagePort` straight to that worker in every other tab.
+ * The far end of the protocol as the page holds it: a `SharedWorker`'s `port`, which is a
+ * `MessagePort`.
  *
- * `transfer` is what makes the second case possible: a port cannot be cloned, only moved, so the
- * tab holding the worker forwards an incoming port with `postMessage(connect, [port])`. It is
- * optional because nothing else on this protocol transfers anything.
- *
- * `start` is optional for the same reason it is optional on a `MessagePort`: a port reached through
- * `addEventListener` rather than through `onmessage` does not begin delivering until it is started,
- * and a `Worker` has nothing to start. `close` is a `MessagePort`'s, `terminate` a `Worker`'s, and
- * both are optional because a tab holds one or the other and never both — the page that made the
- * worker stops it, and the page that was handed a port closes that.
+ * `start` is required of a `MessagePort` reached through `addEventListener`, which delivers nothing
+ * until it is started, and `close` is what tells the worker this connection has gone. Both are
+ * optional so that a test can serve a `MessageChannel` end or a `node:worker_threads` port, whose
+ * shapes differ in exactly these two.
  */
 export interface WorkerLike {
-  postMessage(message: WorkerRequest | WeftWorkerConnect, transfer?: readonly unknown[]): void;
+  postMessage(message: WorkerRequest): void;
   addEventListener(type: "message", listener: (event: MessageEvent<WorkerMessage>) => void): void;
+  /**
+   * The far end of this port has gone, which is the only signal a page gets that the browser
+   * stopped its `SharedWorker`. A `MessagePort` fires it in a browser and under
+   * `node:worker_threads` alike.
+   */
+  addEventListener(type: "close", listener: () => void): void;
   removeEventListener(type: "message", listener: (event: MessageEvent<WorkerMessage>) => void): void;
   start?(): void;
   close?(): void;
-  terminate?(): void;
 }
 
 export type WorkerPushHandler = (push: WorkerPush) => void;
@@ -289,10 +220,8 @@ export type WorkerPushHandler = (push: WorkerPush) => void;
  * each request, settles the reply that carries the same number, and hands the pushes that carry
  * none to whoever subscribed.
  *
- * Nothing about it is OPFS, and nothing in it knows what the port is made of. The port underneath is
- * a dedicated `Worker` in the tab that made one and a bare `MessagePort` to that worker in every
- * other tab, and this class cannot tell the two apart — which is precisely what lets one mirror run
- * in either kind of tab without knowing which it is in.
+ * Nothing in it knows what the port is made of. A `SharedWorker`'s port in a browser, a
+ * `MessageChannel` end under Node, and the same class serves either.
  */
 export class WorkerPortTransport {
   readonly #worker: WorkerLike;
@@ -307,8 +236,8 @@ export class WorkerPortTransport {
     this.#worker = worker;
     this.#worker.addEventListener("message", this.#onMessage);
     // A `MessagePort` reached through `addEventListener` queues what arrives and delivers none of
-    // it until it is started, so a follower tab handed a port would post a hydrate and wait for an
-    // answer already sitting in its own queue. A `Worker` has no `start` and does not care.
+    // it until it is started, so a tab would post a hydrate and wait for an answer already sitting
+    // in its own queue.
     this.#worker.start?.();
   }
 
@@ -334,10 +263,15 @@ export class WorkerPortTransport {
     });
   }
 
+  /** Fires once the port's far end has gone, which is the page's only notice that the worker did. */
+  onClosed(handler: () => void): void {
+    this.#worker.addEventListener("close", handler);
+  }
+
   /**
    * Subscribes to the deltas the worker sends unasked. A set rather than a single handler because a
-   * mirror is disposed and rebuilt against a transport that outlives it — leadership moving is
-   * exactly that — and a returned unsubscribe is what makes the two independent.
+   * mirror outlives the transport under it — a worker the browser stopped is replaced beneath a
+   * page that carries on — and a returned unsubscribe is what makes the two independent.
    */
   onPush(handler: WorkerPushHandler): () => void {
     this.#pushHandlers.add(handler);
@@ -350,12 +284,11 @@ export class WorkerPortTransport {
    * Stops listening and settles what was in flight.
    *
    * The reason is a parameter because the two callers mean different things by it. A tab closing
-   * its own database is one; a tab whose worker went with the tab that owned it is the other, and a
-   * caller awaiting a write deserves to be told which — dropping the entries instead would leave it
+   * its own database is one; a tab whose worker the browser stopped is the other, and a caller
+   * awaiting a write deserves to be told which — dropping the entries instead would leave it
    * awaiting a promise nothing is left to settle.
    *
-   * The port is closed if it has a `close`, which a `MessagePort` does and a `Worker` does not.
-   * That is what tells the worker at the far end that this connection has gone.
+   * Closing the port is what tells the worker at the far end that this connection has gone.
    */
   dispose(reason = "worker transport disposed"): void {
     this.#worker.removeEventListener("message", this.#onMessage);
@@ -384,6 +317,6 @@ export class WorkerPortTransport {
   };
 }
 
-export function withRequestId(id: number, message: WorkerRequestBody): WorkerRequest {
+function withRequestId(id: number, message: WorkerRequestBody): WorkerRequest {
   return { ...message, id };
 }

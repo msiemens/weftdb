@@ -90,7 +90,7 @@ test("emptying the list empties it, on this tab and the next", async (t) => {
   await drain(store);
   assert.ok(store.rows().length > 0);
 
-  for (const row of store.rows()) store.todos.delete(row.id);
+  for (const row of store.rows()) await store.todos.delete(row.id);
   await drain(store);
   assert.deepEqual(store.rows(), []);
   stop();

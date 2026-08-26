@@ -1,25 +1,11 @@
+// What a value becomes on its way into a column, and what the relay's own tables hold.
+//
 // Type-only, so naming core from inside shared costs no runtime edge: core imports the wire-value
 // guard from here, and a value import back would close the cycle. The same holds for the schema:
 // a field definition is read for its declared type, which is erased before anything runs.
 import type { FieldName, HlcString, RowId, SchemaHash, ScopeId, TableName, TxnId, WireValue } from "../core.ts";
 import type { FieldDefinition } from "../schema.ts";
-
-export type SqlValue = string | number | bigint | Uint8Array<ArrayBuffer> | null;
-export type SqlParameters = readonly SqlValue[];
-export type SqlRow = Readonly<Record<string, SqlValue>>;
-
-export interface SqlStatement<Decoded> {
-  readonly sql: string;
-  readonly parameters: SqlParameters;
-  readonly decode: (row: SqlRow) => Decoded;
-}
-
-export interface SqlExecutor {
-  all<Decoded>(statement: SqlStatement<Decoded>): readonly Decoded[];
-  get<Decoded>(statement: SqlStatement<Decoded>): Decoded | undefined;
-  run(statement: { readonly sql: string; readonly parameters: SqlParameters }): void;
-  transaction<Result>(body: () => Result): Result;
-}
+import type { SqlRow, SqlValue } from "./executor.ts";
 
 export interface EncodedFieldRecord extends SqlRow {
   readonly scope_id: ScopeId;

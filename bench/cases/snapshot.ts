@@ -5,33 +5,46 @@ import { sha256Hex } from "weftdb/shared";
 import { contentAddressSnapshot, snapshotToNdjson, type SnapshotEnvelope } from "weftdb/server/snapshot";
 import { WeftServer, type Snapshot } from "weftdb/server";
 import { HASH, SCOPE, benchClient, seedRows } from "../fixtures.ts";
-import { consume, constant, duration, repeat, type BenchConfig, type BenchGroup, type CaseResult } from "../harness.ts";
+import {
+  consume,
+  constant,
+  duration,
+  repeat,
+  repeatAsync,
+  type BenchConfig,
+  type BenchGroup,
+  type CaseResult,
+} from "../harness.ts";
+import { inProcessTransport } from "weftdb/client";
 
 const GROUP = "Snapshot";
 
 export const snapshot: BenchGroup = {
   name: GROUP,
-  run: async (config: BenchConfig): Promise<readonly CaseResult[]> =>
-    config.snapshotSizes.flatMap((rows) => {
-      const server = populatedServer(rows);
+  run: async (config: BenchConfig): Promise<readonly CaseResult[]> => {
+    const results: CaseResult[] = [];
+    for (const rows of config.snapshotSizes) {
+      const server = await populatedServer(rows);
       const built = server.snapshot(SCOPE);
       const body = snapshotToNdjson(built);
-      return [
+      results.push(
         buildCase(config, rows, server),
         ndjsonCase(config, rows, built),
         digestCase(config, rows, body),
         serializeCase(config, rows, built),
-        applyCase(config, rows, built),
+        await applyCase(config, rows, built),
         ...sizeCases(rows, built, body),
-      ];
-    }),
+      );
+    }
+    return results;
+  },
 };
 
-function populatedServer(rows: number): WeftServer {
+async function populatedServer(rows: number): Promise<WeftServer> {
   const server = new WeftServer();
   const client = benchClient("device-0");
-  seedRows(client, rows);
-  client.sync(server, HASH);
+  await seedRows(client, rows);
+  await client.syncWith(inProcessTransport(server), HASH);
   return server;
 }
 
@@ -122,11 +135,11 @@ function serializeCase(config: BenchConfig, rows: number, built: Snapshot): Case
 }
 
 /** Applying it to a device that holds nothing yet. */
-function applyCase(config: BenchConfig, rows: number, built: Snapshot): CaseResult {
-  const samples = repeat(() => {
+async function applyCase(config: BenchConfig, rows: number, built: Snapshot): Promise<CaseResult> {
+  const samples = await repeatAsync(async () => {
     const client = benchClient("device-1");
     const start = performance.now();
-    client.applySnapshot(built);
+    await client.applySnapshot(built);
     const elapsed = performance.now() - start;
     consume(client.rows.size);
     return elapsed;

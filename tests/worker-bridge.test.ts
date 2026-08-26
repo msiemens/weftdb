@@ -2,12 +2,12 @@
 // page, and a row delta between them.
 //
 // The whole bridge is exercised in Node. `serveWeftWorker` takes its executor and its store as
-// options, so `openSqliteExecutor(":memory:")` — synchronous, which is exactly what the host needs
-// — stands in for OPFS, and a `node:worker_threads` MessageChannel stands in for the worker port.
-// That is not a shortcut around a browser test: the messages really are structured-cloned and
-// really do arrive on a later turn, which is where the ordering mistakes live.
+// options, so `openSqliteExecutor(":memory:")` behind `asyncSqlExecutor` stands in for OPFS, and a
+// `node:worker_threads` MessageChannel stands in for the worker port. That is not a shortcut around
+// a browser test: the messages really are structured-cloned and really do arrive on a later turn,
+// which is where the ordering mistakes live.
 import assert from "node:assert/strict";
-import { MessageChannel, type MessagePort } from "node:worker_threads";
+import { MessageChannel } from "node:worker_threads";
 import { test } from "vitest";
 import {
   deviceId,
@@ -20,8 +20,14 @@ import {
   type HlcString,
   type WireValue,
 } from "weftdb/core";
-import type { SqlExecutor, SqlStatement } from "weftdb/shared";
-import { defineSchema, S } from "weftdb/schema";
+import {
+  asyncSqlExecutor,
+  type AsyncSqlExecutor,
+  type AsyncSqlTransaction,
+  type SqlParameters,
+  type SqlStatement,
+} from "weftdb/shared";
+import { defineSchema, S, schemaHash } from "weftdb/schema";
 import {
   compileOnlyKysely,
   isDeltaPush,
@@ -39,6 +45,7 @@ import {
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
 import type { WeftSource } from "weftdb-react";
+import { delay, PortEndpoint } from "./multitab-fixtures.ts";
 
 const schema = defineSchema({
   todos: S.collection({
@@ -62,14 +69,15 @@ interface Database {
 const SCOPE = scopeId("scope-1");
 const DEVICE = deviceId("device-1");
 const TODOS = tableName("todos");
+const HASH = schemaHash(schema);
 
 test("§8.7 a hydrate brings the worker's rows to the page with their revisions intact", async () => {
-  using bridge = Bridge.open();
-  bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
-  bridge.seed("todo-2", { title: "beta", done: true, rank: 2 });
+  using bridge = await Bridge.open();
+  await bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
+  await bridge.seed("todo-2", { title: "beta", done: true, rank: 2 });
   // Edited in that earlier session, so the two rows come back on different revisions and a mirror
   // that started every row at one would be caught here rather than three tests later.
-  bridge.seedUpdate("todo-1", "alpha prime");
+  await bridge.seedUpdate("todo-1", "alpha prime");
 
   await bridge.mirror.hydrate();
 
@@ -87,32 +95,39 @@ test("§8.7 a hydrate brings the worker's rows to the page with their revisions 
   }
 });
 
-test("§8.7 a mutator returns void, and the row appears when the worker echoes it back", async () => {
-  using bridge = Bridge.open();
+test("§8.7 a mutator applies nothing here, and the row appears when the worker echoes it back", async () => {
+  using bridge = await Bridge.open();
   await bridge.mirror.hydrate();
 
-  // The mutator returns nothing and returns at once: the mutation is applied in the worker, and
-  // there is deliberately no optimistic local apply here to undo if it fails (DESIGN.md §259).
-  bridge.mirror.create(TODOS, rowId("todo-1"), { title: "alpha", done: false, rank: 1 }, txnId("txn-1"));
+  const writing = bridge.mirror.create(
+    TODOS,
+    rowId("todo-1"),
+    { title: "alpha", done: false, rank: 1 },
+    txnId("txn-1"),
+  );
+  // Nothing is applied on this side, so the row is absent until the worker echoes it back. A mirror
+  // that wrote optimistically would have a row here and nothing to roll it back with (DESIGN.md
+  // §259).
   assert.equal(bridge.mirror.rows.size, 0, "the page applied the mutation itself rather than waiting for the echo");
 
+  await writing;
   await bridge.settle(() => bridge.mirror.rows.size === 1);
 
   assert.equal(bridge.mirror.rows.get("todos\0todo-1")?.fields.get(fieldName("title")), "alpha");
   // And it is on disk, not merely in the worker's memory: the point of moving the client across
-  // the boundary is that `ClientPersistence.save` gets the live client on the thread that can
-  // write synchronously.
+  // the boundary is that `ClientPersistence.save` gets the live client on the thread that holds
+  // the database.
   assert.equal(
-    bridge.stored("todo-1")?.["title"],
+    (await bridge.stored("todo-1"))?.["title"],
     "alpha",
     "the worker echoed a row it had not written through to SQLite",
   );
 });
 
 test("§8.7 a watched statement's id list moves as rows start and stop matching it", async () => {
-  using bridge = Bridge.open();
-  bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
-  bridge.seed("todo-2", { title: "beta", done: true, rank: 2 });
+  using bridge = await Bridge.open();
+  await bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
+  await bridge.seed("todo-2", { title: "beta", done: true, rank: 2 });
   await bridge.mirror.hydrate();
 
   const open = bridge.query((statement) => statement.where("done", "=", false).orderBy("rank"));
@@ -121,25 +136,25 @@ test("§8.7 a watched statement's id list moves as rows start and stop matching 
 
   // Leaving the result set and joining it are the two directions, and a mirror that only ever
   // added would keep showing a row the statement no longer matches.
-  bridge.mirror.update(TODOS, rowId("todo-1"), { done: true }, txnId("txn-close"));
+  await bridge.mirror.update(TODOS, rowId("todo-1"), { done: true }, txnId("txn-close"));
   await bridge.settle(() => bridge.ids(open).length === 0);
 
-  bridge.mirror.update(TODOS, rowId("todo-2"), { done: false }, txnId("txn-open"));
+  await bridge.mirror.update(TODOS, rowId("todo-2"), { done: false }, txnId("txn-open"));
   await bridge.settle(() => bridge.ids(open).length === 1);
   assert.deepEqual(bridge.ids(open), ["todo-2"]);
 });
 
 test("§8.7 a row that did not change is the same row after a push", async () => {
-  using bridge = Bridge.open();
-  bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
-  bridge.seed("todo-2", { title: "beta", done: false, rank: 2 });
+  using bridge = await Bridge.open();
+  await bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
+  await bridge.seed("todo-2", { title: "beta", done: false, rank: 2 });
   await bridge.mirror.hydrate();
 
   const all = bridge.query((statement) => statement.orderBy("rank"));
   await bridge.mirror.watch(all);
   const before = bridge.snapshot(all);
 
-  bridge.mirror.update(TODOS, rowId("todo-2"), { title: "beta prime" }, txnId("txn-1"));
+  await bridge.mirror.update(TODOS, rowId("todo-2"), { title: "beta prime" }, txnId("txn-1"));
   await bridge.settle(() => bridge.snapshot(all) !== before);
   const after = bridge.snapshot(all);
 
@@ -153,15 +168,15 @@ test("§8.7 a row that did not change is the same row after a push", async () =>
 });
 
 test("§8.7 the mirror's dirty flag says what the worker's client says", async () => {
-  using bridge = Bridge.open();
+  using bridge = await Bridge.open();
   await bridge.mirror.hydrate();
 
   // One row made here and never pushed, and one the scope handed over. They have to differ, or a
   // mirror that hard-coded `true` would pass.
-  bridge.mirror.create(TODOS, rowId("todo-1"), { title: "mine", done: false, rank: 1 }, txnId("txn-1"));
+  await bridge.mirror.create(TODOS, rowId("todo-1"), { title: "mine", done: false, rank: 1 }, txnId("txn-1"));
   await bridge.settle(() => bridge.mirror.rows.has("todos\0todo-1"));
-  bridge.pullRow("todo-2", "theirs");
-  bridge.mirror.update(TODOS, rowId("todo-1"), { title: "mine, edited" }, txnId("txn-2"));
+  await bridge.pullRow("todo-2", "theirs");
+  await bridge.mirror.update(TODOS, rowId("todo-1"), { title: "mine, edited" }, txnId("txn-2"));
   await bridge.settle(() => bridge.mirror.rows.has("todos\0todo-2"));
 
   for (const id of ["todo-1", "todo-2"]) {
@@ -178,8 +193,8 @@ test("§8.7 the mirror's dirty flag says what the worker's client says", async (
 });
 
 test("§8.7 unwatching stops the worker running the statement at all", async () => {
-  using bridge = Bridge.open();
-  bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
+  using bridge = await Bridge.open();
+  await bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
   await bridge.mirror.hydrate();
 
   const all = bridge.query((statement) => statement.orderBy("rank"));
@@ -189,7 +204,7 @@ test("§8.7 unwatching stops the worker running the statement at all", async () 
   bridge.mirror.unwatch(all);
 
   bridge.counted.reset();
-  bridge.mirror.update(TODOS, rowId("todo-1"), { title: "alpha prime" }, txnId("txn-1"));
+  await bridge.mirror.update(TODOS, rowId("todo-1"), { title: "alpha prime" }, txnId("txn-1"));
   await bridge.settle(() => bridge.pushes.length > 0);
 
   // Not merely "the page stopped reading it": the worker re-runs every watched statement after
@@ -208,7 +223,7 @@ test("§8.7 unwatching stops the worker running the statement at all", async () 
 });
 
 test("§8.7 a push naming a statement the page never registered is ignored", async () => {
-  using bridge = Bridge.open();
+  using bridge = await Bridge.open();
   await bridge.mirror.hydrate();
 
   // A worker that is a version ahead, or a result for a statement unwatched while the push was on
@@ -228,8 +243,8 @@ test("§8.7 a push naming a statement the page never registered is ignored", asy
 });
 
 test("§8.7 a statement nobody registered is not a statement that matched nothing", async () => {
-  using bridge = Bridge.open();
-  bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
+  using bridge = await Bridge.open();
+  await bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
   await bridge.mirror.hydrate();
 
   // A statement that would match the seeded row if anyone had asked the worker to run it, and one
@@ -249,8 +264,8 @@ test("§8.7 a statement nobody registered is not a statement that matched nothin
 });
 
 test("§8.7 a registration still in flight is not an answer of no rows", async () => {
-  using bridge = Bridge.open();
-  bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
+  using bridge = await Bridge.open();
+  await bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
   await bridge.mirror.hydrate();
 
   const open = bridge.query((statement) => statement.where("done", "=", false).orderBy("rank"));
@@ -268,8 +283,8 @@ test("§8.7 a registration still in flight is not an answer of no rows", async (
   assert.deepEqual(bridge.mirror.select(open), ["todo-1"], "the answer never replaced the absence");
 });
 
-test("§8.7 the mirror is a weft source as it stands", () => {
-  using bridge = Bridge.open();
+test("§8.7 the mirror is a weft source as it stands", async () => {
+  using bridge = await Bridge.open();
   // The point of the mirror is that a component reads it the same way it reads a client that has
   // the database on this thread: a row map, a `select`, and a scope. If this stops compiling, the
   // hooks and the worker path have drifted apart and every generated component on OPFS is broken.
@@ -307,26 +322,25 @@ test("§8.7 the worker transport ignores a push rather than mis-correlating it",
 class Bridge {
   readonly db = compileOnlyKysely<Database>();
   readonly mirror: WeftClientMirror;
-  /** The mirror's transport, owned here rather than by the mirror: a leader tab needs it too. */
   readonly transport: WorkerPortTransport;
   readonly host: WeftWorkerHost;
   readonly counted: CountingExecutor;
   readonly store: SqliteClientStore;
   /** Every unsolicited delta the worker sent, in order, as a test can only see them here. */
   readonly pushes: WorkerPush[] = [];
-  readonly #executor: ReturnType<typeof openSqliteExecutor>;
+  readonly #close: () => void;
   readonly #channel: MessageChannel;
 
-  private constructor(executor: ReturnType<typeof openSqliteExecutor>) {
-    this.#executor = executor;
-    this.counted = new CountingExecutor(executor);
-    this.store = new SqliteClientStore(this.counted, schema);
-    this.store.installSchema();
+  private constructor(counted: CountingExecutor, store: SqliteClientStore, close: () => void) {
+    this.counted = counted;
+    this.store = store;
+    this.#close = close;
     this.#channel = new MessageChannel();
     this.host = serveWeftWorker({
       port: new PortEndpoint<WorkerRequest>(this.#channel.port2),
-      executor: this.counted,
-      store: this.store,
+      executor: counted,
+      store,
+      schemaHash: HASH,
     });
     const page = new PortEndpoint<WorkerMessage>(this.#channel.port1);
     page.addEventListener("message", (event: MessageEvent<WorkerMessage>) => {
@@ -336,14 +350,20 @@ class Bridge {
     this.mirror = new WeftClientMirror({ transport: this.transport, scopeId: SCOPE, deviceId: DEVICE });
   }
 
-  static open(): Bridge {
-    return new Bridge(openSqliteExecutor(":memory:"));
+  static async open(): Promise<Bridge> {
+    const file = openSqliteExecutor(":memory:");
+    const counted = new CountingExecutor(asyncSqlExecutor(file));
+    const store = new SqliteClientStore(counted, schema);
+    await store.installSchema();
+    return new Bridge(counted, store, () => {
+      file.close();
+    });
   }
 
   /** A row written straight into the database, as a previous session would have left it. */
-  seed(id: string, values: { title: string; done: boolean; rank: number }): void {
-    const seeding = this.store.hydrate(SCOPE, DEVICE);
-    seeding.create(
+  async seed(id: string, values: { title: string; done: boolean; rank: number }): Promise<void> {
+    const seeding = await this.store.hydrate(SCOPE, DEVICE);
+    await seeding.create(
       TODOS,
       rowId(id),
       { [fieldName("title")]: values.title, [fieldName("done")]: values.done, [fieldName("rank")]: values.rank },
@@ -352,17 +372,17 @@ class Bridge {
   }
 
   /** An edit made in a previous session, which is what lifts a row's revision above its first. */
-  seedUpdate(id: string, title: string): void {
-    const seeding = this.store.hydrate(SCOPE, DEVICE);
-    seeding.update(TODOS, rowId(id), { [fieldName("title")]: title }, txnId(`seed-edit-${id}`));
+  async seedUpdate(id: string, title: string): Promise<void> {
+    const seeding = await this.store.hydrate(SCOPE, DEVICE);
+    await seeding.update(TODOS, rowId(id), { [fieldName("title")]: title }, txnId(`seed-edit-${id}`));
   }
 
   /** A row the scope handed over, which is the only way to hold one with nothing unsent. */
-  pullRow(id: string, title: string): void {
+  async pullRow(id: string, title: string): Promise<void> {
     const client = this.host.client;
     if (client === undefined) throw new Error("the worker has not hydrated");
     const hlc = encodeHlc({ wallMs: 1_000, counter: 0, deviceId: deviceId("device-elsewhere") });
-    client.applyPull({
+    await client.applyPull({
       serverSeq: 1,
       tombstoneFloorSeq: 0,
       rows: [
@@ -407,8 +427,8 @@ class Bridge {
   }
 
   /** What SQLite holds for a row, which is what survives the tab. */
-  stored(id: string): Record<string, unknown> | undefined {
-    return this.#executor.get({
+  async stored(id: string): Promise<Record<string, unknown> | undefined> {
+    return this.counted.get({
       sql: 'SELECT * FROM "todos" WHERE scope_id = ? AND id = ?',
       parameters: [SCOPE, id],
       decode: (row) => ({ ...row }),
@@ -421,19 +441,19 @@ class Bridge {
   }
 
   /**
-   * A `MessagePort` delivers on a later turn of the loop and the mirror's mutators return before
-   * anything has crossed, so a test waits on the condition rather than on a guessed number of
-   * ticks. The engine's own listener fan-out is a microtask on top of that.
+   * A `MessagePort` delivers on a later turn of the loop and a push crosses after the mutation
+   * that caused it has been answered, so a test waits on the condition rather than on a guessed
+   * number of ticks. The engine's own listener fan-out is a microtask on top of that.
    */
   async settle(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (!condition()) {
       if (Date.now() > deadline) throw new Error("the bridge never reached the expected state");
-      await new Promise((resolve) => setTimeout(resolve, 1));
+      await delay(1);
     }
     // One more turn, so a push that arrives with the condition is fully applied before the
     // assertions read the map.
-    await new Promise((resolve) => setTimeout(resolve, 1));
+    await delay(1);
   }
 
   [Symbol.dispose](): void {
@@ -444,7 +464,7 @@ class Bridge {
     // the whole file rather than report a failure.
     this.#channel.port1.close();
     this.#channel.port2.close();
-    this.#executor.close();
+    this.#close();
   }
 }
 
@@ -462,11 +482,11 @@ function pulledField(id: string, name: string, value: WireValue, hlc: HlcString)
 }
 
 /** Counts which statements were run, so "the worker stopped recomputing it" can be asserted. */
-class CountingExecutor implements SqlExecutor {
-  readonly #inner: SqlExecutor;
+class CountingExecutor implements AsyncSqlExecutor {
+  readonly #inner: AsyncSqlExecutor;
   #sql: string[] = [];
 
-  constructor(inner: SqlExecutor) {
+  constructor(inner: AsyncSqlExecutor) {
     this.#inner = inner;
   }
 
@@ -478,59 +498,33 @@ class CountingExecutor implements SqlExecutor {
     return this.#sql.filter((seen) => seen === sql).length;
   }
 
-  all<Decoded>(statement: SqlStatement<Decoded>): readonly Decoded[] {
+  all<Decoded>(statement: SqlStatement<Decoded>): Promise<readonly Decoded[]> {
     this.#sql.push(statement.sql);
     return this.#inner.all(statement);
   }
 
-  get<Decoded>(statement: SqlStatement<Decoded>): Decoded | undefined {
+  get<Decoded>(statement: SqlStatement<Decoded>): Promise<Decoded | undefined> {
     return this.#inner.get(statement);
   }
 
-  run(statement: { readonly sql: string; readonly parameters: readonly never[] }): void {
-    this.#inner.run(statement);
+  run(statement: { readonly sql: string; readonly parameters: SqlParameters }): Promise<void> {
+    return this.#inner.run(statement);
   }
 
-  transaction<Result>(body: () => Result): Result {
-    return this.#inner.transaction(body);
-  }
-}
-
-/**
- * A `MessagePort` in the shape each side expects of the other. It sends and receives both halves
- * of the protocol, which is what lets one class stand in for the page's `WorkerLike` and the
- * worker's `WorkerHostPortLike` alike.
- */
-class PortEndpoint<Incoming> {
-  readonly #port: MessagePort;
-  readonly #wrapped = new Map<unknown, (event: unknown) => void>();
-
-  constructor(port: MessagePort) {
-    this.#port = port;
-    // A port reached through `addEventListener` rather than through its EventEmitter face does not
-    // begin delivering on its own.
-    this.#port.start();
-  }
-
-  // `unknown` rather than the protocol's own union, because the protocol is not all that crosses
-  // these ports: a tab that was handed a connection sends its `MessagePort` through one.
-  postMessage(message: unknown): void {
-    this.#port.postMessage(message);
-  }
-
-  addEventListener(_type: "message", listener: (event: MessageEvent<Incoming>) => void): void {
-    const wrapped = (event: unknown): void => {
-      listener(event as MessageEvent<Incoming>);
-    };
-    this.#wrapped.set(listener, wrapped);
-    this.#port.addEventListener("message", wrapped);
-  }
-
-  removeEventListener(_type: "message", listener: (event: MessageEvent<Incoming>) => void): void {
-    const wrapped = this.#wrapped.get(listener);
-    if (wrapped === undefined) return;
-    this.#wrapped.delete(listener);
-    this.#port.removeEventListener("message", wrapped);
+  transaction<Result>(body: (tx: AsyncSqlTransaction) => Result | PromiseLike<Result>): Promise<Result> {
+    // The handle is the transaction's own, so a statement inside it runs where it stands. What is
+    // counted is the statements the worker issued, which is the same set either way.
+    return this.#inner.transaction((tx) =>
+      body({
+        all: (statement) => {
+          this.#sql.push(statement.sql);
+          return tx.all(statement);
+        },
+        get: (statement) => tx.get(statement),
+        run: (statement) => tx.run(statement),
+        transaction: (nested) => tx.transaction(nested),
+      }),
+    );
   }
 }
 
@@ -542,11 +536,11 @@ class PushingWorker {
     // Requests are answered by hand, from the test.
   }
 
-  addEventListener(_type: "message", listener: (event: MessageEvent<WorkerMessage>) => void): void {
+  addEventListener(type: "message" | "close", listener: (event: MessageEvent<WorkerMessage>) => void): void {
     this.#listener = listener;
   }
 
-  removeEventListener(_type: "message", listener: (event: MessageEvent<WorkerMessage>) => void): void {
+  removeEventListener(type: "message" | "close", listener: (event: MessageEvent<WorkerMessage>) => void): void {
     if (this.#listener === listener) this.#listener = undefined;
   }
 
@@ -557,8 +551,4 @@ class PushingWorker {
   reply(id: number, value: unknown): void {
     this.#listener?.({ data: { id, ok: true, value } } as MessageEvent<WorkerMessage>);
   }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

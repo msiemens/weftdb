@@ -6,7 +6,7 @@ export interface MessagesMutation {
   readonly author?: string;
 }
 export interface MessagesMutators {
-  create(id: string, values: MessagesMutation, txnId?: TxnId): void;
+  create(id: string, values: MessagesMutation, txnId?: TxnId): Promise<void>;
 }
 
 export interface DevicesMutation {
@@ -14,7 +14,7 @@ export interface DevicesMutation {
   readonly last_seen?: number;
 }
 export interface DevicesMutators {
-  create(id: string, values: DevicesMutation, txnId?: TxnId): void;
-  update(id: string, values: DevicesMutation, txnId?: TxnId): void;
-  delete(id: string, txnId?: TxnId): void;
+  create(id: string, values: DevicesMutation, txnId?: TxnId): Promise<void>;
+  update(id: string, values: DevicesMutation, txnId?: TxnId): Promise<void>;
+  delete(id: string, txnId?: TxnId): Promise<void>;
 }

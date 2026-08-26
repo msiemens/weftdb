@@ -1,16 +1,16 @@
 // The page half of the page-to-worker bridge. The client itself is in the worker (see
 // `worker-host.ts` for why it has to be); this is what the React hooks read.
 //
-// It is an echo mirror, not an optimistic cache. A mutator posts and returns `void`; the worker
-// applies it, writes it through to SQLite, and pushes back the rows that moved; this applies the
-// push and wakes the subscriptions. Nothing is applied here first, so nothing here can need
-// undoing — which is what keeps DESIGN.md §259's "the client has no rollback path" true of the
-// worker-backed path too.
+// It is an echo mirror, not an optimistic cache. A mutator posts and hands back the worker's own
+// promise; the worker applies it, commits it to SQLite, and pushes back the rows that moved; this
+// applies the push and wakes the subscriptions. Nothing is applied here first, so nothing here can
+// need undoing — which is what keeps DESIGN.md §259's "the client has no rollback path" true of
+// the worker-backed path too.
 //
-// The boundary is affordable at this granularity. Measured in Firefox over OPFS SAH, a round trip
+// The boundary is affordable at this granularity. Measured in Firefox, a round trip over the port
 // costs 0.02 ms empty, 0.04 ms for a one-row delta and 0.14 ms for a hundred-row delta, against a
-// SQLite commit of 4.2 ms at a hundred rows — so the crossing is noise beside the write, and the
-// write is what the demos already pay on the main thread today.
+// steady-state commit of 4 to 7 ms over `IDBMirrorVFS` in Chrome, Firefox and Safari alike. The
+// crossing is noise beside the write.
 import {
   fieldName,
   rowId as toRowId,
@@ -23,10 +23,12 @@ import {
   type WireValue,
 } from "weftdb/core";
 import { SubscriptionEngine, type ReactiveSqlQuery, type RowSelect } from "./subscriptions.ts";
+import { DEFAULT_NAMESPACE } from "./database-key.ts";
 import type { LocalRow, MaterializedRow } from "./index.ts";
 import type { SessionStatus } from "./session.ts";
 import {
   isDeltaPush,
+  isWorkerHydrated,
   type WireRow,
   type WorkerDelta,
   type WorkerMutation,
@@ -46,15 +48,20 @@ export interface WeftClientMirrorOptions {
   readonly scopeId: string;
   readonly deviceId: string;
   /**
+   * Which application in this origin these rows belong to. It travels in the `hydrate`, because one
+   * `SharedWorker` serves every database of the origin and the port carries nothing else that says
+   * which of them this one wants. `"weft"` by default.
+   */
+  readonly namespace?: string;
+  /**
    * The engine whose snapshots this mirror invalidates. One per mirror: an engine shared between
    * two of them has them evicting each other's cached rows on every render, which
    * `useSyncExternalStore` turns into an infinite update loop rather than a slow one.
    */
   readonly engine?: SubscriptionEngine;
   /**
-   * Where a failed mutation goes. Mutators return `void`, so the promise the worker rejects has
-   * nowhere else to be reported — and swallowing it would make a refused edit look like an edit
-   * that simply had no effect.
+   * Where a failure with no caller to reject reaches the page: a statement the worker refused, a
+   * teardown that failed, and a mutation whose promise nobody kept.
    */
   readonly onError?: (error: Error) => void;
 }
@@ -68,6 +75,9 @@ export class WeftClientMirror {
   readonly engine: SubscriptionEngine;
   readonly scopeId: string;
   readonly deviceId: string;
+  readonly namespace: string;
+  /** The schema the worker answering this mirror serves, once it has answered a `hydrate`. */
+  #schemaHash: string | undefined;
   #transport: WorkerPortTransport;
   readonly #onError: (error: Error) => void;
   /** Statements this page has registered, by cache key, with how many callers still want each. */
@@ -84,6 +94,7 @@ export class WeftClientMirror {
   constructor(options: WeftClientMirrorOptions) {
     this.scopeId = options.scopeId;
     this.deviceId = options.deviceId;
+    this.namespace = options.namespace ?? DEFAULT_NAMESPACE;
     this.engine = options.engine ?? new SubscriptionEngine();
     this.#onError = options.onError ?? defaultOnError;
     this.#transport = options.transport;
@@ -109,10 +120,10 @@ export class WeftClientMirror {
   /**
    * Points this mirror at another transport and reloads everything through it.
    *
-   * This is what a tab does when leadership moves. A dedicated worker dies with the document that
-   * created it, so the tab that takes over builds a new one and every other tab is given a port to
-   * that one — and on both paths the mirror is holding rows from a worker that no longer exists and
-   * registrations in a registry that went with it.
+   * This is what a tab does when the worker it was talking to has gone — a browser may stop a
+   * `SharedWorker` under memory pressure, and every port to it dies at once. The mirror is then
+   * holding rows from a worker that no longer exists and registrations in a registry that went
+   * with it.
    *
    * Both are dropped rather than carried over. The rows go because the tab was disconnected for
    * some interval and cannot know what happened during it: the database is durable and the same
@@ -141,14 +152,22 @@ export class WeftClientMirror {
     this.engine.notify();
   }
 
+  /** The schema the worker serves, so a page built from another one can be refused. */
+  get schemaHash(): string | undefined {
+    return this.#schemaHash;
+  }
+
   /** Loads this scope's rows out of the worker. Resolves once they are here. */
   async hydrate(): Promise<void> {
-    const delta = await this.#transport.request({
+    const reply = await this.#transport.request({
       type: "hydrate",
       scopeId: this.scopeId,
       deviceId: this.deviceId,
+      namespace: this.namespace,
     });
-    this.#applyDelta(asDelta(delta));
+    if (!isWorkerHydrated(reply)) throw new Error("the worker answered a hydrate with a malformed reply");
+    this.#schemaHash = reply.schemaHash;
+    this.#applyDelta(reply);
     this.engine.notify();
   }
 
@@ -215,24 +234,24 @@ export class WeftClientMirror {
     return row !== undefined && row.internals._weft_dirty !== 0;
   }
 
-  create(tableName: TableName, rowId: RowId, values: Record<string, WireValue>, txnId = randomTxnId()): void {
-    this.#mutate({ kind: "create", tableName, rowId, txnId, values });
+  create(tableName: TableName, rowId: RowId, values: Record<string, WireValue>, txnId = randomTxnId()): Promise<void> {
+    return this.#mutate({ kind: "create", tableName, rowId, txnId, values });
   }
 
-  append(tableName: TableName, rowId: RowId, values: Record<string, WireValue>, txnId = randomTxnId()): void {
-    this.#mutate({ kind: "append", tableName, rowId, txnId, values });
+  append(tableName: TableName, rowId: RowId, values: Record<string, WireValue>, txnId = randomTxnId()): Promise<void> {
+    return this.#mutate({ kind: "append", tableName, rowId, txnId, values });
   }
 
-  update(tableName: TableName, rowId: RowId, values: Record<string, WireValue>, txnId = randomTxnId()): void {
-    this.#mutate({ kind: "update", tableName, rowId, txnId, values });
+  update(tableName: TableName, rowId: RowId, values: Record<string, WireValue>, txnId = randomTxnId()): Promise<void> {
+    return this.#mutate({ kind: "update", tableName, rowId, txnId, values });
   }
 
-  delete(tableName: TableName, rowId: RowId, txnId = randomTxnId()): void {
-    this.#mutate({ kind: "delete", tableName, rowId, txnId });
+  delete(tableName: TableName, rowId: RowId, txnId = randomTxnId()): Promise<void> {
+    return this.#mutate({ kind: "delete", tableName, rowId, txnId });
   }
 
-  restore(tableName: TableName, rowId: RowId, txnId = randomTxnId()): void {
-    this.#mutate({ kind: "restore", tableName, rowId, txnId });
+  restore(tableName: TableName, rowId: RowId, txnId = randomTxnId()): Promise<void> {
+    return this.#mutate({ kind: "restore", tableName, rowId, txnId });
   }
 
   /**
@@ -243,10 +262,10 @@ export class WeftClientMirror {
    * this is the whole of the arrangement rather than a side-channel beside it.
    *
    * Signing out leaves unsent work queued. The device still holds it, and signing back in pushes
-   * it (§4.1); dropping it is `discardQuarantine`, which is a different decision made deliberately.
+   * it (§4.1). Dropping it is `discardQuarantine`, which is a decision for whoever is holding it.
    */
-  setToken(token: string | null): void {
-    this.#send({ type: "auth", token });
+  async setToken(token: string | null): Promise<void> {
+    await this.#transport.request({ type: "auth", token });
   }
 
   /**
@@ -259,8 +278,8 @@ export class WeftClientMirror {
   }
 
   /** Drops this device's diverged work and re-derives its rows from the relay (§5.5). */
-  discardQuarantine(): void {
-    this.#send({ type: "discardQuarantine" });
+  async discardQuarantine(): Promise<void> {
+    await this.#transport.request({ type: "discardQuarantine" });
   }
 
   /**
@@ -322,14 +341,11 @@ export class WeftClientMirror {
     this.engine.notify();
   }
 
-  #mutate(mutation: WorkerMutation): void {
-    this.#send({ type: "mutate", mutation });
+  async #mutate(mutation: WorkerMutation): Promise<void> {
+    await this.#transport.request({ type: "mutate", mutation });
   }
 
-  /**
-   * Fire and forget, but not fire and ignore. A mutator returns `void` — the row map moves when
-   * the echo arrives, not when the call returns — so the only place a refusal can surface is here.
-   */
+  /** A verb with no caller to answer: the failure reaches `onError` or it reaches nobody. */
   #send(body: WorkerRequestBody): void {
     void this.#transport.request(body).catch((error: unknown) => {
       // Except on the way out, for the reason `#register` gives: a tab that has been disposed of
@@ -370,10 +386,9 @@ interface MirrorWatch {
   /**
    * The statement itself, kept rather than only its cache key.
    *
-   * A registration lives in the worker, and the worker dies with the tab that created it. A tab
-   * that reconnects after leadership moved therefore has to register everything it is reading all
-   * over again — and a cache key is a hash of the compiled statement, which cannot be turned back
-   * into one.
+   * A registration lives in the worker, and a tab that reconnects to a new one has to register
+   * everything it is reading all over again — and a cache key is a hash of the compiled statement,
+   * which cannot be turned back into one.
    */
   readonly query: ReactiveSqlQuery;
   refs: number;
@@ -382,7 +397,7 @@ interface MirrorWatch {
 }
 
 function defaultOnError(error: Error): void {
-  console.error("weftdb: a mutation the worker was given failed", error);
+  console.error("weftdb: the storage worker reported a failure with no caller to tell", error);
 }
 
 function toLocalRow(row: WireRow): LocalRow {
@@ -417,15 +432,6 @@ function materializeRow(row: LocalRow): MaterializedRow {
     created: row.created,
     fields: new Map(row.fields),
   });
-}
-
-function asDelta(value: unknown): WorkerDelta {
-  if (typeof value !== "object" || value === null) throw new Error("the worker answered with no delta");
-  const delta = value as Partial<WorkerDelta>;
-  if (!Array.isArray(delta.rows) || !Array.isArray(delta.removed) || !Array.isArray(delta.results)) {
-    throw new Error("the worker answered with a malformed delta");
-  }
-  return delta as WorkerDelta;
 }
 
 function asIds(value: unknown): readonly RowId[] {

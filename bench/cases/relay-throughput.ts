@@ -1,10 +1,10 @@
 // Sustained throughput through the relay: a batch of queued ops pushed in one session, and a
 // device reading the same work back. The relay here keeps its state in memory — the durable
 // relay is measured separately, and the two differ by more than a constant factor.
-import { connectSocketTransport, httpTransport, WeftClient } from "weftdb/client";
+import { connectSocketTransport, httpTransport, inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { HASH, OPS_PER_CREATE, SCOPE, benchClient, seedRows, startBenchRelay, waitForSocket } from "../fixtures.ts";
-import { repeatAsync, repeat, throughput, type BenchConfig, type BenchGroup, type CaseResult } from "../harness.ts";
+import { repeatAsync, throughput, type BenchConfig, type BenchGroup, type CaseResult } from "../harness.ts";
 
 const GROUP = "Relay throughput";
 
@@ -13,7 +13,7 @@ export const relayThroughput: BenchGroup = {
   run: async (config: BenchConfig): Promise<readonly CaseResult[]> => {
     const results: CaseResult[] = [];
     for (const ops of config.relayBatchOps) {
-      results.push(inProcessPush(config, ops));
+      results.push(await inProcessPush(config, ops));
       results.push(await httpPush(config, ops));
       results.push(await socketPush(config, ops));
       results.push(await httpPull(config, ops));
@@ -24,20 +24,20 @@ export const relayThroughput: BenchGroup = {
 };
 
 /** A device with `ops` protocol ops queued and nothing sent, as one that has been offline looks. */
-export function queuedClient(ops: number, device = "device-0"): WeftClient {
+export async function queuedClient(ops: number, device = "device-0"): Promise<WeftClient> {
   const client = benchClient(device);
-  seedRows(client, ops / OPS_PER_CREATE);
+  await seedRows(client, ops / OPS_PER_CREATE);
   if (client.outbox.length !== ops) throw new Error(`expected ${ops} queued ops, found ${client.outbox.length}`);
   return client;
 }
 
 /** The protocol without a transport: validation, application and sequencing only. */
-function inProcessPush(config: BenchConfig, ops: number): CaseResult {
-  const samples = repeat(() => {
-    const client = queuedClient(ops);
+async function inProcessPush(config: BenchConfig, ops: number): Promise<CaseResult> {
+  const samples = await repeatAsync(async () => {
+    const client = await queuedClient(ops);
     const server = new WeftServer();
     const start = performance.now();
-    client.flush(server);
+    await client.flushWith(inProcessTransport(server));
     const elapsed = performance.now() - start;
     if (client.outbox.length !== 0) throw new Error("the in-process push did not drain the outbox");
     return elapsed;
@@ -87,7 +87,7 @@ async function pushOverTransport(
 ): Promise<CaseResult> {
   const samples = await repeatAsync(async () => {
     const relay = await startBenchRelay(1);
-    const client = queuedClient(ops);
+    const client = await queuedClient(ops);
     const socket = kind === "ws" ? connectSocketTransport({ url: relay.socketUrl, token: relay.token(0) }) : undefined;
     try {
       if (socket !== undefined) await waitForSocket(socket);
@@ -119,7 +119,7 @@ async function httpPull(config: BenchConfig, ops: number): Promise<CaseResult> {
   const samples = await repeatAsync(async () => {
     const relay = await startBenchRelay(2);
     try {
-      const writer = queuedClient(ops);
+      const writer = await queuedClient(ops);
       await writer.flushWith(httpTransport({ baseUrl: relay.baseUrl, token: relay.token(0) }));
       const reader = httpTransport({ baseUrl: relay.baseUrl, token: relay.token(1) });
       const start = performance.now();
@@ -150,7 +150,7 @@ async function httpCatchUp(config: BenchConfig, ops: number): Promise<CaseResult
   const samples = await repeatAsync(async () => {
     const relay = await startBenchRelay(2);
     try {
-      const writer = queuedClient(ops);
+      const writer = await queuedClient(ops);
       await writer.flushWith(httpTransport({ baseUrl: relay.baseUrl, token: relay.token(0) }));
       const reader = benchClient("device-1");
       const transport = httpTransport({ baseUrl: relay.baseUrl, token: relay.token(1) });

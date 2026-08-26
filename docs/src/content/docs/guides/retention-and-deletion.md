@@ -7,8 +7,8 @@ sidebar:
 
 A delete stamps a marker on a row rather than removing anything from it. The marker sits on a
 register separate from the row's fields, so a delete never has to be compared against a field
-edit, and a field edit never has to be compared against a delete. Calling
-`client.delete(tableName, rowId)` sends the marker; the row's stored field values stay where they
+edit, and a field edit never has to be compared against a delete. `client.delete(tableName, rowId)`
+queues the marker and resolves once it is stored; the row's stored field values stay where they
 are until the row is later pruned.
 
 ## Deleting a row
@@ -49,6 +49,11 @@ Nothing calls it for you, and no query path applies it implicitly.
 the field values passed to it, which the caller supplies because the device already dropped its
 own copy of them when it deleted the row. The generated per-collection helpers expose `create`,
 `update`, and `delete`; restoring a row means calling `client.restore()` directly.
+
+A page whose database is in the storage worker calls `WeftClientMirror.restore(tableName, rowId)`
+instead, which takes no values. The worker un-deletes a row the scope still holds, and the row's
+fields come back on the next pull. [Storage on the device](/guides/device-storage/) covers the
+mirror.
 
 On the relay, a restore clears `deleted_hlc` and re-stamps the sequence number of every field the
 row still holds. That re-stamp is what lets a different device, one that dropped the row's fields
@@ -105,7 +110,7 @@ pruning window meets this the next time it connects.
 ## Excluding event-log rows
 
 A row created with `S.eventLog()` cannot be deleted or restored. Calling either method on one
-throws before any operation is queued, matching the relay's own refusal to accept a write against
+rejects before any operation is queued, matching the relay's own refusal to accept a write against
 such a row from any transaction other than the one that created it. Retention treats them the same
 way: the function described below skips event-log collections entirely.
 
@@ -150,16 +155,24 @@ and issues these deletes in one call.
 
 `applyRetentionDeletes(client, schema, policy, nowMs?)` runs `planRetentionDeletes` and then calls
 `client.delete()` for every row it returns. The deletes land in the outbox the same way any other
-edit does and reach the relay on the next sync. It returns the candidates it acted on.
+edit does and reach the relay on the next sync. It resolves with the candidates it acted on, once
+every one of those deletes has committed:
 
 ```ts
-import { applyRetentionDeletes, type WeftClient } from "weftdb/client";
+import { applyRetentionDeletes, type RetentionCandidate, type WeftClient } from "weftdb/client";
 import type { SchemaDefinition } from "weftdb/schema";
 
-function expireOldRows(client: WeftClient, schema: SchemaDefinition): void {
-  applyRetentionDeletes(client, schema, { defaultAutoDeleteDays: 30 });
+async function expireOldRows(client: WeftClient, schema: SchemaDefinition): Promise<number> {
+  const expired: readonly RetentionCandidate[] = await applyRetentionDeletes(client, schema, {
+    defaultAutoDeleteDays: 30,
+  });
+  return expired.length;
 }
 ```
+
+The deletes are issued one after another rather than all at once. A sweep can name thousands of
+rows, and one connection serialises its transactions, so opening them together would leave nothing
+else able to reach the database until the last of them had committed.
 
 Each deleted row gets its own transaction id, the same one an unqualified `client.delete()` call
 would give it. The rows in one sweep expire for unrelated reasons and are not steps of a single

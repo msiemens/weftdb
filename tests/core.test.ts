@@ -14,7 +14,7 @@ import {
 } from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
 import { WeftServer } from "weftdb/server";
-import { applyRetentionDeletes, planRetentionDeletes, WeftClient } from "weftdb/client";
+import { applyRetentionDeletes, inProcessTransport, planRetentionDeletes, WeftClient } from "weftdb/client";
 
 const scope = scopeId("scope-a");
 const tasks = tableName("tasks");
@@ -31,7 +31,7 @@ const schema = defineSchema({
   }),
 });
 
-test("HLCs emitted by one client are strictly monotonic", () => {
+test("HLCs emitted by one client are strictly monotonic", async () => {
   let now = 1_000;
   const client = new WeftClient(scope, deviceId("a"), schema, () => now);
   const first = client.clock.next();
@@ -42,38 +42,38 @@ test("HLCs emitted by one client are strictly monotonic", () => {
   assert.equal(compareHlc(second, third), -1);
 });
 
-test("diff3 merges non-overlapping line edits and marks overlapping edits", () => {
+test("diff3 merges non-overlapping line edits and marks overlapping edits", async () => {
   assert.deepEqual(diff3("a\nb", "A\nb", "a\nB"), { value: "A\nB", conflicted: false });
   const conflict = diff3("a", "local", "remote");
   assert.equal(conflict.conflicted, true);
   assert.equal(hasConflictMarkers(conflict.value), true);
 });
 
-test("server rejects a transaction atomically", () => {
+test("server rejects a transaction atomically", async () => {
   const server = new WeftServer(() => 1_000);
   const client = new WeftClient(scope, deviceId("a"), schema, () => 1_000);
-  client.create(tasks, row, { [title]: "one" }, txnId("t1"));
-  client.flush(server);
+  await client.create(tasks, row, { [title]: "one" }, txnId("t1"));
+  await client.flushWith(inProcessTransport(server));
 
   const before = server.fields.size;
   const existingRow = rowId("task-2");
   const other = new WeftClient(scope, deviceId("b"), schema, () => 1_001);
-  other.create(tasks, existingRow, { [title]: "two" }, txnId("t2"));
-  other.flush(server);
-  other.update(tasks, existingRow, { [fieldName("created")]: "mutated", [title]: "mutated" }, txnId("bad"));
-  other.flush(server);
+  await other.create(tasks, existingRow, { [title]: "two" }, txnId("t2"));
+  await other.flushWith(inProcessTransport(server));
+  await other.update(tasks, existingRow, { [fieldName("created")]: "mutated", [title]: "mutated" }, txnId("bad"));
+  await other.flushWith(inProcessTransport(server));
 
   assert.equal(server.fields.size, before + 4);
   assert.equal(other.quarantine.length, 2);
   assert.equal(other.outbox.length, 0);
 });
 
-test("append rows reject later mutation, whoever sends it", () => {
+test("append rows reject later mutation, whoever sends it", async () => {
   const server = new WeftServer(() => 1_000);
   const client = new WeftClient(scope, deviceId("a"), schema, () => 1_000);
   const eventTable = tableName("task_status_history");
-  client.append(eventTable, rowId("event-1"), { [fieldName("status")]: "open" }, txnId("append"));
-  client.flush(server);
+  await client.append(eventTable, rowId("event-1"), { [fieldName("status")]: "open" }, txnId("append"));
+  await client.flushWith(inProcessTransport(server));
 
   // A well-behaved client refuses to queue this at all, so the op is built by hand: the rule
   // is the server's to enforce, against any client, including one older than this rule or one
@@ -101,31 +101,31 @@ test("append rows reject later mutation, whoever sends it", () => {
   );
 });
 
-test("a client refuses to edit an append row rather than queue work that cannot land", () => {
+test("a client refuses to edit an append row rather than queue work that cannot land", async () => {
   const client = new WeftClient(scope, deviceId("a"), schema, () => 1_000);
   const eventTable = tableName("task_status_history");
-  client.append(eventTable, rowId("event-1"), { [fieldName("status")]: "open" }, txnId("append"));
+  await client.append(eventTable, rowId("event-1"), { [fieldName("status")]: "open" }, txnId("append"));
   const queued = client.outbox.length;
 
-  assert.throws(
+  await assert.rejects(
     () => client.update(eventTable, rowId("event-1"), { [fieldName("status")]: "done" }, txnId("mutate")),
     /append-class/u,
   );
   assert.equal(client.outbox.length, queued, "the refused edit was queued anyway");
 });
 
-test("field writes do not resurrect tombstoned rows", () => {
+test("field writes do not resurrect tombstoned rows", async () => {
   const server = new WeftServer(() => 1_000);
   const creator = new WeftClient(scope, deviceId("a"), schema, () => 1_000);
-  creator.create(tasks, row, { [title]: "one" }, txnId("create"));
-  creator.flush(server);
-  creator.delete(tasks, row, txnId("delete"));
-  creator.flush(server);
+  await creator.create(tasks, row, { [title]: "one" }, txnId("create"));
+  await creator.flushWith(inProcessTransport(server));
+  await creator.delete(tasks, row, txnId("delete"));
+  await creator.flushWith(inProcessTransport(server));
 
   const writer = new WeftClient(scope, deviceId("b"), schema, () => 1_001);
-  writer.applySnapshot(server.snapshot(scope));
-  writer.restore(tasks, row, { [title]: "one" }, txnId("local-restore"));
-  writer.update(tasks, row, { [title]: "changed" }, txnId("write"));
+  await writer.applySnapshot(server.snapshot(scope));
+  await writer.restore(tasks, row, { [title]: "one" }, txnId("local-restore"));
+  await writer.update(tasks, row, { [title]: "changed" }, txnId("write"));
   const setOnly = writer.outbox.filter((op) => op.kind === "set");
   const result = server.push(scope, setOnly);
   assert.equal(result.ok, true);
@@ -136,7 +136,7 @@ test("field writes do not resurrect tombstoned rows", () => {
   );
 });
 
-test("schema versions only roll forward", () => {
+test("schema versions only roll forward", async () => {
   const server = new WeftServer(() => 1_000);
   assert.deepEqual(
     server.handshake({
@@ -179,11 +179,11 @@ test("schema versions only roll forward", () => {
   );
 });
 
-test("clock skew rejection is restamped and retried without quarantine", () => {
+test("clock skew rejection is restamped and retried without quarantine", async () => {
   const server = new WeftServer(() => 1_000);
   const client = new WeftClient(scope, deviceId("future"), schema, () => 10_000_000);
-  client.create(tasks, rowId("future-row"), { [title]: "future" }, txnId("future-txn"));
-  client.flush(server);
+  await client.create(tasks, rowId("future-row"), { [title]: "future" }, txnId("future-txn"));
+  await client.flushWith(inProcessTransport(server));
   assert.equal(client.outbox.length, 0);
   assert.equal(client.quarantine.length, 0);
   assert.equal(
@@ -192,25 +192,25 @@ test("clock skew rejection is restamped and retried without quarantine", () => {
   );
 });
 
-test("quarantine repair API exports, retries, and discards by transaction", () => {
+test("quarantine repair API exports, retries, and discards by transaction", async () => {
   const server = new WeftServer(() => 1_000);
   const client = new WeftClient(scope, deviceId("repair"), schema, () => 1_000);
-  client.create(tasks, rowId("repair-row"), { [title]: "repair" }, txnId("repair-create"));
-  client.flush(server);
-  client.update(tasks, rowId("repair-row"), { [fieldName("created")]: "bad" }, txnId("repair-bad"));
-  client.flush(server);
+  await client.create(tasks, rowId("repair-row"), { [title]: "repair" }, txnId("repair-create"));
+  await client.flushWith(inProcessTransport(server));
+  await client.update(tasks, rowId("repair-row"), { [fieldName("created")]: "bad" }, txnId("repair-bad"));
+  await client.flushWith(inProcessTransport(server));
 
   assert.equal(client.exportQuarantinedTxn(txnId("repair-bad")).length, 1);
-  client.retryQuarantinedTxn(txnId("repair-bad"));
+  await client.retryQuarantinedTxn(txnId("repair-bad"));
   assert.equal(client.quarantine.length, 0);
   assert.equal(client.outbox.length, 1);
-  client.flush(server);
+  await client.flushWith(inProcessTransport(server));
   assert.equal(client.quarantine.length, 1);
-  client.discardQuarantinedTxn(txnId("repair-bad"));
+  await client.discardQuarantinedTxn(txnId("repair-bad"));
   assert.equal(client.quarantine.length, 0);
 });
 
-test("retention planner uses max retention anchor and first synced time", () => {
+test("retention planner uses max retention anchor and first synced time", async () => {
   const retentionSchema = defineSchema({
     entries: S.collection({
       consumed_at: S.number({ retentionAnchor: true }),
@@ -221,7 +221,7 @@ test("retention planner uses max retention anchor and first synced time", () => 
   const client = new WeftClient(scope, deviceId("retention"), retentionSchema, () => 1_000);
   const entries = tableName("entries");
   const entry = rowId("entry-1");
-  client.create(
+  await client.create(
     entries,
     entry,
     {
@@ -230,12 +230,12 @@ test("retention planner uses max retention anchor and first synced time", () => 
     },
     txnId("retention-create"),
   );
-  client.sync(server, schemaHash(retentionSchema));
+  await client.syncWith(inProcessTransport(server), schemaHash(retentionSchema));
   assert.deepEqual(planRetentionDeletes(client, retentionSchema, { defaultAutoDeleteDays: 30 }, 20_000), []);
   assert.equal(planRetentionDeletes(client, retentionSchema, { defaultAutoDeleteDays: 30 }, 90_000_000).length, 1);
 });
 
-test("applyRetentionDeletes deletes exactly the rows the planner returned, and queues those deletes for sync", () => {
+test("applyRetentionDeletes deletes exactly the rows the planner returned, and queues those deletes for sync", async () => {
   const retentionSchema = defineSchema({
     entries: S.collection({
       consumed_at: S.number({ retentionAnchor: true }),
@@ -247,7 +247,7 @@ test("applyRetentionDeletes deletes exactly the rows the planner returned, and q
   const entries = tableName("entries");
   const expired = rowId("expired-1");
   const fresh = rowId("fresh-1");
-  client.create(
+  await client.create(
     entries,
     expired,
     {
@@ -256,7 +256,7 @@ test("applyRetentionDeletes deletes exactly the rows the planner returned, and q
     },
     txnId("expired-create"),
   );
-  client.create(
+  await client.create(
     entries,
     fresh,
     {
@@ -265,11 +265,11 @@ test("applyRetentionDeletes deletes exactly the rows the planner returned, and q
     },
     txnId("fresh-create"),
   );
-  client.sync(server, schemaHash(retentionSchema));
+  await client.syncWith(inProcessTransport(server), schemaHash(retentionSchema));
 
   const nowMs = 90_000_000;
   const planned = planRetentionDeletes(client, retentionSchema, { defaultAutoDeleteDays: 30 }, nowMs);
-  const deleted = applyRetentionDeletes(client, retentionSchema, { defaultAutoDeleteDays: 30 }, nowMs);
+  const deleted = await applyRetentionDeletes(client, retentionSchema, { defaultAutoDeleteDays: 30 }, nowMs);
   assert.deepEqual(deleted, planned, "applyRetentionDeletes acted on a different set than the planner returned");
   assert.deepEqual(
     deleted.map((candidate) => candidate.rowId),
@@ -294,7 +294,7 @@ test("applyRetentionDeletes deletes exactly the rows the planner returned, and q
   );
 });
 
-test("applyRetentionDeletes never deletes an event-log row", () => {
+test("applyRetentionDeletes never deletes an event-log row", async () => {
   const retentionSchema = defineSchema({
     readings: S.eventLog({
       recorded_at: S.number({ retentionAnchor: true }),
@@ -307,7 +307,7 @@ test("applyRetentionDeletes never deletes an event-log row", () => {
   // planRetentionDeletes skips eventLog collections outright (retention.ts), so there is nothing
   // here for a sync to make eligible; the row would still fail client.delete() if it ever became
   // a candidate, since append-class rows refuse deletion (§9.23).
-  client.append(
+  await client.append(
     readings,
     reading,
     {
@@ -317,7 +317,7 @@ test("applyRetentionDeletes never deletes an event-log row", () => {
     txnId("reading-create"),
   );
 
-  const deleted = applyRetentionDeletes(client, retentionSchema, { defaultAutoDeleteDays: 30 }, 90_000_000);
+  const deleted = await applyRetentionDeletes(client, retentionSchema, { defaultAutoDeleteDays: 30 }, 90_000_000);
   assert.deepEqual(deleted, []);
   assert.notEqual(client.getRow(readings, reading), undefined, "an event-log row was deleted by retention");
 });

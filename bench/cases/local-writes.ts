@@ -1,6 +1,6 @@
 // What an edit costs with no network and no disk: the mutation path on its own.
 import { txnId, type FieldName, type RowId, type WireValue } from "weftdb/core";
-import { WeftClient } from "weftdb/client";
+import { inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import {
   HASH,
@@ -17,7 +17,7 @@ import {
   todoValues,
   updateTxn,
 } from "../fixtures.ts";
-import { repeat, throughput, type BenchConfig, type BenchGroup, type CaseResult } from "../harness.ts";
+import { repeatAsync, throughput, type BenchConfig, type BenchGroup, type CaseResult } from "../harness.ts";
 
 const GROUP = "Local writes";
 
@@ -35,23 +35,26 @@ interface NewRow {
 
 export const localWrites: BenchGroup = {
   name: GROUP,
-  run: async (config: BenchConfig): Promise<readonly CaseResult[]> => [
-    createThroughput(config),
-    updateThroughput(config, TITLE, "local.update.lww", "Local update, last-writer-wins field"),
-    updateThroughput(config, NOTES, "local.update.diff3", "Local update, diff3 prose field"),
-    ...config.backlogOps.map((backlog) => offlineUpdateThroughput(config, backlog)),
-  ],
+  run: async (config: BenchConfig): Promise<readonly CaseResult[]> => {
+    const results: CaseResult[] = [
+      await createThroughput(config),
+      await updateThroughput(config, TITLE, "local.update.lww", "Local update, last-writer-wins field"),
+      await updateThroughput(config, NOTES, "local.update.diff3", "Local update, diff3 prose field"),
+    ];
+    for (const backlog of config.backlogOps) results.push(await offlineUpdateThroughput(config, backlog));
+    return results;
+  },
 };
 
-function createThroughput(config: BenchConfig): CaseResult {
+async function createThroughput(config: BenchConfig): Promise<CaseResult> {
   const rows: readonly NewRow[] = Array.from({ length: CREATES_PER_SAMPLE }, (_unused, index) => ({
     id: todoId(index),
     values: todoValues(`todo ${index}`, notesFor(index), rankFor(index)),
   }));
-  const samples = repeat(() => {
+  const samples = await repeatAsync(async () => {
     const client = benchClient("device-0");
     const start = performance.now();
-    for (const row of rows) client.create(TODOS, row.id, row.values, txnId(`create-${row.id}`));
+    for (const row of rows) await client.create(TODOS, row.id, row.values, txnId(`create-${row.id}`));
     return performance.now() - start;
   }, config.budget);
   return throughput(
@@ -70,21 +73,21 @@ function createThroughput(config: BenchConfig): CaseResult {
  * Updates across distinct rows on a device that starts each sample with a drained outbox — a
  * burst of edits between two syncs.
  */
-function updateThroughput(config: BenchConfig, field: FieldName, id: string, label: string): CaseResult {
+async function updateThroughput(config: BenchConfig, field: FieldName, id: string, label: string): Promise<CaseResult> {
   const server = new WeftServer();
   const client = benchClient("device-0");
-  seedRows(client, UPDATE_DATASET_ROWS);
-  client.sync(server, HASH);
+  await seedRows(client, UPDATE_DATASET_ROWS);
+  await client.syncWith(inProcessTransport(server), HASH);
   const rows = Array.from({ length: UPDATES_PER_SAMPLE }, (_unused, index) => todoId(index));
   let counter = 0;
-  const samples = repeat(() => {
+  const samples = await repeatAsync(async () => {
     // Draining is setup, not measurement: how much an unsent backlog costs is what the offline
     // series below is for, and here it would make each sample depend on the one before it.
-    client.sync(server, HASH);
+    await client.syncWith(inProcessTransport(server), HASH);
     counter += 1;
     const start = performance.now();
     for (const [index, row] of rows.entries()) {
-      client.update(TODOS, row, { [field]: value(field, counter, index) }, updateTxn(row));
+      await client.update(TODOS, row, { [field]: value(field, counter, index) }, updateTxn(row));
     }
     return performance.now() - start;
   }, config.budget);
@@ -105,15 +108,15 @@ function updateThroughput(config: BenchConfig, field: FieldName, id: string, lab
  * backlog constant — an unsent write is superseded rather than followed — so what varies between
  * these cases is only how much unsent work the mutator has to look through.
  */
-function offlineUpdateThroughput(config: BenchConfig, backlogOps: number): CaseResult {
+async function offlineUpdateThroughput(config: BenchConfig, backlogOps: number): Promise<CaseResult> {
   const row = todoId(0);
   let counter = 0;
-  const samples = repeat(() => {
-    const client = offlineClient(backlogOps);
+  const samples = await repeatAsync(async () => {
+    const client = await offlineClient(backlogOps);
     counter += 1;
     const start = performance.now();
     for (let index = 0; index < OFFLINE_UPDATES_PER_SAMPLE; index += 1) {
-      client.update(TODOS, row, { [TITLE]: `title ${counter}-${index}` }, updateTxn(row));
+      await client.update(TODOS, row, { [TITLE]: `title ${counter}-${index}` }, updateTxn(row));
     }
     const elapsed = performance.now() - start;
     if (client.outbox.length !== backlogOps + 1) throw new Error("the offline backlog did not stay constant");
@@ -132,9 +135,9 @@ function offlineUpdateThroughput(config: BenchConfig, backlogOps: number): CaseR
 }
 
 /** One synced row to edit, with `backlogOps` worth of unsent creates queued behind it. */
-function offlineClient(backlogOps: number): WeftClient {
-  const client = syncedClient(1);
-  seedRows(client, Math.floor(backlogOps / OPS_PER_CREATE), 1);
+async function offlineClient(backlogOps: number): Promise<WeftClient> {
+  const client = await syncedClient(1);
+  await seedRows(client, Math.floor(backlogOps / OPS_PER_CREATE), 1);
   return client;
 }
 

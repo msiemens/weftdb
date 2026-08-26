@@ -66,15 +66,19 @@ export function planRetentionDeletes(
  * turned out already gone by another path: `pushOps` validates a transaction's ops together and
  * rejects all of them together, so one stale candidate would quarantine every row in the batch
  * instead of just itself.
+ *
+ * The deletes are issued one after another. A sweep can name thousands of rows, and one connection
+ * serialises its transactions, so opening them all at once would queue that many writes with
+ * nothing left able to reach the database until the last of them had committed.
  */
-export function applyRetentionDeletes(
+export async function applyRetentionDeletes(
   client: WeftClient,
   schema: SchemaDefinition,
   policy: RetentionPolicy,
   nowMs = Date.now(),
-): readonly RetentionCandidate[] {
+): Promise<readonly RetentionCandidate[]> {
   const candidates = planRetentionDeletes(client, schema, policy, nowMs);
-  for (const candidate of candidates) client.delete(candidate.tableName, candidate.rowId);
+  for (const candidate of candidates) await client.delete(candidate.tableName, candidate.rowId);
   return candidates;
 }
 

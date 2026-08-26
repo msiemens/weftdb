@@ -18,7 +18,7 @@ import {
   type TxnId,
   type WireValue,
 } from "weftdb/core";
-import { WeftClient, type SocketTransport } from "weftdb/client";
+import { inProcessTransport, type SocketTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { startRelay, type RunningServer } from "weftdb/server/serve";
 import { authContext } from "weftdb/server/relay";
@@ -69,18 +69,18 @@ export function notesFor(index: number): string {
   return Array.from({ length: 8 }, (_unused, line) => `line ${line} of note ${index}`).join("\n");
 }
 
-export function seedRows(client: WeftClient, count: number, from = 0): void {
+export async function seedRows(client: WeftClient, count: number, from = 0): Promise<void> {
   for (let index = from; index < from + count; index += 1) {
     const id = todoId(index);
-    client.create(TODOS, id, todoValues(`todo ${index}`, notesFor(index), rankFor(index)), txnId(`create-${id}`));
+    await client.create(TODOS, id, todoValues(`todo ${index}`, notesFor(index), rankFor(index)), txnId(`create-${id}`));
   }
 }
 
 /** A client holding `count` rows with an empty outbox, as a device that has synced looks. */
-export function syncedClient(count: number, device = "device-a"): WeftClient {
+export async function syncedClient(count: number, device = "device-a"): Promise<WeftClient> {
   const client = benchClient(device);
-  seedRows(client, count);
-  client.sync(new WeftServer(), HASH);
+  await seedRows(client, count);
+  await client.syncWith(inProcessTransport(new WeftServer()), HASH);
   return client;
 }
 

@@ -25,7 +25,6 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@sqlite.org/sqlite-wasm": "3.53.0-build1",
     "@stryker-mutator/core": "^10.0.0",
     "@stryker-mutator/vitest-runner": "^10.0.0",
     "@types/jsdom": "^30.0.0",
@@ -46,6 +45,7 @@
     "typescript-eslint": "^8.68.0",
     "vite": "^8.2.2",
     "vitest": "^4.1.11",
+    "wa-sqlite": "github:rhashimoto/wa-sqlite#2bf1c59d89eb6497535a4217bc62fec68a0bb994",
     "weftdb": "workspace:*",
     "weftdb-cli": "workspace:*",
     "weftdb-demo-chat": "workspace:*",

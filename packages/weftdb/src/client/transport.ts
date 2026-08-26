@@ -2,7 +2,7 @@
 // them is the client's. That makes the calls the only thing a network has to change, so a
 // relay reached over HTTP and an in-process `WeftServer` differ here and nowhere else.
 import type { ScopeId, WeftOp } from "weftdb/core";
-import type { HandshakeRequest, HandshakeResponse, PullBatch, PushAck, Snapshot } from "weftdb/server";
+import type { HandshakeRequest, HandshakeResponse, PullBatch, PushAck, Snapshot, WeftServer } from "weftdb/server";
 import { snapshotFromEnvelope, type SnapshotEnvelope } from "weftdb/server/snapshot";
 import type { Rejection } from "weftdb/core";
 
@@ -19,6 +19,19 @@ export interface AsyncSyncTransport {
   snapshot(scopeId: ScopeId): Promise<Snapshot>;
 }
 
+/**
+ * A relay on this thread, as a transport. The four calls are the whole of what a session is, so a
+ * server reached by a method call and one reached over a network differ here and nowhere else.
+ */
+export function inProcessTransport(server: WeftServer): AsyncSyncTransport {
+  return {
+    handshake: async (request) => server.handshake(request),
+    push: async (scopeId, ops) => server.push(scopeId, ops),
+    pull: async (scopeId, lastServerSeq) => server.pull(scopeId, lastServerSeq),
+    snapshot: async (scopeId) => server.snapshot(scopeId),
+  };
+}
+
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 export interface HttpTransportOptions {
@@ -31,8 +44,8 @@ export interface HttpTransportOptions {
 
 /**
  * The relay's HTTP surface, as a transport. The scope travels in the token rather than the
- * request, so the `scopeId` arguments here are the client's own view and are deliberately not
- * sent — a client cannot reach a scope its token does not name.
+ * request, so the `scopeId` arguments here are the client's own view and are not sent: a client
+ * cannot reach a scope its token does not name.
  */
 export function httpTransport(options: HttpTransportOptions): AsyncSyncTransport {
   const call = async (path: string, init?: RequestInit): Promise<unknown> => {

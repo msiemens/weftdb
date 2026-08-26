@@ -6,14 +6,16 @@ export {
   encodeWireValue,
   fieldStorage,
 } from "./storage.ts";
+export type { EncodedFieldRecord, EncodedScopeState, FieldStorage } from "./storage.ts";
+export { asyncSqlExecutor, serializeAsyncSql } from "./executor.ts";
 export type {
-  EncodedFieldRecord,
-  FieldStorage,
-  EncodedScopeState,
+  AsyncSqlExecutor,
+  AsyncSqlStatements,
+  AsyncSqlTransaction,
   SqlExecutor,
   SqlParameters,
   SqlRow,
   SqlStatement,
   SqlValue,
-} from "./storage.ts";
+} from "./executor.ts";
 export { sha256Hex } from "./sha256.ts";

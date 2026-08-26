@@ -1,6 +1,6 @@
 import { fieldName, rowId, tableName, wireText, type FieldName, type RowId, type TableName } from "weftdb/core";
 import type { SchemaDefinition } from "weftdb/schema";
-import type { SqlExecutor, SqlStatement, SqlValue } from "weftdb/shared";
+import type { AsyncSqlExecutor, SqlStatement, SqlValue } from "weftdb/shared";
 import { queryCacheKey, type CompiledQuery, type QueryBuilderLike } from "./query.ts";
 import type { LocalRow, MaterializedRow } from "./index.ts";
 
@@ -183,10 +183,9 @@ export class SubscriptionEngine {
    * `rows` answers what a row is, so a row that did not change is the same object it was and
    * `React.memo` still holds.
    *
-   * `select` rather than an executor, because the database is not always on the thread that
-   * renders. Where it is, `executorRowSelect` runs the statement directly. Where it is in a
-   * worker, the page reads the ids that worker last pushed. Both are synchronous, which is what
-   * `useSyncExternalStore` requires of a snapshot, and neither is visible to a component.
+   * `select` rather than an executor, because the database is not on the thread that renders. The
+   * page reads the ids the worker last pushed, which is synchronous — what `useSyncExternalStore`
+   * requires of a snapshot — and invisible to a component.
    *
    * A statement `select` has no answer for yet snapshots as no rows, because a component has
    * nowhere to put "pending" and a first paint has to be something. The state is reported by
@@ -265,11 +264,14 @@ export class SubscriptionEngine {
 export type RowSelect = (query: ReactiveSqlQuery) => readonly RowId[] | undefined;
 
 /**
- * The selection for a database on this thread: run the statement. It answers every statement it is
- * given, because it runs it on the spot — there is nothing to register and nothing to wait for — so
- * its result is the narrower one and a caller reading through it never meets the absent answer.
+ * The selection for whoever holds the database: run the statement. It answers every statement it is
+ * given, because it runs it on the spot — there is nothing to register — so its result is the
+ * narrower one and a caller reading through it never meets the absent answer.
+ *
+ * A promise, so it is not a `RowSelect` and cannot be handed to `getSqlSnapshot`: the worker runs
+ * statements and pushes what they matched, and the page answers a render out of the last push.
  */
-export function executorRowSelect(executor: SqlExecutor): (query: ReactiveSqlQuery) => readonly RowId[] {
+export function executorRowSelect(executor: AsyncSqlExecutor): (query: ReactiveSqlQuery) => Promise<readonly RowId[]> {
   return (query) => executor.all(selectMatchingIds(query));
 }
 

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
-import { WeftClient } from "weftdb/client";
+import { inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { contentAddressSnapshot, snapshotDigest } from "weftdb/server/snapshot";
 import { authContext, createRelayHandler, staticTokenVerifier } from "weftdb/server/relay";
@@ -13,12 +13,12 @@ const schema = defineSchema({
   }),
 });
 
-test("snapshot content address is stable for unchanged snapshot", () => {
+test("snapshot content address is stable for unchanged snapshot", async () => {
   const scope = scopeId("snapshot-scope");
   const server = new WeftServer(() => 1_000);
   const client = new WeftClient(scope, deviceId("device"), schema, () => 1_000);
-  client.create(tableName("tasks"), rowId("task"), { [fieldName("title")]: "title" }, txnId("txn"));
-  client.sync(server, schemaHash(schema));
+  await client.create(tableName("tasks"), rowId("task"), { [fieldName("title")]: "title" }, txnId("txn"));
+  await client.syncWith(inProcessTransport(server), schemaHash(schema));
 
   const snapshot = server.snapshot(scope);
   assert.equal(snapshotDigest(snapshot), snapshotDigest(snapshot));

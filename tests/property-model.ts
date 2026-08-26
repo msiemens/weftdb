@@ -28,7 +28,7 @@ import {
   type WireValue,
 } from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
-import { planRetentionDeletes, WeftClient, type MaterializedRow } from "weftdb/client";
+import { inProcessTransport, type MaterializedRow, planRetentionDeletes, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { assertWorldInvariants } from "./property-invariants.ts";
 
@@ -280,7 +280,7 @@ export function upgradeDevice(device: PropertyDevice): void {
   device.schemaHash = upgradedSchemaHash;
 }
 
-type MutationCall = (table: TableName, row: RowId, values: Record<FieldName, WireValue>, txn?: TxnId) => void;
+type MutationCall = (table: TableName, row: RowId, values: Record<FieldName, WireValue>, txn?: TxnId) => Promise<void>;
 
 function instrument(device: PropertyDevice, trace: WorldTrace): PropertyDevice {
   const clock = device.client.clock as unknown as {
@@ -304,10 +304,12 @@ function instrument(device: PropertyDevice, trace: WorldTrace): PropertyDevice {
   const client = device.client as unknown as { create: MutationCall; update: MutationCall; restore: MutationCall };
   for (const name of ["create", "update", "restore"] as const) {
     const original = client[name].bind(device.client);
-    client[name] = (table, row, values, txn) => {
+    // The wrapper hands back the mutator's own promise, so a caller that awaits a write is
+    // waiting on the write and a refusal reaches the caller as its own rejection.
+    client[name] = async (table, row, values, txn) => {
       const fields = name === "update" ? Object.keys(values) : [...Object.keys(values), "id", "scope_id", "created"];
       for (const field of fields) trace.written.add(writeKey(table, row, fieldName(field)));
-      original(table, row, values, txn);
+      await original(table, row, values, txn);
       // Read back rather than recorded from the call: `create` fills in `created` itself, and
       // what the row ends up holding is what the application asked for either way.
       const written = device.client.getRow(table, row)?.fields;
@@ -347,26 +349,36 @@ export function initialModel(): WorldModel {
   return { rows: MODEL_ROWS, invoices: MODEL_INVOICES };
 }
 
-export type WorldCommand = fc.Command<WorldModel, PropertyWorld>;
+export type WorldCommand = fc.AsyncCommand<WorldModel, PropertyWorld, true>;
 
-/** Wraps an action so every command checks the world invariants after it runs. */
-function command(label: string, execute: (model: WorldModel, world: PropertyWorld) => void): WorldCommand {
+/**
+ * Wraps an action so every command checks the world invariants after it runs.
+ *
+ * Asynchronous, because a command writes through the client and a write settles when it has
+ * committed. A history driven synchronously would leave each command's write in flight while the
+ * next one ran, so the invariants would be checked against a world half of whose history had not
+ * happened yet.
+ */
+function command(
+  label: string,
+  execute: (model: WorldModel, world: PropertyWorld) => void | Promise<void>,
+): WorldCommand {
   return {
-    check: () => true,
-    run: (model, world) => {
-      execute(model, world);
-      assertWorldInvariants(world, label);
+    check: async () => true,
+    run: async (model, world) => {
+      await execute(model, world);
+      await assertWorldInvariants(world, label);
     },
     toString: () => label,
   };
 }
 
 function createTask(device: number, row: number, title: string, days: number): WorldCommand {
-  return command(`create(d${device}, r${row})`, (model, world) => {
+  return command(`create(d${device}, r${row})`, async (model, world) => {
     const target = deviceAt(world, device);
     const id = rowAt(model.rows, row);
     if (localState(target.client, TASKS, id) !== "absent") return;
-    target.client.create(
+    await target.client.create(
       TASKS,
       id,
       {
@@ -383,21 +395,21 @@ function createTask(device: number, row: number, title: string, days: number): W
 }
 
 function updateTask(device: number, row: number, onTitle: boolean, value: string): WorldCommand {
-  return command(`update(d${device}, r${row}, ${onTitle ? "title" : "status"})`, (model, world) => {
+  return command(`update(d${device}, r${row}, ${onTitle ? "title" : "status"})`, async (model, world) => {
     const target = deviceAt(world, device);
     const id = rowAt(model.rows, row);
     if (localState(target.client, TASKS, id) !== "live") return;
-    target.client.update(TASKS, id, { [onTitle ? TITLE : STATUS]: value }, nextTxn(world, "update"));
+    await target.client.update(TASKS, id, { [onTitle ? TITLE : STATUS]: value }, nextTxn(world, "update"));
   });
 }
 
 function editNotes(device: number, row: number, line: number, text: string): WorldCommand {
-  return command(`editNotes(d${device}, r${row}, line ${line})`, (model, world) => {
+  return command(`editNotes(d${device}, r${row}, line ${line})`, async (model, world) => {
     const target = deviceAt(world, device);
     const id = rowAt(model.rows, row);
     if (localState(target.client, TASKS, id) !== "live") return;
     const current = wireText(target.client.getRow(TASKS, id)?.fields.get(NOTES) ?? BASE_NOTES);
-    target.client.update(TASKS, id, { [NOTES]: replaceLine(current, line, text) }, nextTxn(world, "notes"));
+    await target.client.update(TASKS, id, { [NOTES]: replaceLine(current, line, text) }, nextTxn(world, "notes"));
   });
 }
 
@@ -409,7 +421,7 @@ function editNotes(device: number, row: number, line: number, text: string): Wor
  * the other side of it.
  */
 function contendNotes(device: number, row: number, line: number, mine: string, theirs: string): WorldCommand {
-  return command(`contendNotes(d${device}, r${row}, line ${line})`, (model, world) => {
+  return command(`contendNotes(d${device}, r${row}, line ${line})`, async (model, world) => {
     const id = rowAt(model.rows, row);
     const first = deviceAt(world, device);
     const second = deviceAt(world, device + 1);
@@ -420,33 +432,33 @@ function contendNotes(device: number, row: number, line: number, mine: string, t
     ] as const) {
       if (localState(target.client, TASKS, id) !== "live") return;
       const current = wireText(target.client.getRow(TASKS, id)?.fields.get(NOTES) ?? BASE_NOTES);
-      target.client.update(TASKS, id, { [NOTES]: replaceLine(current, line, text) }, nextTxn(world, "contend"));
+      await target.client.update(TASKS, id, { [NOTES]: replaceLine(current, line, text) }, nextTxn(world, "contend"));
     }
   });
 }
 
 function deleteTask(device: number, row: number): WorldCommand {
-  return command(`delete(d${device}, r${row})`, (model, world) => {
+  return command(`delete(d${device}, r${row})`, async (model, world) => {
     const target = deviceAt(world, device);
     const id = rowAt(model.rows, row);
     if (localState(target.client, TASKS, id) !== "live") return;
-    target.client.delete(TASKS, id, nextTxn(world, "delete"));
+    await target.client.delete(TASKS, id, nextTxn(world, "delete"));
   });
 }
 
 function restoreTask(device: number, row: number, title: string): WorldCommand {
-  return command(`restore(d${device}, r${row})`, (model, world) => {
+  return command(`restore(d${device}, r${row})`, async (model, world) => {
     const target = deviceAt(world, device);
     const id = rowAt(model.rows, row);
     if (localState(target.client, TASKS, id) !== "tombstoned") return;
-    target.client.restore(TASKS, id, { [TITLE]: title }, nextTxn(world, "restore"));
+    await target.client.restore(TASKS, id, { [TITLE]: title }, nextTxn(world, "restore"));
   });
 }
 
 function appendEvent(device: number, row: number, status: string): WorldCommand {
-  return command(`append(d${device}, r${row})`, (model, world) => {
+  return command(`append(d${device}, r${row})`, async (model, world) => {
     const target = deviceAt(world, device);
-    target.client.append(
+    await target.client.append(
       EVENTS,
       rowId(`event-${world.txnCounter}`),
       {
@@ -464,13 +476,13 @@ function createInvoiceWithLines(
   children: number,
   override: number | null,
 ): WorldCommand {
-  return command(`createInvoice(d${device}, i${invoice}, ${children} children)`, (model, world) => {
+  return command(`createInvoice(d${device}, i${invoice}, ${children} children)`, async (model, world) => {
     const target = deviceAt(world, device);
     const id = rowAt(model.invoices, invoice);
     if (localState(target.client, INVOICES, id) !== "absent") return;
-    target.client.create(INVOICES, id, { [OVERRIDE]: override }, nextTxn(world, "invoice"));
+    await target.client.create(INVOICES, id, { [OVERRIDE]: override }, nextTxn(world, "invoice"));
     for (let index = 0; index < children; index += 1) {
-      target.client.create(
+      await target.client.create(
         LINE_ITEMS,
         rowId(`${id}-line-${world.txnCounter}`),
         {
@@ -484,11 +496,11 @@ function createInvoiceWithLines(
 }
 
 function deleteInvoice(device: number, invoice: number): WorldCommand {
-  return command(`deleteInvoice(d${device}, i${invoice})`, (model, world) => {
+  return command(`deleteInvoice(d${device}, i${invoice})`, async (model, world) => {
     const target = deviceAt(world, device);
     const id = rowAt(model.invoices, invoice);
     if (localState(target.client, INVOICES, id) !== "live") return;
-    target.client.delete(INVOICES, id, nextTxn(world, "invoice-delete"));
+    await target.client.delete(INVOICES, id, nextTxn(world, "invoice-delete"));
   });
 }
 
@@ -500,31 +512,31 @@ function togglePartition(device: number): WorldCommand {
 }
 
 function sync(device: number): WorldCommand {
-  return command(`sync(d${device})`, (_model, world) => {
+  return command(`sync(d${device})`, async (_model, world) => {
     const target = deviceAt(world, device);
     if (!target.online) return;
-    target.client.sync(world.server, target.schemaHash);
+    await target.client.syncWith(inProcessTransport(world.server), target.schemaHash);
   });
 }
 
 function pull(device: number): WorldCommand {
-  return command(`pull(d${device})`, (_model, world) => {
+  return command(`pull(d${device})`, async (_model, world) => {
     const target = deviceAt(world, device);
     if (!target.online) return;
-    target.client.applyPull(world.server.pull(world.scopeId, target.client.lastServerSeq));
+    await target.client.applyPull(world.server.pull(world.scopeId, target.client.lastServerSeq));
   });
 }
 
 function snapshotResync(device: number): WorldCommand {
-  return command(`snapshotResync(d${device})`, (_model, world) => {
+  return command(`snapshotResync(d${device})`, async (_model, world) => {
     const target = deviceAt(world, device);
     if (!target.online) return;
-    target.client.applySnapshot(world.server.snapshot(world.scopeId));
+    await target.client.applySnapshot(world.server.snapshot(world.scopeId));
   });
 }
 
 function duplicateDelivery(device: number): WorldCommand {
-  return command(`duplicateDelivery(d${device})`, (_model, world) => {
+  return command(`duplicateDelivery(d${device})`, async (_model, world) => {
     const target = deviceAt(world, device);
     if (!target.online) return;
     // A transport that delivers the same batch twice. What is replayed is what the wire
@@ -532,7 +544,7 @@ function duplicateDelivery(device: number): WorldCommand {
     // out — reading the outbox beforehand would replay stamps a rebase or a skew correction
     // changed during the sync, which is traffic no transport ever saw.
     const alreadySent = world.trace.pushed.length;
-    target.client.sync(world.server, target.schemaHash);
+    await target.client.syncWith(inProcessTransport(world.server), target.schemaHash);
     const stillPending = new Set(target.client.outbox.map(opIdentity));
     const delivered = world.trace.pushed
       .slice(alreadySent)
@@ -560,11 +572,11 @@ function opIdentity(op: WeftOp): string {
 }
 
 function reorderedDelivery(device: number, rotation: number): WorldCommand {
-  return command(`reorderedDelivery(d${device}, rotate ${rotation})`, (_model, world) => {
+  return command(`reorderedDelivery(d${device}, rotate ${rotation})`, async (_model, world) => {
     const target = deviceAt(world, device);
     if (!target.online || target.client.outbox.length === 0) return;
     target.client.outbox.push(...target.client.outbox.splice(0, rotation % target.client.outbox.length));
-    target.client.sync(world.server, target.schemaHash);
+    await target.client.syncWith(inProcessTransport(world.server), target.schemaHash);
   });
 }
 
@@ -587,7 +599,7 @@ function injectRejection(device: number, kind: InjectedRejectionKind, row: numbe
 export type RepairMode = "retry" | "discard";
 
 function repairQuarantine(device: number, mode: RepairMode, pick: number): WorldCommand {
-  return command(`repairQuarantine(d${device}, ${mode})`, (_model, world) => {
+  return command(`repairQuarantine(d${device}, ${mode})`, async (_model, world) => {
     // The UI must offer repair for quarantined work (§5.5), so histories exercise it: the
     // user retries a transaction or discards it.
     const target = deviceAt(world, device);
@@ -596,8 +608,8 @@ function repairQuarantine(device: number, mode: RepairMode, pick: number): World
     const transaction = at(transactions, pick % transactions.length);
     const exported = target.client.exportQuarantinedTxn(transaction);
     if (exported.length === 0) throw new Error(`quarantine export lost ${transaction}`);
-    if (mode === "retry") target.client.retryQuarantinedTxn(transaction);
-    else target.client.discardQuarantinedTxn(transaction);
+    if (mode === "retry") await target.client.retryQuarantinedTxn(transaction);
+    else await target.client.discardQuarantinedTxn(transaction);
     if (target.client.quarantine.some((op) => op.txnId === transaction)) {
       throw new Error(`repairing ${transaction} left it in quarantine`);
     }
@@ -620,13 +632,13 @@ function skewDeviceClock(device: number, offsetMs: number): WorldCommand {
 }
 
 function runRetention(device: number, days: number): WorldCommand {
-  return command(`runRetention(d${device}, ${days}d default)`, (_model, world) => {
+  return command(`runRetention(d${device}, ${days}d default)`, async (_model, world) => {
     // Retention is client-driven: expired rows become ordinary delete ops (§7).
     const target = deviceAt(world, device);
     const expired = planRetentionDeletes(target.client, propertySchema, { defaultAutoDeleteDays: days }, world.now);
     for (const candidate of expired) {
       if (localState(target.client, candidate.tableName, candidate.rowId) !== "live") continue;
-      target.client.delete(candidate.tableName, candidate.rowId, nextTxn(world, "retention"));
+      await target.client.delete(candidate.tableName, candidate.rowId, nextTxn(world, "retention"));
     }
   });
 }
@@ -654,12 +666,12 @@ function prune(): WorldCommand {
 }
 
 function neighbourScopeWrite(row: number, title: string): WorldCommand {
-  return command(`neighbourWrite(r${row})`, (model, world) => {
+  return command(`neighbourWrite(r${row})`, async (model, world) => {
     // The neighbouring scope reuses the same row ids on the same server.
     const id = rowAt(model.rows, row);
     const client = world.neighbour.client;
     if (localState(client, TASKS, id) === "absent") {
-      client.create(
+      await client.create(
         TASKS,
         id,
         {
@@ -673,9 +685,9 @@ function neighbourScopeWrite(row: number, title: string): WorldCommand {
         nextTxn(world, "neighbour-create"),
       );
     } else {
-      client.update(TASKS, id, { [TITLE]: title }, nextTxn(world, "neighbour-update"));
+      await client.update(TASKS, id, { [TITLE]: title }, nextTxn(world, "neighbour-update"));
     }
-    client.sync(world.server, world.neighbour.schemaHash);
+    await client.syncWith(inProcessTransport(world.server), world.neighbour.schemaHash);
   });
 }
 
@@ -686,7 +698,7 @@ const textArb = fc.string({ minLength: 1, maxLength: 12 });
 
 /** The generated command space, weighted so sync traffic keeps up with mutations. */
 export function worldCommands(maxCommands = 100): fc.Arbitrary<Iterable<WorldCommand>> {
-  return fc.commands<WorldModel, PropertyWorld>(
+  return fc.commands<WorldModel, PropertyWorld, true>(
     [
       fc
         .tuple(deviceArb, rowArb, textArb, fc.constantFrom(1, 7, 30))
@@ -742,9 +754,13 @@ export function worldCommands(maxCommands = 100): fc.Arbitrary<Iterable<WorldCom
 }
 
 /** Runs a generated history and hands back the world it produced. */
-export function runWorld(commands: Iterable<WorldCommand>, deviceCount = 3, makeServer?: ServerFactory): PropertyWorld {
+export async function runWorld(
+  commands: Iterable<WorldCommand>,
+  deviceCount = 3,
+  makeServer?: ServerFactory,
+): Promise<PropertyWorld> {
   let created: PropertyWorld | undefined;
-  fc.modelRun(() => {
+  await fc.asyncModelRun(() => {
     created = makeServer === undefined ? createWorld(deviceCount) : createWorld(deviceCount, makeServer);
     return { model: initialModel(), real: created };
   }, commands);
@@ -872,7 +888,7 @@ export function replaceLine(text: string, index: number, replacement: string): s
  * Brings every device online and syncs until nothing moves, so a device that pushed after
  * the last device pulled still gets its work delivered before state is compared.
  */
-export function quiesce(world: PropertyWorld, maxRounds = 200): void {
+export async function quiesce(world: PropertyWorld, maxRounds = 200): Promise<void> {
   // Settling is what happens once the fleet has caught up: clocks are corrected, and any
   // rolling update finishes, because a device left on the old build is locked out of the
   // scope by design (§5.10) and could never converge.
@@ -884,7 +900,8 @@ export function quiesce(world: PropertyWorld, maxRounds = 200): void {
   }
   for (let round = 0; round < maxRounds; round += 1) {
     const before = syncFingerprint(world);
-    for (const device of world.devices) device.client.sync(world.server, device.schemaHash);
+    for (const device of world.devices)
+      await device.client.syncWith(inProcessTransport(world.server), device.schemaHash);
     if (syncFingerprint(world) === before) return;
   }
   throw new Error("the world never settled");

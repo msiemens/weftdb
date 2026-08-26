@@ -2,25 +2,22 @@
 // that no deployed application does.
 //
 // The first is that **each tab is a device**. A browser normally wants the opposite — one database
-// per person, whichever tabs are open, which is what the election and the port broker are for — and
-// a demo about two devices merging has nothing to show under it. `namespace` is the seam: a
-// database is a namespace and a scope together, so giving every tab a namespace of its own gives
-// every tab its own election, its own storage worker, its own OPFS pool and its own device id,
-// while the scope stays the visitor's and the rows stay one list. What a second tab is here is what
-// a second laptop is in a deployment.
+// per person, whichever tabs are open, which is what one `SharedWorker` per origin gives — and a
+// demo about two devices merging has nothing to show under it. `namespace` is the seam: a database
+// is a namespace and a scope together, so giving every tab a namespace of its own gives every tab
+// its own client, its own storage and its own device id inside that one worker, while the scope
+// stays the visitor's and the rows stay one list. What a second tab is here is what a second laptop
+// is in a deployment.
 //
 // The second is where the relay is. There is no server behind a static docs page, so the relay is a
-// `WeftServer` in a `SharedWorker` of this browser (`relay-worker.ts`) and it is reached over a
-// `MessagePort`. Only the page can construct a `SharedWorker`, and only the worker can run the sync
-// session, so the port is transferred into the storage worker as it is created — which is what
-// `createWorker` is for.
+// `WeftServer` in a second `SharedWorker` of this browser (`relay-worker.ts`) and it is reached over
+// a `MessagePort`. Only the page can construct a `SharedWorker`, and only the storage worker can run
+// the sync session, so the page transfers that port into the storage worker over its own connection
+// to it — which is what `connect` below is wrapped for.
 import type { ScopeId } from "weftdb/core";
 import type { SchemaDefinition } from "weftdb/schema";
 import {
   openWeftDatabase,
-  WEFT_NAMESPACE_PARAM,
-  type BrokerPortLike,
-  type LockManagerLike,
   type SessionStatus,
   type StorageLike,
   type WeftDatabase,
@@ -41,15 +38,11 @@ import type { RelayPortLike } from "./port-transport.ts";
 export const DEMO_TOKEN = "demo";
 
 export interface DemoOpenOverrides {
-  /** Stands in for the browser's, so a test can drive the whole assembly under Node. */
-  readonly createWorker?: (url: URL | string, namespace: string) => WorkerLike;
-  readonly createBroker?: (url: URL | string) => BrokerPortLike;
-  readonly locks?: LockManagerLike;
+  /** Stands in for the browser's `SharedWorker`, so a test can drive the whole assembly under Node. */
+  readonly connect?: (url: URL | string) => WorkerLike;
   readonly deviceStorage?: StorageLike;
   /** The relay, as a port. Omitted means "construct the `SharedWorker`"; `null` means no relay. */
   readonly relayPort?: RelayPortLike | null;
-  readonly leaderTimeoutMs?: number;
-  readonly workerTimeoutMs?: number;
 }
 
 export interface DemoDatabaseOptions {
@@ -59,7 +52,6 @@ export interface DemoDatabaseOptions {
   /** Names this tab's database within the origin. One per tab, which is what makes it a device. */
   readonly namespace: string;
   readonly worker: URL | string;
-  readonly broker: URL | string;
   /** The relay `SharedWorker`'s module. */
   readonly relayWorker: URL | string;
   readonly onError?: (error: Error) => void;
@@ -77,28 +69,27 @@ export interface DemoDatabase {
   dispose(): Promise<void>;
 }
 
-/** Opens this tab's database and gives its storage worker a line to the relay. */
+/** Opens this tab's database and gives the storage worker a line to the relay. */
 export async function openDemoDatabase(options: DemoDatabaseOptions): Promise<DemoDatabase> {
   const overrides = options.overrides ?? {};
   const relayPort =
     overrides.relayPort === undefined ? connectRelay(options.relayWorker) : (overrides.relayPort ?? undefined);
-  // Kept so the online switch has something to post to. The demos never migrate — a namespace of
-  // one tab's own is a lock nobody else is queued behind — so this is set once and stays set.
-  let worker: WorkerLike | undefined;
-  let handed = false;
+  // Kept so the online switch has something to post to. Replaced whenever this tab reconnects,
+  // because a worker the browser stopped took the previous one with it.
+  let port: WorkerLike | undefined;
   let online = true;
 
-  const create = (url: URL | string, namespace: string): WorkerLike => {
-    const built = (overrides.createWorker ?? defaultCreateWorker)(url, namespace);
-    // Before anything else is said to it, and exactly once: the worker waits for this message
-    // before it opens anything, and a port cannot be transferred twice. A second worker — which
-    // only a migration builds, and these demos have none — is served without a session rather than
-    // handed a port that has already gone.
-    const port = handed ? undefined : relayPort;
-    handed = true;
-    post(built, { weft: DEMO_RELAY_MESSAGE, port }, port === undefined ? [] : [port]);
-    worker = built;
-    return built;
+  const connect = (url: URL | string): WorkerLike => {
+    const opened = (overrides.connect ?? defaultConnect)(url);
+    // Before anything else is said on it: the storage worker reads this off the port and every
+    // session it builds afterwards runs over the line it names. A port can only be transferred
+    // once, so a second connection says so by sending `undefined` and the worker keeps the line it
+    // already has.
+    const handing = port === undefined ? relayPort : undefined;
+    post(opened, { weft: DEMO_RELAY_MESSAGE, port: handing }, handing === undefined ? [] : [handing]);
+    post(opened, { weft: DEMO_ONLINE_MESSAGE, online });
+    port = opened;
+    return opened;
   };
 
   const weft = await openWeftDatabase({
@@ -106,13 +97,8 @@ export async function openDemoDatabase(options: DemoDatabaseOptions): Promise<De
     scopeId: options.scopeId,
     namespace: options.namespace,
     worker: options.worker,
-    broker: options.broker,
-    createWorker: create,
-    ...(overrides.createBroker === undefined ? {} : { createBroker: overrides.createBroker }),
-    ...(overrides.locks === undefined ? {} : { locks: overrides.locks }),
+    connect,
     ...(overrides.deviceStorage === undefined ? {} : { deviceStorage: overrides.deviceStorage }),
-    ...(overrides.leaderTimeoutMs === undefined ? {} : { leaderTimeoutMs: overrides.leaderTimeoutMs }),
-    ...(overrides.workerTimeoutMs === undefined ? {} : { workerTimeoutMs: overrides.workerTimeoutMs }),
     ...(options.onError === undefined ? {} : { onError: options.onError }),
     // A worker that was given no relay port was given no session either, and asking it to
     // authenticate is refused rather than ignored.
@@ -127,7 +113,7 @@ export async function openDemoDatabase(options: DemoDatabaseOptions): Promise<De
     },
     setOnline: (next) => {
       online = next;
-      if (worker !== undefined) post(worker, { weft: DEMO_ONLINE_MESSAGE, online: next });
+      if (port !== undefined) post(port, { weft: DEMO_ONLINE_MESSAGE, online: next });
       // Coming back is a sync now rather than at the next poll, which is what the toggle is for:
       // the unsent count drains while you are looking at it. A relay that cannot be reached is an
       // ordinary state and settles into the status; what is caught here is the tab going away with
@@ -161,7 +147,7 @@ const IDLE: SessionStatus = {
  * What each demo's page reads its status pills off, and clicks its online toggle through.
  *
  * The one thing it does that reading `weft.status()` does not is fold in the switch. Being
- * deliberately offline is a fact the page knows and the worker's session does not: the session sees
+ * offline by choice is a fact the page knows and the worker's session does not: the session sees
  * a relay it cannot reach, which is what `lastError` is for and is honest, but a person who has
  * just clicked "offline" is not looking at a fault. So the reported status is handed through
  * unchanged while the line is up, and while it is cut the three fields that describe a connection
@@ -218,8 +204,8 @@ export class DemoSync {
     await this.#database.weft.source.sync();
   }
 
-  discardQuarantine(): void {
-    this.#database.weft.source.discardQuarantine();
+  async discardQuarantine(): Promise<void> {
+    await this.#database.weft.source.discardQuarantine();
   }
 
   #notify(): void {
@@ -233,7 +219,7 @@ export class DemoSync {
  * A `SharedWorker` is identified by its script URL, which is the whole reason the relay can be one
  * server for every tab rather than one per tab. A browser without one is not refused here: the demo
  * opens, the database works, and only the syncing is gone — which `openWeftDatabase` would refuse
- * anyway a moment later, for the broker rather than for this.
+ * anyway a moment later, for the storage worker rather than for this.
  */
 function connectRelay(url: URL | string): RelayPortLike | undefined {
   const constructor = (
@@ -245,28 +231,23 @@ function connectRelay(url: URL | string): RelayPortLike | undefined {
   return new constructor(url, { type: "module" }).port;
 }
 
-/**
- * The worker at a URL carrying this database's namespace.
- *
- * `openWeftDatabase` does this itself for the worker it builds, and a `createWorker` of an
- * application's own has to do it too: the worker opens its OPFS pool as it starts, before the page
- * has said anything, so the URL is the only channel that exists in time. Two tabs whose workers
- * were told nothing would contend for one pool, and the second of them would be refused it.
- */
-function defaultCreateWorker(url: URL | string, namespace: string): WorkerLike {
-  const resolved = new URL(String(url), globalThis.location?.href);
-  resolved.searchParams.set(WEFT_NAMESPACE_PARAM, namespace);
-  return new Worker(resolved, { type: "module" });
+function defaultConnect(url: URL | string): WorkerLike {
+  const constructor = (
+    globalThis as {
+      SharedWorker: new (url: URL | string, options?: { type: "module" }) => { readonly port: WorkerLike };
+    }
+  ).SharedWorker;
+  return new constructor(url, { type: "module" }).port;
 }
 
 /**
  * Posts a message that is not part of the worker protocol, through the port's own widest shape.
  * `WorkerLike.postMessage` is typed to the protocol's union so that a mistyped request is a
  * compile error; these two messages are addressed to `serveDemoStorageWorker` instead, and
- * everything else listening on that global drops them by their tag.
+ * everything else listening on that port drops them by their tag.
  */
-function post(worker: WorkerLike, message: unknown, transfer: readonly unknown[] = []): void {
-  (worker as unknown as { postMessage(message: unknown, transfer?: readonly unknown[]): void }).postMessage(
+function post(port: WorkerLike, message: unknown, transfer: readonly unknown[] = []): void {
+  (port as unknown as { postMessage(message: unknown, transfer?: readonly unknown[]): void }).postMessage(
     message,
     transfer,
   );

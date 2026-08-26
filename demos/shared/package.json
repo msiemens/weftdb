@@ -5,7 +5,8 @@
   "license": "MPL-2.0",
   "type": "module",
   "dependencies": {
-    "weftdb": "workspace:*"
+    "weftdb": "workspace:*",
+    "wa-sqlite": "github:rhashimoto/wa-sqlite#2bf1c59d89eb6497535a4217bc62fec68a0bb994"
   },
   "devDependencies": {
     "vite": "^8.2.2"
@@ -19,6 +20,7 @@
     "./relay-worker-entry": "./src/relay-worker-entry.ts",
     "./storage-worker": "./src/storage-worker.ts",
     "./dev": "./src/dev.ts",
-    "./tokens.css": "./src/tokens.css"
+    "./tokens.css": "./src/tokens.css",
+    "./sqlite": "./src/sqlite.ts"
   }
 }

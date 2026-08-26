@@ -5,20 +5,20 @@ sidebar:
   order: 2
 ---
 
-A sync session is driven by `WeftClient.sync()` or its asynchronous counterpart `syncWith()`. The
-two run the same sequence of steps against a `WeftServer`, differing only in whether the relay is
-called in-process or over a transport.
+A sync session is driven by `WeftClient.syncWith(transport, schemaHash)`. The transport is where
+the relay is: `httpTransport` reaches one over HTTP, and `inProcessTransport(server)` reaches a
+`WeftServer` on the same thread. The steps below are the same either way.
 
 ## Session shape
 
-A call to `sync` or `syncWith` moves through a fixed order:
+A call to `syncWith` moves through a fixed order:
 
 1. The device sends a handshake carrying its schema hash, schema version, and last known
    sequence number. [Schema changes](/guides/schema-changes/) covers the three outcomes the relay
    can return and what each means for a device on the wrong build.
 2. If the handshake answers `resync`, the device applies a full snapshot before doing anything
    else.
-3. The device flushes its outbox: `flush` or `flushWith` pushes whatever is queued and applies the
+3. The device flushes its outbox: `flushWith` pushes whatever is queued and applies the
    result, repeating until the outbox is empty or it has tried four times. The fourth attempt
    exists only to notice that a rebase or a clock restamp failed to converge, not to make a fifth
    attempt.

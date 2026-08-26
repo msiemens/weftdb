@@ -4,7 +4,6 @@ import { fieldName, rowId, tableName } from "weftdb/core";
 import {
   AuthorizerDependencyRecorder,
   Diff3EditorBuffer,
-  MultiTabCoordinator,
   WorkerPortTransport,
   compileOnlyKysely,
   compileQuery,
@@ -26,7 +25,7 @@ interface Database {
   };
 }
 
-test("query compilation produces stable cache keys and dependency invalidation", () => {
+test("query compilation produces stable cache keys and dependency invalidation", async () => {
   const tasks = tableName("tasks");
   const recorder = new AuthorizerDependencyRecorder();
   recorder.recordRead(tasks, fieldName("title"));
@@ -44,7 +43,7 @@ test("query compilation produces stable cache keys and dependency invalidation",
   assert.equal(invalidatesQuery(new Set([tasks]), query), true);
 });
 
-test("a Kysely query compiles through compileQuery unchanged", () => {
+test("a Kysely query compiles through compileQuery unchanged", async () => {
   const tasks = tableName("tasks");
   const recorder = new AuthorizerDependencyRecorder();
   recorder.recordRead(tasks, fieldName("title"));
@@ -59,7 +58,7 @@ test("a Kysely query compiles through compileQuery unchanged", () => {
   assert.equal(invalidatesQuery(new Set([tasks]), registered), true);
 });
 
-test("a Kysely query's cache key is stable across builds and differs for a different query", () => {
+test("a Kysely query's cache key is stable across builds and differs for a different query", async () => {
   const db = compileOnlyKysely<Database>();
   const build = () => db.selectFrom("tasks").select(["id", "title"]).where("done", "=", false);
   assert.equal(queryCacheKey(build().compile()), queryCacheKey(build().compile()));
@@ -68,7 +67,7 @@ test("a Kysely query's cache key is stable across builds and differs for a diffe
   assert.notEqual(queryCacheKey(build().compile()), queryCacheKey(different.compile()));
 });
 
-test("editor buffer holds remote edits while focused", () => {
+test("editor buffer holds remote edits while focused", async () => {
   const buffer = new Diff3EditorBuffer();
   const edit = {
     tableName: tableName("tasks"),
@@ -87,26 +86,11 @@ test("worker transport correlates requests and responses", async () => {
   // Two requests in flight at once, answered out of order by the worker below. Each caller gets the
   // reply carrying its own number: a transport that read the first reply for the first caller would
   // hand one tab's rows to whoever asked first and never be caught by a single round trip.
-  const hydrated = transport.request({ type: "hydrate", scopeId: "scope", deviceId: "device" });
+  const hydrated = transport.request({ type: "hydrate", scopeId: "scope", deviceId: "device", namespace: "weft" });
   const executed = transport.execute({ sql: "select 1", parameters: [] });
   assert.deepEqual(await executed, { rows: [] });
-  assert.deepEqual(await hydrated, { hydrated: "scope", durability: "durable" });
+  assert.deepEqual(await hydrated, { hydrated: "scope" });
   transport.dispose();
-});
-
-test("multi-tab coordinator elects leader and follower roles", async () => {
-  const leader = new MultiTabCoordinator({
-    scopeId: "scope",
-    locks: { request: async (_name, _options, callback) => callback({}) },
-  });
-  const follower = new MultiTabCoordinator({
-    scopeId: "scope",
-    locks: { request: async (_name, _options, callback) => callback(null) },
-  });
-  assert.equal(await leader.elect(), "leader");
-  assert.equal(await follower.elect(), "follower");
-  leader.close();
-  follower.close();
 });
 
 /** A worker that answers out of order, so correlation is what the test above is reading. */
@@ -116,7 +100,7 @@ class LoopbackWorker {
   postMessage(message: WorkerRequest): void {
     const response: WorkerResponse =
       message.type === "hydrate"
-        ? { id: message.id, ok: true, value: { hydrated: message.scopeId, durability: "durable" } }
+        ? { id: message.id, ok: true, value: { hydrated: message.scopeId } }
         : message.type === "execute"
           ? { id: message.id, ok: true, value: { rows: [] } }
           : { id: message.id, ok: true, value: null };
@@ -126,11 +110,11 @@ class LoopbackWorker {
     else queueMicrotask(answer);
   }
 
-  addEventListener(_type: "message", listener: (event: MessageEvent<WorkerResponse>) => void): void {
+  addEventListener(type: "message" | "close", listener: (event: MessageEvent<WorkerResponse>) => void): void {
     this.#listener = listener;
   }
 
-  removeEventListener(_type: "message", listener: (event: MessageEvent<WorkerResponse>) => void): void {
+  removeEventListener(type: "message" | "close", listener: (event: MessageEvent<WorkerResponse>) => void): void {
     if (this.#listener === listener) this.#listener = undefined;
   }
 }

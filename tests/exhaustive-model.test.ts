@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { rowId, txnId, wireText, type DeviceId, type RowId } from "weftdb/core";
-import { WeftClient } from "weftdb/client";
+import { inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer, type Snapshot } from "weftdb/server";
 import {
   localKey,
@@ -67,7 +67,7 @@ interface Universe {
 }
 
 test("every reachable state of a two-device, two-row world upholds the sync invariants", async (t) => {
-  const start = replay([]);
+  const start = await replay([]);
   const seen = new Set([fingerprint(start)]);
   const queue: (readonly Action[])[] = [[]];
   let explored = 0;
@@ -81,7 +81,7 @@ test("every reachable state of a two-device, two-row world upholds the sync inva
 
     for (const action of ACTIONS) {
       const next = [...history, action];
-      const universe = replay(next);
+      const universe = await replay(next);
       explored += 1;
 
       // Fingerprint first: `check` settles and repairs the universe to make its assertions,
@@ -91,7 +91,7 @@ test("every reachable state of a two-device, two-row world upholds the sync inva
       seen.add(state);
       deepest = Math.max(deepest, next.length);
       if (universe.clients.some((client) => cursor(universe, client) === "purged")) stranded += 1;
-      check(universe, next);
+      await check(universe, next);
       queue.push(next);
     }
   }
@@ -113,7 +113,7 @@ test("every reachable state of a two-device, two-row world upholds the sync inva
  * Invariants that must hold in every reachable state, plus convergence once the world is
  * allowed to settle from that state.
  */
-function check(universe: Universe, history: readonly Action[]): void {
+async function check(universe: Universe, history: readonly Action[]): Promise<void> {
   const trail = () => history.map(describe).join(" -> ");
 
   for (const client of universe.clients) {
@@ -136,14 +136,14 @@ function check(universe: Universe, history: readonly Action[]): void {
     }
   }
 
-  settle(universe, trail);
+  await settle(universe, trail);
   // Quarantined work is allowed to differ from the server until someone repairs it (§5.5),
   // so convergence is asserted after the repair the UI must offer: discard and re-pull.
   for (const client of universe.clients) {
     for (const transaction of new Set(client.quarantine.map((op) => op.txnId)))
-      client.discardQuarantinedTxn(transaction);
+      await client.discardQuarantinedTxn(transaction);
   }
-  settle(universe, trail);
+  await settle(universe, trail);
 
   const snapshot = universe.server.snapshot(propertyScope);
   for (const [index, client] of universe.clients.entries()) {
@@ -159,14 +159,14 @@ function check(universe: Universe, history: readonly Action[]): void {
   }
 }
 
-function settle(universe: Universe, trail: () => string): void {
+async function settle(universe: Universe, trail: () => string): Promise<void> {
   const rounds: string[] = [];
   for (let round = 0; round < SETTLE_ROUNDS; round += 1) {
     const before = syncState(universe);
     rounds.push(before);
     for (const client of universe.clients) {
       universe.now += 1;
-      client.sync(universe.server, propertySchemaHash);
+      await client.syncWith(inProcessTransport(universe.server), propertySchemaHash);
     }
     if (before === syncState(universe)) return;
   }
@@ -183,7 +183,7 @@ function syncState(universe: Universe): string {
 }
 
 /** Replaying from scratch keeps every explored state independent and deterministic. */
-function replay(history: readonly Action[]): Universe {
+async function replay(history: readonly Action[]): Promise<Universe> {
   const state = { now: 1_700_000_000_000 };
   const clock = () => state.now;
   const universe: Universe = {
@@ -203,12 +203,12 @@ function replay(history: readonly Action[]): Universe {
 
   for (const action of history) {
     universe.steps += 1;
-    apply(universe, action);
+    await apply(universe, action);
   }
   return universe;
 }
 
-function apply(universe: Universe, action: Action): void {
+async function apply(universe: Universe, action: Action): Promise<void> {
   switch (action.kind) {
     case "world":
       return applyWorld(universe, action.name);
@@ -234,23 +234,23 @@ function applyWorld(universe: Universe, name: WorldActionName): void {
   }
 }
 
-function applyDevice(universe: Universe, device: number, name: DeviceActionName): void {
+async function applyDevice(universe: Universe, device: number, name: DeviceActionName): Promise<void> {
   const client = universe.clients[device];
   if (client === undefined) return;
   switch (name) {
     case "sync":
-      client.sync(universe.server, propertySchemaHash);
+      await client.syncWith(inProcessTransport(universe.server), propertySchemaHash);
       return;
     case "pull":
-      client.applyPull(universe.server.pull(propertyScope, client.lastServerSeq));
+      await client.applyPull(universe.server.pull(propertyScope, client.lastServerSeq));
       return;
     case "resync":
-      client.applySnapshot(universe.server.snapshot(propertyScope));
+      await client.applySnapshot(universe.server.snapshot(propertyScope));
       return;
   }
 }
 
-function applyRow(universe: Universe, device: number, row: RowId, name: RowActionName): void {
+async function applyRow(universe: Universe, device: number, row: RowId, name: RowActionName): Promise<void> {
   const client = universe.clients[device];
   if (client === undefined) return;
   const state: LocalRowState = localState(client, TASKS, row);
@@ -259,16 +259,16 @@ function applyRow(universe: Universe, device: number, row: RowId, name: RowActio
 
   switch (name) {
     case "create":
-      if (state === "absent") client.create(TASKS, row, { [TITLE]: title }, transaction);
+      if (state === "absent") await client.create(TASKS, row, { [TITLE]: title }, transaction);
       return;
     case "update":
-      if (state === "live") client.update(TASKS, row, { [TITLE]: title }, transaction);
+      if (state === "live") await client.update(TASKS, row, { [TITLE]: title }, transaction);
       return;
     case "delete":
-      if (state === "live") client.delete(TASKS, row, transaction);
+      if (state === "live") await client.delete(TASKS, row, transaction);
       return;
     case "restore":
-      if (state === "tombstoned") client.restore(TASKS, row, { [TITLE]: title }, transaction);
+      if (state === "tombstoned") await client.restore(TASKS, row, { [TITLE]: title }, transaction);
       return;
   }
 }

@@ -118,7 +118,7 @@ const hash = schemaHash(schema);
 const relay = (token: string) => httpTransport({ baseUrl: "http://localhost:8787", token });
 
 const laptop = new WeftClient(scopeId("user-1"), deviceId("laptop"), schema);
-laptop.create(tableName("tasks"), rowId("task-1"), {
+await laptop.create(tableName("tasks"), rowId("task-1"), {
   [fieldName("title")]: "Write the quick start",
   [fieldName("notes")]: "",
   [fieldName("rank")]: "a0",
@@ -137,9 +137,10 @@ $ node sync.ts
 Write the quick start
 ```
 
-The first sync creates the row on `laptop` and pushes it to
-the relay in the same call. `phone` starts with nothing local. Its sync pulls the row down before
-`getRow` reads it back, still under the title `laptop` wrote.
+Every write returns a promise, and awaiting it is how a caller learns the write was stored.
+`create` makes the row on `laptop` and queues it; the sync that follows pushes it to the relay.
+`phone` starts with nothing local. Its sync pulls the row down before `getRow` reads it back, still
+under the title `laptop` wrote. Reads answer directly, without a promise.
 
 The [todo list demo](/demos/todo/) runs the same push and pull across two browser tabs, with the
 unsent count, live updates, and conflicts visible as they happen instead of printed to a console.

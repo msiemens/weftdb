@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { deviceId, fieldName, rowId, scopeId, tableName, txnId, type FieldName, type WireValue } from "weftdb/core";
-import { WeftClient, type ClientPersistence } from "weftdb/client";
+import { type ClientPersistence, inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
 
@@ -29,7 +29,7 @@ function device(name: string): WeftClient {
   return new WeftClient(SCOPE, deviceId(name), schema, () => Date.parse("2026-03-01T09:00:00.000Z"));
 }
 
-test("a delete the scope has already carried out retires the queued one instead of quarantining it", () => {
+test("a delete the scope has already carried out retires the queued one instead of quarantining it", async () => {
   // A subscribed socket is told about a delete by the same relay that is still answering the
   // push carrying it, so a device routinely hears about its own delete before that push has
   // drained. Hearing it must retire the queued op: setting it aside would ask a person to
@@ -38,16 +38,16 @@ test("a delete the scope has already carried out retires the queued one instead 
   const first = device("tab-1");
   const second = device("tab-2");
 
-  first.create(NOTES, ROW, values({ title: "draft" }), txnId("create"));
-  first.sync(server, HASH);
-  second.sync(server, HASH);
+  await first.create(NOTES, ROW, values({ title: "draft" }), txnId("create"));
+  await first.syncWith(inProcessTransport(server), HASH);
+  await second.syncWith(inProcessTransport(server), HASH);
 
   // Both devices delete it, and the second one gets there first.
-  first.delete(NOTES, ROW, txnId("delete-first"));
-  second.delete(NOTES, ROW, txnId("delete-second"));
-  second.sync(server, HASH);
+  await first.delete(NOTES, ROW, txnId("delete-first"));
+  await second.delete(NOTES, ROW, txnId("delete-second"));
+  await second.syncWith(inProcessTransport(server), HASH);
 
-  first.applyPull(server.pull(SCOPE, first.lastServerSeq));
+  await first.applyPull(server.pull(SCOPE, first.lastServerSeq));
 
   assert.deepEqual(
     first.outbox.filter((op) => op.kind === "delete"),
@@ -57,19 +57,19 @@ test("a delete the scope has already carried out retires the queued one instead 
   assert.deepEqual(first.listQuarantine(), [], "agreeing with the scope was treated as divergence");
 });
 
-test("a row whose only queued work was appended straight to the outbox still reads as dirty", () => {
+test("a row whose only queued work was appended straight to the outbox still reads as dirty", async () => {
   // Hydration appends to the outbox directly rather than going through the queueing path, so
   // the per-row counts behind the dirty flag have to notice a length they did not cause.
   const server = new WeftServer();
   const client = device("tab-1");
 
-  client.create(NOTES, ROW, values({ title: "first" }), txnId("create"));
-  client.sync(server, HASH);
+  await client.create(NOTES, ROW, values({ title: "first" }), txnId("create"));
+  await client.syncWith(inProcessTransport(server), HASH);
   assert.equal(client.isRowDirty(NOTES, ROW), false, "a fully synced row started out dirty");
 
   const restored = rowId("row-2");
-  client.create(NOTES, restored, values({ title: "second" }), txnId("create-second"));
-  client.sync(server, HASH);
+  await client.create(NOTES, restored, values({ title: "second" }), txnId("create-second"));
+  await client.syncWith(inProcessTransport(server), HASH);
 
   // What a store's `hydrate` does: put the op back where it was, without the client's help.
   client.outbox.push({
@@ -86,19 +86,19 @@ test("a row whose only queued work was appended straight to the outbox still rea
   // The next queued write is what decides whether the counts notice. It has to be one that
   // queues without reading them first — an edit asks them what is already queued for its field,
   // and that question rebuilds them on the way past, hiding the staleness this is about.
-  client.create(NOTES, rowId("row-3"), values({ title: "third" }), txnId("later"));
+  await client.create(NOTES, rowId("row-3"), values({ title: "third" }), txnId("later"));
 
   assert.equal(client.isRowDirty(NOTES, restored), true, "the hydrated op left its row reading as clean");
 });
 
-test("quarantined work on one collection does not mark a row of the same id in another", () => {
+test("quarantined work on one collection does not mark a row of the same id in another", async () => {
   // A row id is unique within its collection and nowhere else, so anything keyed by id alone
   // conflates two rows that merely share a name.
   const server = new WeftServer();
   const client = device("tab-1");
 
-  client.create(DRAFTS, ROW, values({ title: "kept" }), txnId("create-draft"));
-  client.sync(server, HASH);
+  await client.create(DRAFTS, ROW, values({ title: "kept" }), txnId("create-draft"));
+  await client.syncWith(inProcessTransport(server), HASH);
 
   // A set against a row the scope has never seen is refused, and refused work is set aside.
   client.outbox.push({
@@ -111,7 +111,7 @@ test("quarantined work on one collection does not mark a row of the same id in a
     hlc: client.clock.next(),
     txnId: txnId("orphan"),
   });
-  client.sync(server, HASH);
+  await client.syncWith(inProcessTransport(server), HASH);
 
   assert.equal(client.listQuarantine().length > 0, true, "the orphaned write was not set aside");
   assert.equal(
@@ -121,7 +121,7 @@ test("quarantined work on one collection does not mark a row of the same id in a
   );
 });
 
-test("a pull does not settle a field whose write is sitting in quarantine", () => {
+test("a pull does not settle a field whose write is sitting in quarantine", async () => {
   // Quarantine means the local state has diverged for good and only the person can resolve it
   // (§5.5), which is why quarantined ops keep their row dirty (§5.8). A pull that applies the
   // scope's value over the write anyway resolves that divergence on their behalf and without
@@ -132,11 +132,11 @@ test("a pull does not settle a field whose write is sitting in quarantine", () =
   const client = device("tab-1");
 
   // Made offline, so the scope has never heard of the row, and then edited.
-  client.create(NOTES, ROW, values({ title: "as created" }), txnId("create"));
-  client.update(NOTES, ROW, values({ title: "as edited" }), txnId("edit"));
+  await client.create(NOTES, ROW, values({ title: "as created" }), txnId("create"));
+  await client.update(NOTES, ROW, values({ title: "as edited" }), txnId("edit"));
 
   // A resync finds the row absent, which sets every unsent op for it aside — the edit included.
-  client.applySnapshot(server.snapshot(SCOPE));
+  await client.applySnapshot(server.snapshot(SCOPE));
   assert.equal(
     client.listQuarantine().some((op) => op.txnId === txnId("edit")),
     true,
@@ -145,8 +145,8 @@ test("a pull does not settle a field whose write is sitting in quarantine", () =
 
   // The person repairs the creation but not the edit, so the row reaches the scope carrying the
   // value it was created with, and the very next pull offers that value back.
-  client.retryQuarantinedTxn(txnId("create"));
-  client.sync(server, HASH);
+  await client.retryQuarantinedTxn(txnId("create"));
+  await client.syncWith(inProcessTransport(server), HASH);
 
   assert.equal(client.getRow(NOTES, ROW)?.fields.get(TITLE), "as edited", "the pull overwrote the quarantined write");
   assert.equal(
@@ -157,7 +157,7 @@ test("a pull does not settle a field whose write is sitting in quarantine", () =
   assert.equal(client.isRowDirty(NOTES, ROW), true, "a row still holding quarantined work read as clean");
 });
 
-test("a quarantined write does not withhold a field from the next life of its row", () => {
+test("a quarantined write does not withhold a field from the next life of its row", async () => {
   // The other edge of the rule above. A quarantined write protects the value it left in the row,
   // and a row that has been deleted and had its id used again does not hold that value any more —
   // the delete took it. Reading the quarantined op as a claim on the field regardless would leave
@@ -166,15 +166,15 @@ test("a quarantined write does not withhold a field from the next life of its ro
   const author = device("tab-1");
   const editor = device("tab-2");
 
-  author.create(NOTES, ROW, values({ title: "first life" }), txnId("create"));
-  author.sync(server, HASH);
-  editor.sync(server, HASH);
+  await author.create(NOTES, ROW, values({ title: "first life" }), txnId("create"));
+  await author.syncWith(inProcessTransport(server), HASH);
+  await editor.syncWith(inProcessTransport(server), HASH);
 
   // The editor's unsent edit meets the author's delete, which is what sets the edit aside.
-  editor.update(NOTES, ROW, values({ title: "as edited" }), txnId("edit"));
-  author.delete(NOTES, ROW, txnId("delete"));
-  author.sync(server, HASH);
-  editor.applyPull(server.pull(SCOPE, editor.lastServerSeq));
+  await editor.update(NOTES, ROW, values({ title: "as edited" }), txnId("edit"));
+  await author.delete(NOTES, ROW, txnId("delete"));
+  await author.syncWith(inProcessTransport(server), HASH);
+  await editor.applyPull(server.pull(SCOPE, editor.lastServerSeq));
   assert.equal(
     editor.listQuarantine().some((op) => op.txnId === txnId("edit")),
     true,
@@ -184,11 +184,11 @@ test("a quarantined write does not withhold a field from the next life of its ro
   // The tombstone is purged and the id is used again by a device that never saw the first life.
   server.pruneTombstones(SCOPE, 0);
   const stranger = device("tab-3");
-  stranger.sync(server, HASH);
-  stranger.create(NOTES, ROW, values({ title: "second life" }), txnId("create-again"));
-  stranger.sync(server, HASH);
+  await stranger.syncWith(inProcessTransport(server), HASH);
+  await stranger.create(NOTES, ROW, values({ title: "second life" }), txnId("create-again"));
+  await stranger.syncWith(inProcessTransport(server), HASH);
 
-  editor.applyPull(server.pull(SCOPE, editor.lastServerSeq));
+  await editor.applyPull(server.pull(SCOPE, editor.lastServerSeq));
 
   assert.equal(
     editor.getRow(NOTES, ROW)?.fields.get(TITLE),
@@ -197,26 +197,26 @@ test("a quarantined write does not withhold a field from the next life of its ro
   );
 });
 
-test("a snapshot writes the client through to its store", () => {
+test("a snapshot writes the client through to its store", async () => {
   // §4.1 makes local storage the client's state rather than a cache of it. A snapshot replaces
   // most of what a device holds, so a snapshot that is not written through is the largest
   // possible divergence between what the client shows and what survives a reload.
   const server = new WeftServer();
   const author = device("tab-1");
-  author.create(NOTES, ROW, values({ title: "shared" }), txnId("create"));
-  author.sync(server, HASH);
+  await author.create(NOTES, ROW, values({ title: "shared" }), txnId("create"));
+  await author.syncWith(inProcessTransport(server), HASH);
 
   const reader = device("tab-2");
   let saves = 0;
   const persistence: ClientPersistence = {
-    save: () => {
+    save: async () => {
       saves += 1;
     },
   };
   reader.persistence = persistence;
 
   const before = saves;
-  reader.applySnapshot(server.snapshot(SCOPE));
+  await reader.applySnapshot(server.snapshot(SCOPE));
 
   assert.equal(saves > before, true, "applying a snapshot never reached the store");
   assert.equal(reader.getRow(NOTES, ROW)?.fields.get(TITLE), "shared", "the snapshot did not land locally");

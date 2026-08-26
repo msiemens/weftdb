@@ -10,6 +10,15 @@ export interface FieldDefinition {
   /** The values an `enum` field may hold. Everything else leaves this undefined. */
   values?: readonly string[];
   /**
+   * Whether the generated client DDL carries an index on this field.
+   *
+   * Codegen cannot tell which fields an application filters or orders on, so the schema says. Like
+   * `jsonType` it is read only by the generator and stays out of the wire schema and out of the
+   * hash: an index is a fact about how one device reads its own file, and hashing it would make a
+   * device that added one look like a device on another schema.
+   */
+  index?: boolean;
+  /**
    * The TypeScript type a `json` field holds. Only the generator reads it, and only to write a
    * name where it would otherwise write `unknown`: it is not part of what two devices have to
    * agree on, so it stays out of the wire schema and out of the schema hash. What travels is a
@@ -160,7 +169,9 @@ export type FieldOf<Type extends FieldDefinition["type"], Nullable extends boole
  * positions that only describe the shape; the builders default it to `false`, which is what a
  * field that says nothing about nullability is.
  */
-type FieldOptions<Nullable extends boolean = boolean> = Partial<Pick<FieldDefinition, "merge" | "retentionAnchor">> & {
+type FieldOptions<Nullable extends boolean = boolean> = Partial<
+  Pick<FieldDefinition, "merge" | "retentionAnchor" | "index">
+> & {
   readonly nullable?: Nullable;
 };
 
@@ -190,12 +201,11 @@ function assertDeclaredJsonType(reference: JsonTypeReference): void {
 }
 
 /**
- * The value is exactly what it was: the same three keys in the same order, and a fourth only when
- * `retentionAnchor` was given. `schemaHash` is computed from this, and it is protocol visible —
- * two devices that disagree on it refuse to sync — so nothing here may start writing anything
- * down. All that changed is what the compiler is told about the value, hence the cast: `nullable`
- * is a `boolean` at runtime and the literal `Nullable` in the type, and the boolean written is
- * `options.nullable` itself, which is what `Nullable` was inferred from.
+ * The three keys every field has, in that order, plus each optional one only where it was given.
+ * `schemaHash` is computed from `toWireSchema` rather than from this, and it is protocol visible —
+ * two devices that disagree on it refuse to sync. The cast is what the compiler is told about the
+ * value: `nullable` is a `boolean` at runtime and the literal `Nullable` in the type, and the
+ * boolean written is `options.nullable` itself, which is what `Nullable` was inferred from.
  */
 function field<Type extends FieldDefinition["type"], const Nullable extends boolean = false>(
   type: Type,
@@ -207,6 +217,7 @@ function field<Type extends FieldDefinition["type"], const Nullable extends bool
     nullable: options.nullable ?? false,
   };
   if (options.retentionAnchor !== undefined) definition.retentionAnchor = options.retentionAnchor;
+  if (options.index !== undefined) definition.index = options.index;
   return definition as FieldOf<Type, Nullable>;
 }
 

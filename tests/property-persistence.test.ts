@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import fc from "fast-check";
+import { asyncSqlExecutor, type AsyncSqlExecutor } from "weftdb/shared";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { openSqliteExecutor, type SqliteExecutor } from "weftdb/server/node-sqlite";
 import { SqliteWeftServer } from "weftdb/server/sqlite";
@@ -23,15 +24,15 @@ import {
 
 const BASE_FIELDS: ReadonlySet<string> = new Set(["id", "scope_id", "created"]);
 
-test("§4.2 a history run against the SQLite server survives a reload", () => {
-  fc.assert(
-    fc.property(worldCommands(40), (commands) => {
+test("§4.2 a history run against the SQLite server survives a reload", async () => {
+  await fc.assert(
+    fc.asyncProperty(worldCommands(40), async (commands) => {
       using database = temporaryDatabase();
-      const world = runWorld(commands, 3, (now) => new SqliteWeftServer(database.executor, now));
-      quiesce(world);
+      const world = await runWorld(commands, 3, (now) => new SqliteWeftServer(database.connection, now));
+      await quiesce(world);
 
       const before = serverRowFingerprints(world);
-      const reloaded = new SqliteWeftServer(database.executor, () => world.now);
+      const reloaded = new SqliteWeftServer(database.connection, () => world.now);
       assert.deepEqual(
         snapshotState(reloaded.snapshotInReadTransaction(world.scopeId)),
         snapshotState(world.server.snapshot(world.scopeId)),
@@ -48,18 +49,18 @@ test("§4.2 a history run against the SQLite server survives a reload", () => {
   );
 });
 
-test("§4.1 a client survives a save and hydrate cycle", () => {
-  fc.assert(
-    fc.property(worldCommands(40), (commands) => {
+test("§4.1 a client survives a save and hydrate cycle", async () => {
+  await fc.assert(
+    fc.asyncProperty(worldCommands(40), async (commands) => {
       using database = temporaryDatabase();
-      const world = runWorld(commands);
-      quiesce(world);
+      const world = await runWorld(commands);
+      await quiesce(world);
 
       const store = new SqliteClientStore(database.executor, propertySchema);
-      store.installSchema();
+      await store.installSchema();
       const client = deviceAt(world, 0).client;
-      store.save(client);
-      const hydrated = store.hydrate(client.scopeId, client.deviceId);
+      await store.save(client);
+      const hydrated = await store.hydrate(client.scopeId, client.deviceId);
 
       assert.deepEqual(localState(hydrated), localState(client), "rows did not survive the round trip");
       assert.deepEqual(hydrated.outbox, client.outbox, "the outbox did not survive the round trip");
@@ -75,11 +76,11 @@ test("§4.1 a client survives a save and hydrate cycle", () => {
   );
 });
 
-test("§5.2 the snapshot format round-trips every record", () => {
-  fc.assert(
-    fc.property(worldCommands(40), (commands) => {
-      const world = runWorld(commands);
-      quiesce(world);
+test("§5.2 the snapshot format round-trips every record", async () => {
+  await fc.assert(
+    fc.asyncProperty(worldCommands(40), async (commands) => {
+      const world = await runWorld(commands);
+      await quiesce(world);
       const snapshot = world.server.snapshot(world.scopeId);
 
       const lines = snapshotToNdjson(snapshot)
@@ -151,18 +152,18 @@ test("§5.2 snapshot input refuses non-finite cursors and malformed records", ()
   );
 });
 
-test("§5.2 the content address is a function of the records, not of their order", () => {
-  fc.assert(
-    fc.property(
+test("§5.2 the content address is a function of the records, not of their order", async () => {
+  await fc.assert(
+    fc.asyncProperty(
       worldCommands(30),
       fc.array(fc.integer({ min: 0, max: 500 }), { minLength: 16, maxLength: 16 }),
       fc.array(fc.integer({ min: 0, max: 500 }), { minLength: 16, maxLength: 16 }),
-      (commands, fieldKeys, rowKeys) => {
+      async (commands, fieldKeys, rowKeys) => {
         // Storage iteration order is an implementation detail — two servers holding the same
         // records may hold them in any order. If the digest disagreed, snapshot caching and
         // backup verification would both be defeated.
-        const world = runWorld(commands);
-        quiesce(world);
+        const world = await runWorld(commands);
+        await quiesce(world);
         const snapshot = world.server.snapshot(world.scopeId);
         const reordered: Snapshot = {
           ...snapshot,
@@ -182,17 +183,24 @@ test("§5.2 the content address is a function of the records, not of their order
   );
 });
 
+/**
+ * Both ports over the one connection: the server takes `connection`, the client store takes
+ * `executor`. A second `asyncSqlExecutor` over the same connection would hold a second
+ * transaction queue, and the two would issue overlapping `BEGIN`s.
+ */
 interface TemporaryDatabase extends Disposable {
-  readonly executor: SqliteExecutor;
+  readonly connection: SqliteExecutor;
+  readonly executor: AsyncSqlExecutor;
 }
 
 function temporaryDatabase(): TemporaryDatabase {
   const directory = mkdtempSync(join(tmpdir(), "weft-persistence-"));
-  const executor = openSqliteExecutor(join(directory, "weft.sqlite"));
+  const connection = openSqliteExecutor(join(directory, "weft.sqlite"));
   return {
-    executor,
+    connection,
+    executor: asyncSqlExecutor(connection),
     [Symbol.dispose]: () => {
-      executor.close();
+      connection.close();
       rmSync(directory, { recursive: true, force: true });
     },
   };

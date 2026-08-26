@@ -132,11 +132,11 @@ function Quarantine({
 
 function Composer({ store }: { readonly store: TodoStore }): ReactNode {
   const [title, setTitle] = useState("");
-  const add = (): void => {
+  const add = async (): Promise<void> => {
     const trimmed = title.trim();
     if (trimmed === "") return;
     const id = newTodoId();
-    store.todos.create(id, {
+    await store.todos.create(id, {
       title: trimmed,
       notes: "",
       done: false,
@@ -144,7 +144,7 @@ function Composer({ store }: { readonly store: TodoStore }): ReactNode {
       due_at: null,
       auto_delete_days: null,
     });
-    store.todoEvents.create(`event-${crypto.randomUUID()}`, {
+    await store.todoEvents.create(`event-${crypto.randomUUID()}`, {
       todo_id: id,
       kind: "added",
       actor: store.identity.label,
@@ -160,10 +160,10 @@ function Composer({ store }: { readonly store: TodoStore }): ReactNode {
         aria-label="New todo"
         onChange={(event) => setTitle(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === "Enter") add();
+          if (event.key === "Enter") void add();
         }}
       />
-      <button type="button" className="primary" onClick={add}>
+      <button type="button" className="primary" onClick={() => void add()}>
         Add
       </button>
     </div>
@@ -194,10 +194,10 @@ function TodoItem({
           className={todo.done ? "check on" : "check"}
           aria-label={todo.done ? `Mark ${todo.title} not done` : `Mark ${todo.title} done`}
           onClick={() => {
-            store.todos.update(todo.id, { done: !todo.done });
+            void store.todos.update(todo.id, { done: !todo.done });
             // Event-log ids are minted per write: two tabs ticking the same row at the same
             // moment are two entries in history, not one write racing another.
-            store.todoEvents.create(`event-${crypto.randomUUID()}`, {
+            void store.todoEvents.create(`event-${crypto.randomUUID()}`, {
               todo_id: todo.id,
               kind: todo.done ? "reopened" : "completed",
               actor: store.identity.label,

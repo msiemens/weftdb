@@ -42,8 +42,8 @@ function values(input: Record<string, WireValue>): Record<FieldName, WireValue> 
   return input;
 }
 
-function seedRow(target: WeftClient, id: string, title: string, notes = "line one\nline two"): void {
-  target.create(
+async function seedRow(target: WeftClient, id: string, title: string, notes = "line one\nline two"): Promise<void> {
+  await target.create(
     TODOS,
     rowId(id),
     values({ title, notes, done: false, rank: "a0", due_at: null, auto_delete_days: null }),
@@ -195,7 +195,7 @@ test("no history of edits and connection failures loses acknowledged work", asyn
         const sockets = [socketA, socketB] as const;
 
         await waitFor(() => sockets.every((socket) => socket.connected), "the sockets never connected");
-        seedRow(alpha, "todo-1", "seed");
+        await seedRow(alpha, "todo-1", "seed");
         await trySync(alpha, socketA);
         await trySync(beta, socketB);
 
@@ -205,7 +205,7 @@ test("no history of edits and connection failures loses acknowledged work", asyn
           switch (step.kind) {
             case "edit": {
               if (client?.getRow(TODOS, rowId("todo-1")) === undefined) break;
-              client.update(TODOS, rowId("todo-1"), values({ title: step.text }), txnId(`t-${Math.random()}`));
+              await client.update(TODOS, rowId("todo-1"), values({ title: step.text }), txnId(`t-${Math.random()}`));
               break;
             }
             case "editNotes": {
@@ -213,12 +213,17 @@ test("no history of edits and connection failures loses acknowledged work", asyn
               if (client === undefined || row === undefined) break;
               const lines = wireText(row.fields.get(NOTES) ?? "").split("\n");
               lines[step.line] = step.text;
-              client.update(TODOS, rowId("todo-1"), values({ notes: lines.join("\n") }), txnId(`n-${Math.random()}`));
+              await client.update(
+                TODOS,
+                rowId("todo-1"),
+                values({ notes: lines.join("\n") }),
+                txnId(`n-${Math.random()}`),
+              );
               break;
             }
             case "delete": {
               if (client?.getRow(TODOS, rowId("todo-1")) === undefined) break;
-              client.delete(TODOS, rowId("todo-1"), txnId(`d-${Math.random()}`));
+              await client.delete(TODOS, rowId("todo-1"), txnId(`d-${Math.random()}`));
               break;
             }
             case "sync": {
@@ -297,14 +302,14 @@ test("a session over the socket lands where the same session over HTTP does", as
             [overSocket, socket, "todo-socket"],
             [overHttp, http, "todo-http"],
           ] as const) {
-            seedRow(target, id, "seed");
+            await seedRow(target, id, "seed");
             await target.syncWith(transport, HASH);
             for (const [index, text] of edits.entries()) {
-              target.update(TODOS, rowId(id), values({ title: text }), txnId(`${id}-edit-${index}`));
+              await target.update(TODOS, rowId(id), values({ title: text }), txnId(`${id}-edit-${index}`));
               await target.syncWith(transport, HASH);
             }
             if (deleteAtEnd) {
-              target.delete(TODOS, rowId(id), txnId(`${id}-delete`));
+              await target.delete(TODOS, rowId(id), txnId(`${id}-delete`));
               await target.syncWith(transport, HASH);
             }
           }
@@ -354,7 +359,7 @@ test("many requests in flight at once each get their own answer", async () => {
 
         // Rows at known sequences, so each cursor has a different, checkable answer.
         for (let index = 0; index < 4; index += 1) {
-          seedRow(client, `todo-${index}`, `row ${index}`);
+          await seedRow(client, `todo-${index}`, `row ${index}`);
           await trySync(client, socket);
         }
 
@@ -441,7 +446,7 @@ test("a long-lived connection keeps working, sweep after sweep", async () => {
       running.relay.sockets.sweep();
       // A pong is a message, and Node's client answers pings on its own; the round trip below
       // is what proves the connection is still carrying traffic either way.
-      seedRow(client, `todo-${round}`, `round ${round}`);
+      await seedRow(client, `todo-${round}`, `round ${round}`);
       await trySync(client, socket);
       await new Promise((resolve) => setTimeout(resolve, 20));
       assert.equal(socket.connected, true, `the connection was dropped during round ${round}`);
@@ -487,7 +492,7 @@ test("an answer too big for one message survives being cut into pieces", async (
 
         // Prose long enough that the snapshot has to be chunked several times over.
         const long = "x".repeat(Math.ceil((CHUNK_BYTES * multiplier) / 4));
-        seedRow(alpha, "todo-1", "big", long);
+        await seedRow(alpha, "todo-1", "big", long);
         await alpha.syncWith(socketA, HASH);
 
         // Beta has never seen this scope, so its first pull is the whole thing.

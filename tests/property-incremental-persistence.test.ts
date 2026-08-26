@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import fc from "fast-check";
 import { rowId, txnId } from "weftdb/core";
-import { type SqlRow } from "weftdb/shared";
+import { asyncSqlExecutor, type AsyncSqlExecutor, type SqlRow } from "weftdb/shared";
 import type { WeftClient } from "weftdb/client";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { SqliteWeftServer } from "weftdb/server/sqlite";
@@ -35,22 +35,22 @@ import {
   worldCommands,
 } from "./property-model.ts";
 
-test("everything the server holds is everything the database holds", () => {
-  fc.assert(
-    fc.property(worldCommands(40), (commands) => {
+test("everything the server holds is everything the database holds", async () => {
+  await fc.assert(
+    fc.asyncProperty(worldCommands(40), async (commands) => {
       using database = temporaryDatabase();
-      const world = runWorld(commands, 3, (now) => new SqliteWeftServer(database.executor, now));
-      quiesce(world);
+      const world = await runWorld(commands, 3, (now) => new SqliteWeftServer(database.connection, now));
+      await quiesce(world);
       const server = world.server as SqliteWeftServer;
 
       assert.deepEqual(
-        storedFields(database.executor),
+        storedFields(database.connection),
         heldFields(server),
         "the fields table disagrees with the server",
       );
-      assert.deepEqual(storedRows(database.executor), heldRows(server), "the rows table disagrees with the server");
+      assert.deepEqual(storedRows(database.connection), heldRows(server), "the rows table disagrees with the server");
       assert.deepEqual(
-        storedDevices(database.executor),
+        storedDevices(database.connection),
         heldDevices(server),
         "the devices table disagrees with the server",
       );
@@ -59,13 +59,13 @@ test("everything the server holds is everything the database holds", () => {
   );
 });
 
-test("a reloaded server answers as the one that was running", () => {
-  fc.assert(
-    fc.property(worldCommands(40), (commands) => {
+test("a reloaded server answers as the one that was running", async () => {
+  await fc.assert(
+    fc.asyncProperty(worldCommands(40), async (commands) => {
       using database = temporaryDatabase();
-      const world = runWorld(commands, 3, (now) => new SqliteWeftServer(database.executor, now));
-      quiesce(world);
-      const reloaded = new SqliteWeftServer(database.executor, () => world.now);
+      const world = await runWorld(commands, 3, (now) => new SqliteWeftServer(database.connection, now));
+      await quiesce(world);
+      const reloaded = new SqliteWeftServer(database.connection, () => world.now);
 
       // Answering the same pull with the same records is what a device would notice, and it
       // covers the state a comparison of tables alone would not — the scope's cursor and floor.
@@ -80,25 +80,25 @@ test("a reloaded server answers as the one that was running", () => {
   );
 });
 
-test("everything a device holds is everything its database holds", () => {
+test("everything a device holds is everything its database holds", async () => {
   // The client store writes per changed row for the same reason the relay does, and carries the
   // same risk: a mutation nobody recorded is a row that silently stops being written, and the
   // device only finds out when it reloads.
-  fc.assert(
-    fc.property(worldCommands(40), (commands) => {
+  await fc.assert(
+    fc.asyncProperty(worldCommands(40), async (commands) => {
       using database = temporaryDatabase();
-      const world = runWorld(commands);
-      quiesce(world);
+      const world = await runWorld(commands);
+      await quiesce(world);
       const source = deviceAt(world, 0).client;
 
       const store = new SqliteClientStore(database.executor, propertySchema);
-      store.installSchema();
+      await store.installSchema();
       // Attach rather than save: from here on the client writes itself through on every change,
       // which is the incremental path rather than the opening full write.
-      store.attach(source);
-      for (const command of REPLAY) command(source);
+      await store.attach(source);
+      for (const command of REPLAY) await command(source);
 
-      const hydrated = store.hydrate(source.scopeId, source.deviceId);
+      const hydrated = await store.hydrate(source.scopeId, source.deviceId);
       assert.deepEqual(rowsOf(hydrated), rowsOf(source), "the stored rows are not the rows the device holds");
       assert.deepEqual(
         [...hydrated.tombstones.keys()].sort(),
@@ -112,16 +112,16 @@ test("everything a device holds is everything its database holds", () => {
 });
 
 /** Edits made after the store is attached, so every one of them takes the incremental path. */
-const REPLAY: readonly ((client: WeftClient) => void)[] = [
-  (client) => {
+const REPLAY: readonly ((client: WeftClient) => Promise<void>)[] = [
+  async (client) => {
     // A task, because that is the collection with a title to edit.
     const key = [...client.rows.keys()].find((candidate) => candidate.startsWith(`${TASKS}\0`));
     const row = key?.split("\0")[1];
     if (row === undefined) return;
-    client.update(TASKS, rowId(row), { [TITLE]: "edited after attach" }, txnId("replay-edit"));
+    await client.update(TASKS, rowId(row), { [TITLE]: "edited after attach" }, txnId("replay-edit"));
   },
-  (client) => {
-    client.create(
+  async (client) => {
+    await client.create(
       TASKS,
       rowId("attached-row"),
       {
@@ -135,8 +135,8 @@ const REPLAY: readonly ((client: WeftClient) => void)[] = [
       txnId("replay-create"),
     );
   },
-  (client) => {
-    client.delete(TASKS, rowId("attached-row"), txnId("replay-delete"));
+  async (client) => {
+    await client.delete(TASKS, rowId("attached-row"), txnId("replay-delete"));
   },
 ];
 
@@ -157,17 +157,24 @@ function rowsOf(client: WeftClient): readonly string[] {
     .sort();
 }
 
+/**
+ * Both ports over the one connection: the server and the table readers below take `connection`,
+ * the client store takes `executor`. A second `asyncSqlExecutor` over the same connection would
+ * hold a second transaction queue, and the two would issue overlapping `BEGIN`s.
+ */
 interface TemporaryDatabase extends Disposable {
-  readonly executor: SqliteExecutor;
+  readonly connection: SqliteExecutor;
+  readonly executor: AsyncSqlExecutor;
 }
 
 function temporaryDatabase(): TemporaryDatabase {
   const directory = mkdtempSync(join(tmpdir(), "weft-incremental-"));
-  const executor = openSqliteExecutor(join(directory, "weft.sqlite"));
+  const connection = openSqliteExecutor(join(directory, "weft.sqlite"));
   return {
-    executor,
+    connection,
+    executor: asyncSqlExecutor(connection),
     [Symbol.dispose]: () => {
-      executor.close();
+      connection.close();
       rmSync(directory, { recursive: true, force: true });
     },
   };

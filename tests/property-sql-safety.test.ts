@@ -12,7 +12,7 @@ import { rehydrateSnapshotNdjson, setSchemaHashSql } from "weftdb-cli";
 import { generateClientDdl, generateServerDdl } from "weftdb/codegen";
 import { defineSchema, S } from "weftdb/schema";
 import { SqliteClientStore } from "weftdb/client/sqlite";
-import type { SqlExecutor, SqlRow } from "weftdb/shared";
+import { asyncSqlExecutor, type SqlExecutor, type SqlRow } from "weftdb/shared";
 import { DatabaseSync } from "node:sqlite";
 
 const RUNS = Number(process.env["WEFT_SQL_RUNS"] ?? 200);
@@ -208,9 +208,9 @@ test("a schema written with hostile names generates DDL that means what it says"
   );
 });
 
-test("a name carrying a statement terminator survives the adapter's split", () => {
-  fc.assert(
-    fc.property(hostileArb, (field) => {
+test("a name carrying a statement terminator survives the adapter's split", async () => {
+  await fc.assert(
+    fc.asyncProperty(hostileArb, async (field) => {
       // The property above runs the whole script through `exec`, which no adapter can do: a
       // `SqlExecutor` takes one statement per call, so the stores divide the script first and
       // that split is what a hostile name actually reaches. It went unchecked, and a semicolon
@@ -225,7 +225,7 @@ test("a name carrying a statement terminator survives the adapter's split", () =
 
       const schema = defineSchema({ tasks: S.collection({ [field]: S.string() }) });
       using database = new DatabaseSync(":memory:");
-      new SqliteClientStore(executorOver(database), schema).installSchema();
+      await new SqliteClientStore(asyncSqlExecutor(executorOver(database)), schema).installSchema();
 
       assert.deepEqual(
         tables(database),

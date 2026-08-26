@@ -11,6 +11,7 @@ WeftDB provides:
 
 - Typed schema definitions.
 - Local client state with outbox, tombstones, conflict handling, and durable persistence.
+- A browser storage worker: SQLite over WebAssembly in one `SharedWorker` per origin, serving every tab.
 - A schema-blind relay/server.
 - Generated SQL, TypeScript types, mutators, query bindings, and React hooks.
 
@@ -79,20 +80,23 @@ const artifacts = generateArtifacts(schema);
 ```ts
 import { deviceId, fieldName, rowId, scopeId, tableName } from "weftdb/core";
 import { schemaHash } from "weftdb/schema";
-import { WeftClient } from "weftdb/client";
+import { inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { schema } from "./schema.ts";
 
 const server = new WeftServer();
 const client = new WeftClient(scopeId("user-1"), deviceId("laptop"), schema);
 
-client.create(tableName("tasks"), rowId("task-1"), {
+await client.create(tableName("tasks"), rowId("task-1"), {
   [fieldName("title")]: "Write the sync spec",
   [fieldName("notes")]: "Keep protocol state typed.",
 });
 
-client.sync(server, schemaHash(schema));
+await client.syncWith(inProcessTransport(server), schemaHash(schema));
 ```
+
+Every write returns a promise that resolves once the change has committed and rejects when it was
+refused. Reads — `getRow`, `listRows`, `isRowDirty` — stay synchronous.
 
 ## Run The Relay
 

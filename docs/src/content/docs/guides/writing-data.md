@@ -1,6 +1,6 @@
 ---
 title: Writing data
-description: Typed mutators, the outbox, transactions, why there is no optimistic layer, and writing a collection named at runtime.
+description: Typed mutators, awaiting a write, the outbox, transactions, why there is no optimistic layer, and collections named at runtime.
 sidebar:
   order: 4
 ---
@@ -19,9 +19,9 @@ depends on how it was declared:
 A `tasks` collection declared with `S.collection` gets all of them:
 
 ```ts
-tasks.create("task-1", { title: "Write the quick start", notes: "", rank: "a0" });
-tasks.update("task-1", { title: "Write the guide" });
-tasks.delete("task-1");
+await tasks.create("task-1", { title: "Write the quick start", notes: "", rank: "a0" });
+await tasks.update("task-1", { title: "Write the guide" });
+await tasks.delete("task-1");
 ```
 
 Each call is typed against the collection's own mutation input, generated from its fields, so a
@@ -30,12 +30,29 @@ than a write that is silently accepted and then never applied.
 
 ## What a mutator call does
 
-`tasks.update("task-1", { title: "Write the guide" })` runs as one synchronous unit inside
-`WeftClient.update`: it writes the new value into the row this client already holds, appends a
-`set` operation to the outbox, advances the row's `_weft_rev` counter, and notifies subscribers,
-which is what a [React](/guides/react/) component reads through. `create`, `delete`,
-and `restore` follow the same shape: a local write, an outbox entry, and a notification, all
-inside the one call.
+`tasks.update("task-1", { title: "Write the guide" })` returns a promise. `WeftClient.update`
+writes the new value into the row it holds, appends a `set` operation to the outbox, advances the
+row's `_weft_rev` counter, and writes the result through to the device's database. The promise
+resolves once that database write has committed. `create`, `delete`, `restore`, and `append`
+follow the same shape.
+
+## Awaiting a write
+
+A mutation whose promise resolves has been committed to the device's database. A mutation whose
+promise rejects was refused, and the rejection names which refusal it was: an event-log row that
+cannot be edited, a row that does not exist, a value SQLite cannot store. A caller that awaits the
+promise is told which of the two happened.
+
+A caller that does not await accepts a window in which the change is in the worker's memory and
+not yet in the file. Discarding the promise is something the call site has to write down, because
+`@typescript-eslint/no-floating-promises` refuses it otherwise:
+
+```ts
+void tasks.update("task-1", { title: "Write the guide" });
+```
+
+[React](/guides/react/) covers the same idiom inside an event handler, where there is nowhere to
+put an `await`.
 
 There is no method on `WeftClient` that writes to local storage without also queuing an outbox
 entry. `create`, `update`, `delete`, `restore`, and `append` are the only ways to change a row, and
@@ -53,8 +70,8 @@ read back immediately afterwards; nothing else holds a separate, pending version
 optimistic-update model, the one most readers arrive with, treats a local write as provisional
 until a server confirms it, with a rollback path for when it does not. weftdb has no such layer.
 Local storage is the client's actual state, kept current by each mutator call directly, so a write
-is finished, from the application's perspective, when that call returns. A later sync either
-leaves the write alone, because it was accepted, or moves it to quarantine, because it was
+is finished, from the application's perspective, when that call's promise resolves. A later sync
+either leaves the write alone, because it was accepted, or moves it to quarantine, because it was
 rejected. [Handling conflicts](/guides/handling-conflicts/) covers what an application does with a
 rejected write.
 
@@ -97,7 +114,7 @@ same way `create` does and then reclassifies its opening transaction so the rela
 append-only from then on:
 
 ```ts
-todoEvents.create(`event-${crypto.randomUUID()}`, {
+await todoEvents.create(`event-${crypto.randomUUID()}`, {
   todo_id: "task-1",
   kind: "completed",
   actor: "laptop",
@@ -130,9 +147,10 @@ for (const table of ["todos", "todo_events"] as const) {
 
 Values are typed from the schema, so a field the collection does not declare does not compile, and
 a field declared `S.json({ as })` carries the type it declares. `create`, `update`, and `delete`
-take the same optional `txnId` a generated mutator takes, and `create` appends where the collection
-is an event log. The name has to be one the schema declares, so a name read back out of
-`Object.keys(schema.collections)` as a `string` does not compile.
+return promises on the same terms as a generated mutator and take the same optional `txnId`, and
+`create` appends where the collection is an event log. `get` and `list` answer directly. The name
+has to be one the schema declares, so a name read back out of `Object.keys(schema.collections)` as
+a `string` does not compile.
 
 It accepts a field marked `merge: "immutable"`, which the generated mutation input leaves out and
 the relay applies like any other write. It takes no `notify` callback, so a component subscribed

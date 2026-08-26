@@ -223,7 +223,7 @@ test("mounting the page costs a bounded number of renders", async () => {
     `mounting committed ${page.commits()} times, which is not a mount but a loop settling down`,
   );
   await page.unmount();
-  browser.close();
+  await browser.close();
 });
 
 test("no sequence of things a person can do makes the page render without bound", async () => {
@@ -244,7 +244,7 @@ test("no sequence of things a person can do makes the page render without bound"
         }
       } finally {
         await page.unmount();
-        browser.close();
+        await browser.close();
       }
     }),
     { numRuns: RUNS, endOnFailure: true },
@@ -278,7 +278,7 @@ test("a second tab does not make the first one render without bound", async () =
       } finally {
         await first.unmount();
         await second.unmount();
-        browser.close();
+        await browser.close();
       }
     }),
     { numRuns: Math.max(6, Math.floor(RUNS / 2)), endOnFailure: true },

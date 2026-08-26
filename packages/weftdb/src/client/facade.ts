@@ -22,9 +22,9 @@ export type MutationInput<Collection extends CollectionDefinition> = {
 };
 
 export interface CollectionFacade<Collection extends CollectionDefinition> {
-  create(id: string, values: MutationInput<Collection>, txnId?: TxnId): void;
-  update(id: string, values: MutationInput<Collection>, txnId?: TxnId): void;
-  delete(id: string, txnId?: TxnId): void;
+  create(id: string, values: MutationInput<Collection>, txnId?: TxnId): Promise<void>;
+  update(id: string, values: MutationInput<Collection>, txnId?: TxnId): Promise<void>;
+  delete(id: string, txnId?: TxnId): Promise<void>;
   get(id: string): MaterializedRow | undefined;
   list(): MaterializedRow[];
 }
@@ -34,8 +34,8 @@ export interface CollectionFacade<Collection extends CollectionDefinition> {
  *
  * The target is structural, so this works over a `WeftClient` on the thread that renders and over a
  * `WeftClientMirror` standing in for one that lives in a worker. Nothing below cares which: a
- * mirror's `create` returns before the row exists, so `get` after a `create` answers only once the
- * worker's echo has arrived, and that is the whole of the difference.
+ * mirror's `create` resolves when the worker has committed the row, and `get` answers from the echo
+ * that arrives with it, so the two differ in how long the promise takes and in nothing else.
  */
 export class WeftDb<Schema extends SchemaDefinition> {
   readonly client: WeftDbTarget;

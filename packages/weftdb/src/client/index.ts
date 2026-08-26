@@ -18,15 +18,7 @@ import {
   type WeftOp,
   type WireValue,
 } from "weftdb/core";
-import type {
-  FieldRecord,
-  HandshakeRequest,
-  HandshakeResponse,
-  PullBatch,
-  PushAck,
-  Snapshot,
-  WeftServer,
-} from "weftdb/server";
+import type { FieldRecord, HandshakeRequest, HandshakeResponse, PullBatch, PushAck, Snapshot } from "weftdb/server";
 import type { SchemaDefinition } from "weftdb/schema";
 import type { AsyncSyncTransport, PushResult } from "./transport.ts";
 
@@ -66,9 +58,13 @@ export type QuarantinedOp = WeftOp & { rejectedAt: number; reason: Rejection["re
  * Somewhere durable for the client to write itself to. §4.1 makes local storage the client's
  * state rather than a cache of it, and §10 depends on that: unsent ops have to sit on disk
  * across a restart, with no session present, until sign-in lets them push.
+ *
+ * `save` resolves when the write has committed and rejects when it has not, and that promise is
+ * what every mutator hands back — so a caller that awaits a write is told which of the two
+ * happened, and the state a caller sees is one the database holds.
  */
 export interface ClientPersistence {
-  save(client: WeftClient): void;
+  save(client: WeftClient): Promise<void>;
 }
 
 export class WeftClient {
@@ -109,7 +105,12 @@ export class WeftClient {
     this.clock = new HlcClock(deviceId, now);
   }
 
-  create(tableName: TableName, rowId: RowId, values: Record<FieldName, WireValue>, txnId = randomTxnId()): void {
+  async create(
+    tableName: TableName,
+    rowId: RowId,
+    values: Record<FieldName, WireValue>,
+    txnId = randomTxnId(),
+  ): Promise<void> {
     const key = localKey(tableName, rowId);
     if (this.rows.has(key) || this.tombstones.has(key))
       throw new Error(`local row already exists: ${tableName}/${rowId}`);
@@ -139,21 +140,31 @@ export class WeftClient {
       if (BASE_FIELDS.has(field)) row.fields.set(field, value);
       this.pushOutbox(this.setOp(tableName, rowId, field, value, txnId));
     }
-    this.persist();
+    await this.persist();
   }
 
-  append(tableName: TableName, rowId: RowId, values: Record<FieldName, WireValue>, txnId = randomTxnId()): void {
-    this.create(tableName, rowId, values, txnId);
+  async append(
+    tableName: TableName,
+    rowId: RowId,
+    values: Record<FieldName, WireValue>,
+    txnId = randomTxnId(),
+  ): Promise<void> {
+    await this.create(tableName, rowId, values, txnId);
     const op = this.outbox.find((candidate) => candidate.txnId === txnId && candidate.kind === "create");
     if (op) {
       this.outboxAttempts.delete(opKey(op));
       op.kind = "append";
       this.outboxAttempts.set(opKey(op), 0);
     }
-    this.persist();
+    await this.persist();
   }
 
-  update(tableName: TableName, rowId: RowId, values: Record<FieldName, WireValue>, txnId = randomTxnId()): void {
+  async update(
+    tableName: TableName,
+    rowId: RowId,
+    values: Record<FieldName, WireValue>,
+    txnId = randomTxnId(),
+  ): Promise<void> {
     // Append-class rows accept no `set` after the transaction that created them, from any
     // client (§9.23). Queuing one locally would show a value that is never going to be real
     // and put the edit in quarantine when the server refuses it — the same reason delete and
@@ -183,10 +194,10 @@ export class WeftClient {
       this.pushOutbox(op);
     }
     this.recomputeDirty(tableName, rowId);
-    this.persist();
+    await this.persist();
   }
 
-  delete(tableName: TableName, rowId: RowId, txnId = randomTxnId()): void {
+  async delete(tableName: TableName, rowId: RowId, txnId = randomTxnId()): Promise<void> {
     // Append-class rows are neither deletable nor restorable, and the server would reject
     // the op anyway; refusing locally keeps the event log intact instead of removing a row
     // the push can never take back.
@@ -202,10 +213,15 @@ export class WeftClient {
       serverSeq: this.lastServerSeq,
     });
     this.pushOutbox({ scopeId: this.scopeId, tableName, rowId, kind: "delete", hlc, txnId });
-    this.persist();
+    await this.persist();
   }
 
-  restore(tableName: TableName, rowId: RowId, values: Record<FieldName, WireValue>, txnId = randomTxnId()): void {
+  async restore(
+    tableName: TableName,
+    rowId: RowId,
+    values: Record<FieldName, WireValue>,
+    txnId = randomTxnId(),
+  ): Promise<void> {
     this.rejectAppendClassLifecycle(tableName, "restored");
     const key = localKey(tableName, rowId);
     const created = wireText(values[fieldName("created")] ?? new Date(this.now()).toISOString());
@@ -238,7 +254,7 @@ export class WeftClient {
       // asked to rebase against is a value this device dropped when the delete came through.
       this.pushOutbox(this.setOp(tableName, rowId, field, value, txnId));
     }
-    this.persist();
+    await this.persist();
   }
 
   getRow(tableName: TableName, rowId: RowId): MaterializedRow | undefined {
@@ -263,7 +279,7 @@ export class WeftClient {
     return this.quarantine.filter((op) => op.txnId === txnId);
   }
 
-  discardQuarantinedTxn(txnId: TxnId): void {
+  async discardQuarantinedTxn(txnId: TxnId): Promise<void> {
     const discarded = this.quarantine.filter((op) => op.txnId === txnId);
     if (discarded.length === 0) return;
     this.quarantine.splice(0, this.quarantine.length, ...this.quarantine.filter((op) => op.txnId !== txnId));
@@ -272,10 +288,10 @@ export class WeftClient {
     // strand whatever they had already written locally — a row the server has never seen and
     // now never will — so the next sync re-derives this scope from a snapshot.
     this.resyncRequired = true;
-    this.persist();
+    await this.persist();
   }
 
-  retryQuarantinedTxn(txnId: TxnId): void {
+  async retryQuarantinedTxn(txnId: TxnId): Promise<void> {
     const retrying = this.quarantine.filter((op) => op.txnId === txnId);
     this.quarantine.splice(0, this.quarantine.length, ...this.quarantine.filter((op) => op.txnId !== txnId));
     for (const op of retrying) {
@@ -283,50 +299,29 @@ export class WeftClient {
       this.pushOutbox(wireOp);
       this.recomputeDirty(wireOp.tableName, wireOp.rowId);
     }
-    this.persist();
-  }
-
-  sync(server: WeftServer, schemaHash: SchemaHash): void {
-    const outcome = this.handshakeOutcome(server.handshake(this.handshakeRequest(schemaHash)));
-    if (outcome === "abort") return;
-    if (outcome === "resync") this.applySnapshot(server.snapshot(this.scopeId));
-    this.flush(server);
-    this.applyPull(server.pull(this.scopeId, this.lastServerSeq));
-    // The floor can advance between the handshake and the pull, so the incremental path
-    // reports when it cannot cover the gap and the session falls back to a snapshot.
-    if (this.resyncRequired) this.applySnapshot(server.snapshot(this.scopeId));
+    await this.persist();
   }
 
   /**
-   * The same session against a transport that answers over a network. Only the sequencing
-   * differs: every decision — what a handshake outcome means, what to do with a rejection,
-   * how a batch is applied — is shared with `sync`, so the two cannot drift apart in
-   * behaviour, only in how long they take.
+   * One sync: handshake, push what is queued, pull what is new, and re-derive from a snapshot
+   * where an incremental batch cannot describe what was missed. A relay on this thread reaches it
+   * through `inProcessTransport(server)`.
    */
   async syncWith(transport: AsyncSyncTransport, schemaHash: SchemaHash): Promise<void> {
     const outcome = this.handshakeOutcome(await transport.handshake(this.handshakeRequest(schemaHash)));
     if (outcome === "abort") return;
-    if (outcome === "resync") this.applySnapshot(await transport.snapshot(this.scopeId));
+    if (outcome === "resync") await this.applySnapshot(await transport.snapshot(this.scopeId));
     await this.flushWith(transport);
-    this.applyPull(await transport.pull(this.scopeId, this.lastServerSeq));
-    if (this.resyncRequired) this.applySnapshot(await transport.snapshot(this.scopeId));
+    await this.applyPull(await transport.pull(this.scopeId, this.lastServerSeq));
+    // The floor can advance between the handshake and the pull, so the incremental path
+    // reports when it cannot cover the gap and the session falls back to a snapshot.
+    if (this.resyncRequired) await this.applySnapshot(await transport.snapshot(this.scopeId));
   }
 
-  flush(server: WeftServer): void {
-    // Every exit from the push loop changes durable state — drained, re-stamped, rebased or
-    // quarantined — so the write-through happens once, whichever way it ends.
-    try {
-      let attempts = 0;
-      while (this.outbox.length > 0 && attempts < MAX_PUSH_ATTEMPTS) {
-        attempts += 1;
-        const sent = [...this.outbox];
-        if (this.applyPushResult(server.push(this.scopeId, sent), sent) === "stop") return;
-      }
-    } finally {
-      this.persist();
-    }
-  }
-
+  /**
+   * Sends the outbox. Every exit from the push loop changes durable state — drained, re-stamped,
+   * rebased or quarantined — so the write-through happens once, whichever way it ends.
+   */
   async flushWith(transport: AsyncSyncTransport): Promise<void> {
     try {
       let attempts = 0;
@@ -336,7 +331,7 @@ export class WeftClient {
         if (this.applyPushResult(await transport.push(this.scopeId, sent), sent) === "stop") return;
       }
     } finally {
-      this.persist();
+      await this.persist();
     }
   }
 
@@ -397,20 +392,20 @@ export class WeftClient {
     return "stop";
   }
 
-  applyPull(batch: PullBatch): void {
+  async applyPull(batch: PullBatch): Promise<void> {
     if (batch.tombstoneFloorSeq > this.lastServerSeq) {
       // Whatever this client missed below the floor has been hard-purged, so no incremental
       // batch can describe it. Advancing the cursor here would strand purged rows locally
       // forever; absence has to come from a snapshot instead (§1.5, §5.9).
       this.resyncRequired = true;
-      this.persist();
+      await this.persist();
       return;
     }
     this.applyBatch(batch);
-    this.persist();
+    await this.persist();
   }
 
-  applySnapshot(snapshot: Snapshot): void {
+  async applySnapshot(snapshot: Snapshot): Promise<void> {
     const present = new Set(snapshot.rows.map((row) => localKey(row.tableName, row.rowId)));
     for (const key of [...this.rows.keys()]) {
       const { tableName, rowId } = parseLocalKey(key);
@@ -424,7 +419,7 @@ export class WeftClient {
     }
     this.applyBatch(snapshot);
     this.resyncRequired = false;
-    this.persist();
+    await this.persist();
   }
 
   private applyBatch(batch: PullBatch): void {
@@ -830,12 +825,12 @@ export class WeftClient {
   }
 
   /**
-   * Writes the client through to its store. The naive strategy — rewrite the scope on every
-   * change — keeps durability obviously correct; making it incremental is an optimisation,
-   * not a semantic change.
+   * Writes the client through to its store, and settles when the database has taken it. The naive
+   * strategy — rewrite the scope on every change — keeps durability obviously correct; making it
+   * incremental is an optimisation, not a semantic change.
    */
-  private persist(): void {
-    this.persistence?.save(this);
+  private async persist(): Promise<void> {
+    await this.persistence?.save(this);
   }
 
   /** Records that a row's stored copy may be stale. Free when nothing is storing anything. */
@@ -848,6 +843,11 @@ export class WeftClient {
     const keys = [...this.touchedRows];
     this.touchedRows.clear();
     return keys;
+  }
+
+  /** Takes back keys a store drained and then could not write, so the next save owes them again. */
+  touchRows(keys: readonly string[]): void {
+    for (const key of keys) this.touchedRows.add(key);
   }
 
   private rejectAppendClassLifecycle(tableName: TableName, verb: string): void {
@@ -911,7 +911,7 @@ function materializeRow(row: LocalRow): MaterializedRow {
   });
 }
 
-export { httpTransport, RelayError } from "./transport.ts";
+export { httpTransport, inProcessTransport, RelayError } from "./transport.ts";
 export type { AsyncSyncTransport, FetchLike, HttpTransportOptions, PushResult } from "./transport.ts";
 export {
   connectSocketTransport,
@@ -949,8 +949,6 @@ export { compileOnlyKysely } from "./kysely.ts";
 export type { ScopedRowQuery } from "./kysely.ts";
 export { isDeltaPush, WorkerPortTransport } from "./worker.ts";
 export type {
-  WeftDurability,
-  WeftWorkerReady,
   WireRow,
   WorkerDelta,
   WorkerDeltaPush,
@@ -964,11 +962,7 @@ export type {
 export { serveWeftWorker, WeftWorkerHost } from "./worker-host.ts";
 export type { WorkerHostPortLike } from "./worker-host.ts";
 export { WeftClientMirror } from "./worker-mirror.ts";
-export { WEFT_NAMESPACE_PARAM, weftDatabaseKey } from "./database-key.ts";
-export { MultiTabCoordinator } from "./multitab.ts";
-export type { LockManagerLike, LockRequestOptionsLike, TabRole } from "./multitab.ts";
-export { serveWeftPortBroker, WeftBrokerClient } from "./broker.ts";
-export type { BrokeredPort, BrokerPortLike, WeftPortBroker } from "./broker.ts";
+export { weftDatabaseKey } from "./database-key.ts";
 export { Diff3EditorBuffer } from "./editor.ts";
 export type { BufferedRemoteEdit } from "./editor.ts";
 export { deviceIdForScope, openWeftDatabase, WeftOpenError } from "./open.ts";

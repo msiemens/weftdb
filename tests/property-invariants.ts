@@ -55,7 +55,11 @@ function lastRestampBefore(device: PropertyWorld["devices"][number], _world: Pro
 export interface WorldInvariant {
   readonly id: string;
   readonly title: string;
-  check(world: PropertyWorld): void;
+  /**
+   * A promise, because a check may drive the client: §5.5 repairs every device before the
+   * invariants after it read them, and a repair is a write.
+   */
+  check(world: PropertyWorld): void | Promise<void>;
 }
 
 /** Holds after every single command. */
@@ -607,17 +611,17 @@ export const SETTLED_INVARIANTS: readonly WorldInvariant[] = [
     // history does, and everything after it observes the repaired state.
     id: "§5.5",
     title: "discarding quarantined work and re-pulling leaves every device equal to the server",
-    check: (world) => {
+    check: async (world) => {
       // Until this point rows holding quarantined work are excluded from the convergence
       // check, because a diverged row is allowed to differ. Repairing them the way the UI
       // must offer (§5.5) brings every row back into the comparison.
       for (const device of world.devices) {
         for (const transaction of new Set(device.client.quarantine.map((op) => op.txnId))) {
-          device.client.discardQuarantinedTxn(transaction);
+          await device.client.discardQuarantinedTxn(transaction);
         }
-        device.client.applySnapshot(world.server.snapshot(world.scopeId));
+        await device.client.applySnapshot(world.server.snapshot(world.scopeId));
       }
-      quiesce(world);
+      await quiesce(world);
       assert.deepEqual(disagreements(world), [], "repaired devices still disagree with the server");
       for (const device of world.devices) {
         assert.deepEqual(device.client.quarantine, [], `${device.client.deviceId} still holds quarantined work`);
@@ -643,10 +647,10 @@ export const SETTLED_INVARIANTS: readonly WorldInvariant[] = [
   },
 ];
 
-export function assertWorldInvariants(world: PropertyWorld, context: string): void {
+export async function assertWorldInvariants(world: PropertyWorld, context: string): Promise<void> {
   for (const invariant of STEP_INVARIANTS) {
     try {
-      invariant.check(world);
+      await invariant.check(world);
     } catch (error) {
       throw new Error(`${invariant.id} (${invariant.title}) broke after ${context}: ${describe(error)}`, {
         cause: error,
@@ -655,10 +659,10 @@ export function assertWorldInvariants(world: PropertyWorld, context: string): vo
   }
 }
 
-export function assertSettledInvariants(world: PropertyWorld): void {
+export async function assertSettledInvariants(world: PropertyWorld): Promise<void> {
   for (const invariant of SETTLED_INVARIANTS) {
     try {
-      invariant.check(world);
+      await invariant.check(world);
     } catch (error) {
       throw new Error(`${invariant.id} (${invariant.title}) broke after settling: ${describe(error)}`, {
         cause: error,

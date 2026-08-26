@@ -86,3 +86,5 @@ CREATE TABLE IF NOT EXISTS "devices" (
   _weft_null_fields TEXT,
   PRIMARY KEY (scope_id, id)
 );
+
+CREATE INDEX IF NOT EXISTS "devices_label" ON "devices" (scope_id, "label");

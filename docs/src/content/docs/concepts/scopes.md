@@ -82,9 +82,9 @@ const client = new WeftClient(scopeId("user-1"), deviceId("laptop"), schema);
 
 A scope has many devices. A bearer token names one scope and one device inside it, so a scope with
 several devices in active use holds one token per device, all resolving to the same `scopeId`. The
-demo applications in `demos/shared/src/identity.ts` assign a random scope id to each visitor on
-first load and keep it in local storage, giving every visitor a scope of their own on a relay
-shared by many visitors. The id is generated from several words of `crypto.getRandomValues` output
+demo applications assign a random scope id to each visitor on first load and keep it in local
+storage, giving every visitor a scope of their own on a relay shared by many visitors. The id is
+generated from several words of `crypto.getRandomValues` output
 specifically because the relay accepts whatever scope a token names: a guessable id would let one
 visitor construct a token that reads another visitor's scope. An unguessable id raises the cost of
 guessing a scope. The relay performs no check beyond comparing the token's resolved scope, so a

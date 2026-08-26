@@ -1,29 +1,27 @@
 // The browser's storage port. A device's durable state is the one thing a local-first
-// application cannot afford to lose, and it has a second `SqlExecutor` under it — so the
-// question is not whether SQLite compiled to WebAssembly runs SQL, but whether it answers
-// exactly as the port every other suite is written against.
+// application cannot afford to lose, and it has a second SQLite under it — so the question is not
+// whether SQLite compiled to WebAssembly runs SQL, but whether it answers exactly as the port every
+// other suite is written against.
 //
 // The properties are therefore differential: the same generated history is saved through both
-// executors, and any disagreement between them is a defect in the new one.
+// executors, and any disagreement between them is a defect in the WebAssembly one.
+//
+// The build here is the one a browser loads. What Node cannot give it is IndexedDB, so the VFS is
+// `MemoryAsyncVFS` — the same author's, the same asynchronous interface, the same suspend inside a
+// page fault — and what differs is only where the bytes end up.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import fc from "fast-check";
-import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import { rowId, txnId } from "weftdb/core";
-import { type SqlValue } from "weftdb/shared";
+import { asyncSqlExecutor, type AsyncSqlExecutor, type AsyncSqlTransaction, type SqlValue } from "weftdb/shared";
 import type { WeftClient } from "weftdb/client";
 import { SqliteClientStore } from "weftdb/client/sqlite";
-import {
-  openMemorySqliteExecutor,
-  WasmSqliteUnavailableError,
-  openWebSqliteExecutor,
-  type Sqlite3Module,
-  type WasmSqliteExecutor,
-} from "weftdb/client/wasm-sqlite";
-import { openSqliteExecutor, type SqliteExecutor } from "weftdb/server/node-sqlite";
+import { openWebSqliteExecutor } from "weftdb/client/wasm-sqlite";
+import { openSqliteExecutor } from "weftdb/server/node-sqlite";
+import { memorySqlite } from "./storage-fixtures.ts";
 import {
   AUTO_DELETE_DAYS,
   BASE_NOTES,
@@ -41,25 +39,21 @@ import {
   worldCommands,
 } from "./property-model.ts";
 
-// Assigning the real module to the structural type is itself the check that the port describes
-// the library it is a port of; nothing below would fail if the two had drifted apart.
-const sqlite3: Sqlite3Module = await sqlite3InitModule();
-
 const RUNS = Math.min(SCENARIO_RUNS, 30);
 
-test("a client saved through the wasm executor hydrates exactly as one saved through node:sqlite", () => {
-  fc.assert(
-    fc.property(worldCommands(40), (commands) => {
-      using wasm = wasmStore();
-      using native = nativeStore();
-      const world = runWorld(commands);
-      quiesce(world);
+test("a client saved through the wasm executor hydrates exactly as one saved through node:sqlite", async () => {
+  await fc.assert(
+    fc.asyncProperty(worldCommands(40), async (commands) => {
+      await using wasm = await wasmStore();
+      await using native = await nativeStore();
+      const world = await runWorld(commands);
+      await quiesce(world);
       const client = deviceAt(world, 0).client;
 
-      wasm.store.save(client);
-      native.store.save(client);
-      const throughWasm = wasm.store.hydrate(client.scopeId, client.deviceId);
-      const throughNative = native.store.hydrate(client.scopeId, client.deviceId);
+      await wasm.store.save(client);
+      await native.store.save(client);
+      const throughWasm = await wasm.store.hydrate(client.scopeId, client.deviceId);
+      const throughNative = await native.store.hydrate(client.scopeId, client.deviceId);
 
       // Against each other, so a shared misunderstanding of the schema cannot pass, and against
       // the client, so agreeing on the wrong answer cannot either.
@@ -70,30 +64,33 @@ test("a client saved through the wasm executor hydrates exactly as one saved thr
   );
 });
 
-test("a value survives the wasm executor whatever is in it", () => {
-  // SQL text, NULs, lone surrogates and the rest reach storage as parameters and come back as
+test("a value survives the wasm executor whatever is in it", async () => {
+  // SQL text, lone surrogates and the rest reach storage as parameters and come back as
   // parameters. A round trip that mangles one is a row that silently changes when a tab is
   // reloaded — and prose fields are exactly where such characters turn up.
-  fc.assert(
-    fc.property(
+  await fc.assert(
+    fc.asyncProperty(
       fc.array(
         fc.tuple(
-          fc.string({ unit: "binary", maxLength: 40 }),
-          fc.oneof(fc.string({ unit: "binary", maxLength: 60 }), fc.constant(null)),
+          fc.string({ unit: "binary", maxLength: 40 }).filter((text) => !text.includes(NUL)),
+          fc.oneof(
+            fc.string({ unit: "binary", maxLength: 60 }).filter((text) => !text.includes(NUL)),
+            fc.constant(null),
+          ),
         ),
         {
           minLength: 1,
           maxLength: 8,
         },
       ),
-      (entries) => {
-        using wasm = wasmStore();
-        wasm.executor.run({ sql: "CREATE TABLE probe (key TEXT PRIMARY KEY, value TEXT)", parameters: [] });
+      async (entries) => {
+        await using wasm = await wasmStore();
+        await wasm.executor.run({ sql: "CREATE TABLE probe (key TEXT PRIMARY KEY, value TEXT)", parameters: [] });
         for (const [key, value] of dedupe(entries)) {
-          wasm.executor.run({ sql: "INSERT INTO probe (key, value) VALUES (?, ?)", parameters: [key, value] });
+          await wasm.executor.run({ sql: "INSERT INTO probe (key, value) VALUES (?, ?)", parameters: [key, value] });
         }
         const read = new Map(
-          wasm.executor.all<readonly [string, string | null]>({
+          await wasm.executor.all<readonly [string, string | null]>({
             sql: "SELECT key, value FROM probe",
             parameters: [],
             decode: (row) => [String(row["key"]), row["value"] === null ? null : String(row["value"])],
@@ -106,68 +103,101 @@ test("a value survives the wasm executor whatever is in it", () => {
   );
 });
 
-test("every SQL type the port declares comes back as the type it went in as", () => {
-  using wasm = wasmStore();
-  using native = nativeStore();
+test("a value this build would store truncated is refused rather than stored", async () => {
+  // `wa-sqlite` binds text by pointer with no length, so SQLite reads a bound string up to the
+  // first NUL. Storing it would put a note back on the next hydrate with everything after that
+  // character gone, and nothing anywhere would report it.
+  await using wasm = await wasmStore();
+  await wasm.executor.run({ sql: "CREATE TABLE probe (value TEXT)", parameters: [] });
+  await assert.rejects(
+    () => wasm.executor.run({ sql: "INSERT INTO probe (value) VALUES (?)", parameters: [`before${NUL}after`] }),
+    /NUL/u,
+    "a value that cannot be stored whole was accepted",
+  );
+  assert.deepEqual(
+    await wasm.executor.all<string>({
+      sql: "SELECT value FROM probe",
+      parameters: [],
+      decode: (row) => String(row["value"]),
+    }),
+    [],
+    "the refused value was stored anyway",
+  );
+});
+
+test("every SQL type the port declares comes back as the type it went in as", async () => {
+  await using wasm = await wasmStore();
+  await using native = await nativeStore();
   // Integers beyond what a double holds exactly are outside the two ports' common ground:
   // `node:sqlite` refuses to read them unless it was opened for BigInts, while the wasm build
   // hands them back as BigInt. Nothing weft stores goes there — every value on the wire is
   // JSON text — so the contract stops at what both answer alike.
   const values: readonly SqlValue[] = ["text", 0, -1.5, 2 ** 53 - 1, new Uint8Array([0, 1, 255]), null];
   for (const executor of [wasm.executor, native.executor]) {
-    executor.run({ sql: "CREATE TABLE probe (position INTEGER PRIMARY KEY, value BLOB)", parameters: [] });
+    await executor.run({ sql: "CREATE TABLE probe (position INTEGER PRIMARY KEY, value BLOB)", parameters: [] });
     for (const [position, value] of values.entries()) {
-      executor.run({ sql: "INSERT INTO probe (position, value) VALUES (?, ?)", parameters: [position, value] });
+      await executor.run({ sql: "INSERT INTO probe (position, value) VALUES (?, ?)", parameters: [position, value] });
     }
   }
-  const read = (executor: { all: WasmSqliteExecutor["all"] }): readonly string[] =>
+  const read = (executor: AsyncSqlExecutor): Promise<readonly string[]> =>
     executor.all<string>({
       sql: "SELECT value FROM probe ORDER BY position",
       parameters: [],
       decode: (row) => describe(row["value"] ?? null),
     });
-  assert.deepEqual(read(wasm.executor), read(native.executor));
-  assert.deepEqual(read(wasm.executor), values.map(describe));
+  assert.deepEqual(await read(wasm.executor), await read(native.executor));
+  assert.deepEqual(await read(wasm.executor), values.map(describe));
 });
 
-test("a transaction that throws leaves nothing behind, however deeply it was nested", () => {
-  fc.assert(
-    fc.property(fc.integer({ min: 1, max: 4 }), fc.integer({ min: 0, max: 3 }), (depth, writesPerLevel) => {
-      using wasm = wasmStore();
-      wasm.executor.run({ sql: "CREATE TABLE probe (value INTEGER)", parameters: [] });
-      const write = (): void => {
+test("a transaction that throws leaves nothing behind, however deeply it was nested", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.integer({ min: 1, max: 4 }), fc.integer({ min: 0, max: 3 }), async (depth, writesPerLevel) => {
+      await using wasm = await wasmStore();
+      await wasm.executor.run({ sql: "CREATE TABLE probe (value INTEGER)", parameters: [] });
+      const write = async (tx: AsyncSqlTransaction): Promise<void> => {
         for (let index = 0; index < writesPerLevel; index += 1) {
-          wasm.executor.run({ sql: "INSERT INTO probe (value) VALUES (?)", parameters: [index] });
+          await tx.run({ sql: "INSERT INTO probe (value) VALUES (?)", parameters: [index] });
         }
       };
-      const nest = (level: number): void => {
-        wasm.executor.transaction(() => {
-          write();
+      const nest = async (tx: AsyncSqlTransaction, level: number): Promise<void> => {
+        await tx.transaction(async (inner) => {
+          await write(inner);
           if (level === depth) throw new Error("rolled back");
-          nest(level + 1);
+          await nest(inner, level + 1);
         });
       };
 
-      assert.throws(() => nest(1), /rolled back/u);
-      assert.equal(count(wasm.executor), 0, "a rolled back transaction left rows behind");
+      await assert.rejects(() => wasm.executor.transaction((tx) => nest(tx, 1)), /rolled back/u);
+      assert.equal(await count(wasm.executor), 0, "a rolled back transaction left rows behind");
 
       // And the connection is still usable afterwards: a rollback that left the database in a
       // transaction would fail the next write instead of this one.
-      wasm.executor.transaction(write);
-      assert.equal(count(wasm.executor), writesPerLevel);
+      await wasm.executor.transaction(write);
+      assert.equal(await count(wasm.executor), writesPerLevel);
     }),
     { numRuns: 40 },
   );
 });
 
-test("a save that fails part way through leaves the previous state intact", () => {
+test("a database is opened with a page cache large enough to hold an ordinary device", async () => {
+  // SQLite's own default is 2 MB and a 10,000-row table is around 3.5 MB, so a device of ordinary
+  // size would answer a `where` and an `order by` out of storage on every page it touched. It is
+  // also what a journal has to fit inside for a VFS to commit a write in one batch.
+  await using wasm = await wasmStore();
+  assert.equal(await pragma(wasm.executor, "cache_size"), -16_384);
+
+  await using narrow = await wasmStore({ cacheSizeKib: 512 });
+  assert.equal(await pragma(narrow.executor, "cache_size"), -512, "the option did not reach the connection");
+});
+
+test("a save that fails part way through leaves the previous state intact", async () => {
   // The store writes a save as one transaction. If the tab is closed, the quota is exceeded or
   // a constraint is violated half way through, the device must come back to the state it last
   // completed rather than to half of two of them.
-  using wasm = wasmStore();
-  const world = runWorld([]);
+  await using wasm = await wasmStore();
+  const world = await runWorld([]);
   const client = deviceAt(world, 0).client;
-  client.create(
+  await client.create(
     TASKS,
     rowId("row-1"),
     {
@@ -180,55 +210,95 @@ test("a save that fails part way through leaves the previous state intact", () =
     },
     txnId("txn-1"),
   );
-  wasm.store.save(client);
-  const before = state(wasm.store.hydrate(client.scopeId, client.deviceId));
+  await wasm.store.save(client);
+  const before = state(await wasm.store.hydrate(client.scopeId, client.deviceId));
 
-  client.update(TASKS, rowId("row-1"), { [TITLE]: "second" }, txnId("txn-2"));
-  assert.throws(() =>
-    wasm.executor.transaction(() => {
-      wasm.store.save(client);
-      throw new Error("interrupted");
-    }),
-  );
+  await client.update(TASKS, rowId("row-1"), { [TITLE]: "second" }, txnId("txn-2"));
+  wasm.refuseAfter(2);
+  await assert.rejects(() => wasm.store.save(client), /interrupted/u);
 
-  assert.deepEqual(state(wasm.store.hydrate(client.scopeId, client.deviceId)), before);
+  assert.deepEqual(state(await wasm.store.hydrate(client.scopeId, client.deviceId)), before);
 });
 
-test("persistent storage is refused rather than faked when the browser cannot provide it", async () => {
-  // Falling back to memory would be a store that works in every test and loses everything on
-  // the first reload, which is the worst possible way for this to fail.
-  await assert.rejects(
-    () => openWebSqliteExecutor(sqlite3, { path: "weft.sqlite3" }),
-    (error: unknown) => error instanceof WasmSqliteUnavailableError,
-  );
-});
-
-interface Store<Executor> extends Disposable {
-  readonly executor: Executor;
+interface Store extends AsyncDisposable {
+  readonly executor: AsyncSqlExecutor;
   readonly store: SqliteClientStore;
+  /** Makes the store's next save throw after this many statements, wherever it has got to. */
+  refuseAfter(statements: number): void;
 }
 
-function wasmStore(): Store<WasmSqliteExecutor> {
-  const executor = openMemorySqliteExecutor(sqlite3);
-  const store = new SqliteClientStore(executor, propertySchema);
-  store.installSchema();
-  return { executor, store, [Symbol.dispose]: () => executor.close() };
-}
+/** A database in the build a browser loads, under a VFS of its own so no two of them share a file. */
+/** One WebAssembly module for the whole file, because each one is an instance and its heap. */
+const build = memorySqlite();
 
-function nativeStore(): Store<SqliteExecutor> {
-  const directory = mkdtempSync(join(tmpdir(), "weft-wasm-"));
-  const executor = openSqliteExecutor(join(directory, "weft.sqlite"));
+async function wasmStore(options: { readonly cacheSizeKib?: number } = {}): Promise<Store> {
+  const opened = await openWebSqliteExecutor(await build(), {
+    path: "weft.sqlite3",
+    name: `probe-${String(probes++)}`,
+    ...options,
+  });
+  let countdown = Number.POSITIVE_INFINITY;
+  const executor: AsyncSqlExecutor = {
+    all: (statement) => opened.all(statement),
+    get: (statement) => opened.get(statement),
+    run: (statement) => opened.run(statement),
+    transaction: (body) =>
+      opened.transaction((tx) =>
+        body({
+          all: (statement) => tx.all(statement),
+          get: (statement) => tx.get(statement),
+          run: async (statement) => {
+            countdown -= 1;
+            if (countdown < 0) throw new Error("interrupted");
+            await tx.run(statement);
+          },
+          transaction: (nested) => tx.transaction(nested),
+        }),
+      ),
+  };
   const store = new SqliteClientStore(executor, propertySchema);
-  store.installSchema();
+  await store.installSchema();
   return {
     executor,
     store,
-    [Symbol.dispose]: () => {
-      executor.close();
+    refuseAfter: (statements) => {
+      countdown = statements;
+    },
+    [Symbol.asyncDispose]: () => opened.close(),
+  };
+}
+
+async function nativeStore(): Promise<Store> {
+  const directory = mkdtempSync(join(tmpdir(), "weft-wasm-"));
+  const file = openSqliteExecutor(join(directory, "weft.sqlite"));
+  const executor = asyncSqlExecutor(file);
+  const store = new SqliteClientStore(executor, propertySchema);
+  await store.installSchema();
+  return {
+    executor,
+    store,
+    refuseAfter: () => undefined,
+    [Symbol.asyncDispose]: async () => {
+      file.close();
       rmSync(directory, { recursive: true, force: true });
     },
   };
 }
+
+let probes = 0;
+
+/** What the connection says about itself, so a claim about it is read back rather than assumed. */
+async function pragma(executor: AsyncSqlExecutor, name: string): Promise<number> {
+  const value = await executor.get<number>({
+    sql: `PRAGMA ${name}`,
+    parameters: [],
+    decode: (row) => Number(Object.values(row)[0]),
+  });
+  return value ?? Number.NaN;
+}
+
+/** The character SQLite reads a bound text value up to and no further. */
+const NUL = String.fromCodePoint(0);
 
 /** Everything a store is responsible for preserving, in a form two clients compare by. */
 function state(client: WeftClient): string {
@@ -265,13 +335,13 @@ function describe(value: SqlValue): string {
   return `${typeof value}:${String(value)}`;
 }
 
-function count(executor: WasmSqliteExecutor): number {
+async function count(executor: AsyncSqlExecutor): Promise<number> {
   return (
-    executor.get<number>({
+    (await executor.get<number>({
       sql: "SELECT count(*) AS total FROM probe",
       parameters: [],
       decode: (row) => Number(row["total"]),
-    }) ?? 0
+    })) ?? 0
   );
 }
 

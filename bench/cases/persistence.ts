@@ -2,10 +2,11 @@
 // it back at startup. §4.1 makes that file the client's state rather than a cache of it, so the
 // write-through happens on every mutation — which is what the per-edit case measures.
 import { deviceId } from "weftdb/core";
+import { asyncSqlExecutor } from "weftdb/shared";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
 import { SCOPE, TITLE, TODOS, schema, syncedClient, tempDirectory, todoId, updateTxn } from "../fixtures.ts";
-import { consume, duration, repeat, type BenchConfig, type BenchGroup, type CaseResult } from "../harness.ts";
+import { consume, duration, repeatAsync, type BenchConfig, type BenchGroup, type CaseResult } from "../harness.ts";
 
 const GROUP = "Persistence";
 
@@ -20,26 +21,30 @@ export const persistence: BenchGroup = {
       file += 1;
       return directory.file(`client-${file}.sqlite`);
     };
-    return config.persistenceSizes.flatMap((rows) => [
-      saveCase(config, rows, nextPath),
-      editCase(config, rows, nextPath),
-      hydrateCase(config, rows, nextPath),
-    ]);
+    const results: CaseResult[] = [];
+    for (const rows of config.persistenceSizes) {
+      results.push(
+        await saveCase(config, rows, nextPath),
+        await editCase(config, rows, nextPath),
+        await hydrateCase(config, rows, nextPath),
+      );
+    }
+    return results;
   },
 };
 
 /** One full write-through of a scope, which is what a single mutation triggers. */
-function saveCase(config: BenchConfig, rows: number, nextPath: () => string): CaseResult {
-  const client = syncedClient(rows);
-  const samples = repeat(() => {
-    using executor = openSqliteExecutor(nextPath());
-    const store = new SqliteClientStore(executor, schema);
-    store.installSchema();
+async function saveCase(config: BenchConfig, rows: number, nextPath: () => string): Promise<CaseResult> {
+  const client = await syncedClient(rows);
+  const samples = await repeatAsync(async () => {
+    using file = openSqliteExecutor(nextPath());
+    const store = new SqliteClientStore(asyncSqlExecutor(file), schema);
+    await store.installSchema();
     // The first save writes into empty tables and has nothing to delete, which is not what a
     // save costs in a running application. What is measured is the one after it.
-    store.save(client);
+    await store.save(client);
     const start = performance.now();
-    store.save(client);
+    await store.save(client);
     return performance.now() - start;
   }, config.heavyBudget);
   return duration(
@@ -54,18 +59,18 @@ function saveCase(config: BenchConfig, rows: number, nextPath: () => string): Ca
 }
 
 /** One edit on a device whose store is attached — the write-through a keystroke pays for. */
-function editCase(config: BenchConfig, rows: number, nextPath: () => string): CaseResult {
-  const client = syncedClient(rows);
+async function editCase(config: BenchConfig, rows: number, nextPath: () => string): Promise<CaseResult> {
+  const client = await syncedClient(rows);
   const row = todoId(0);
   let counter = 0;
-  const samples = repeat(() => {
-    using executor = openSqliteExecutor(nextPath());
-    const store = new SqliteClientStore(executor, schema);
-    store.installSchema();
-    store.attach(client);
+  const samples = await repeatAsync(async () => {
+    using file = openSqliteExecutor(nextPath());
+    const store = new SqliteClientStore(asyncSqlExecutor(file), schema);
+    await store.installSchema();
+    await store.attach(client);
     counter += 1;
     const start = performance.now();
-    client.update(TODOS, row, { [TITLE]: `title ${counter}` }, updateTxn(row));
+    await client.update(TODOS, row, { [TITLE]: `title ${counter}` }, updateTxn(row));
     return performance.now() - start;
   }, config.heavyBudget);
   return duration(
@@ -80,14 +85,14 @@ function editCase(config: BenchConfig, rows: number, nextPath: () => string): Ca
 }
 
 /** Reading the whole client back, as a cold start does. */
-function hydrateCase(config: BenchConfig, rows: number, nextPath: () => string): CaseResult {
+async function hydrateCase(config: BenchConfig, rows: number, nextPath: () => string): Promise<CaseResult> {
   const path = nextPath();
-  populate(path, rows);
-  const samples = repeat(() => {
-    using executor = openSqliteExecutor(path);
-    const store = new SqliteClientStore(executor, schema);
+  await populate(path, rows);
+  const samples = await repeatAsync(async () => {
+    using file = openSqliteExecutor(path);
+    const store = new SqliteClientStore(asyncSqlExecutor(file), schema);
     const start = performance.now();
-    const hydrated = store.hydrate(SCOPE, DEVICE);
+    const hydrated = await store.hydrate(SCOPE, DEVICE);
     const elapsed = performance.now() - start;
     if (hydrated.rows.size !== rows) throw new Error(`hydrated ${hydrated.rows.size} rows, expected ${rows}`);
     consume(hydrated.outbox.length);
@@ -105,9 +110,9 @@ function hydrateCase(config: BenchConfig, rows: number, nextPath: () => string):
 }
 
 /** A file holding a device that has synced, so what hydrate reads back is rows rather than outbox. */
-function populate(path: string, rows: number): void {
-  using executor = openSqliteExecutor(path);
-  const store = new SqliteClientStore(executor, schema);
-  store.installSchema();
-  store.save(syncedClient(rows));
+async function populate(path: string, rows: number): Promise<void> {
+  using file = openSqliteExecutor(path);
+  const store = new SqliteClientStore(asyncSqlExecutor(file), schema);
+  await store.installSchema();
+  await store.save(await syncedClient(rows));
 }

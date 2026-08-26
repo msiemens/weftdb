@@ -21,11 +21,12 @@ client in — because the subpaths are the unit of import, not the package.
 ```
 weftdb                      runtime
   /core                     HLC, merge functions, diff3, fractional index, protocol types
-  /shared                   hashing, the wire-value codec, the SqlExecutor port
+  /shared                   hashing, the wire-value codec, the two SqlExecutor ports
   /schema                   schema DSL, merge annotations, type-level inference
   /client                   sync client, outbox, subscription engine
-  /client/sqlite            the SqlExecutor port
-  /client/wasm-sqlite       OPFS SQLite in a dedicated worker
+  /client/sqlite            the client store over the asynchronous port
+  /client/wasm-sqlite       WebAssembly SQLite over an application-chosen VFS
+  /client/worker-entry      the SharedWorker that holds every database an origin has open
   /server                   field store, snapshot generation, skew + scope enforcement
   /server/relay             the HTTP surface as a Request -> Response handler
   /server/serve             a Node listener around it, plus its configuration
@@ -63,10 +64,10 @@ project before committing publicly.
 There is a SQLite database on the client _and_ on the server. They are not replicas and
 they do not share a schema.
 
-**Client SQLite** (WASM, OPFS-backed) holds real, typed domain tables. Every UI read hits
-it; every write lands in it first and is durable immediately, online or not. It is the
-source of truth for the running app, which is what makes a device usable after six months
-without connectivity.
+**Client SQLite** (WASM, over IndexedDB) holds real, typed domain tables. Every UI read hits
+it; every write lands in it first and is durable as soon as the write it made has
+committed, online or not. It is the source of truth for the running app, which is what
+makes a device usable after six months without connectivity.
 
 **Server SQLite** holds a **generic field store** — an EAV table of
 `(scope_id, table, row_id, field) → (value, hlc, server_seq)`. It has no domain tables, no
@@ -92,9 +93,25 @@ for backup verification.
 
 SQLite on the client rather than IndexedDB because the data model is relational, because
 real transactions make the `txn_id` atomicity in §5.3 meaningful, and because the same
-compiled query text runs against `better-sqlite3` in tests — which matters given how much
-weight the property tests carry. The cost is that OPFS `SyncAccessHandle` is worker-only,
-which shapes all of §8.
+compiled query text runs against `node:sqlite` in tests — which matters given how much
+weight the property tests carry. IndexedDB is underneath it as a block store: `IDBMirrorVFS`
+holds an open database in memory and mirrors it there. The cost is that such a VFS is
+asynchronous, which is what makes the whole write path a promise and shapes all of §8. It is
+also a ceiling: a database that outgrows the heap has nowhere to go, and `IDBBatchAtomicVFS`
+is the same author's slower VFS with no such bound, reachable by changing the one function an
+application hands `serveWeftStorageWorker`.
+
+`IDBMirrorVFS` is not on npm. `wa-sqlite@1.0.0` is the only published version, from January
+2024, and its `src/examples/` does not contain the file; master's does. So the dependency is
+the GitHub repository pinned to commit `2bf1c59d89eb6497535a4217bc62fec68a0bb994` (10 August
+2026), which is workable because that repository commits `dist/` — the build needs no
+emscripten toolchain. Pin the commit and never a tag or a branch: the whole device storage
+layer sits downstream of it. This repository installs it under the alias `wa-sqlite-master`
+because `bench/browser/vfs/` measures the published `wa-sqlite@1.0.0` beside it; an
+application depends on it as `wa-sqlite`. The author's own framing of what is being depended
+on, verbatim: "These examples are intended to help developers get started with writing
+extensions, and to experiment with interesting approaches and techniques. Using them as-is in
+production is not prohibited but that isn't their primary purpose."
 
 ### 1.2 Tables are the source of truth; there is no op log
 
@@ -323,6 +340,15 @@ has already purged.
 
 Every domain table is keyed `(scope_id, id)`. A row id is unique within its scope and nowhere
 else, so one database holding two scopes has two rows legitimately sharing an id.
+
+Local storage is the client's state rather than a cache of it, and a mutator's promise is
+where that becomes something a caller can act on: it resolves once the write has committed
+and rejects when the write was refused, naming which. A caller that keeps the promise knows
+which of the two happened. A caller that discards it accepts the window between the client
+applying the change in memory and the file taking it — a worker killed in that window loses
+the change, and nothing outside the worker ever saw it, so the loss is indistinguishable
+from the mutation never having been made. `no-floating-promises` is what makes discarding it
+something a call site has to write down.
 
 ### 4.2 Server
 
@@ -815,14 +841,22 @@ The query result is **frozen during an active drag**, pending updates applied on
 
 ### 8.7 Multi-tab — required for MVP
 
-`SyncAccessHandle` is exclusive, so a second tab throws on open. That is Ctrl-click, not an
-edge case, and it is not deferrable.
+A second tab is Ctrl-click, not an edge case, and it is not deferrable.
 
-**Web Locks leader election.** The leader tab owns the OPFS handle and the worker;
-non-leader tabs proxy all DB access to the leader over `BroadcastChannel`. On leader death
-the lock releases and another tab acquires it, reopening the database. A degraded fallback
-banner ("already open in another tab") must exist for the window where the leader is dying
-and no successor has acquired.
+**One `SharedWorker` per origin.** It is identified by its script URL, so every tab that
+names the same one is served by the same instance, and the browser is what makes that
+exclusive. The worker holds a `WeftClient` per `(namespace, scope)`, and each tab reaches
+the client it asked for over a `MessagePort` of its own — hydrating, mutating and watching
+all in one hop, with no tab on another tab's path.
+
+A port arrives carrying no statement of which database it wants. The first request on it is
+a `hydrate` carrying the scope, the device and the namespace, and that is what routes it.
+
+A worker outlives every tab of its origin, so both directions of the lifetime have to be
+handled: a tab that leaves releases its registrations with a `disconnect`, and the worker
+drops a database once its last tab has gone. A browser that stops the worker under memory
+pressure closes every port at once; the page reconnects, rejects what was in flight, and
+re-hydrates.
 
 ---
 
@@ -919,7 +953,8 @@ random interleaving of snapshot resync and incremental pull, random rejection in
 39. A row whose `_weft_rev` is unchanged yields an identical object reference.
 40. Worker-computed deltas applied to the previous result equal a full re-fetch.
 41. No notification is emitted mid-transaction.
-42. Under leader election, exactly one tab holds the OPFS handle at any instant.
+42. A statement issued while a transaction is open on the connection runs after it, and
+    survives that transaction rolling back.
 
 ### Schema lifecycle
 

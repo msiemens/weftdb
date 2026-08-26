@@ -76,6 +76,8 @@ CREATE TABLE IF NOT EXISTS "todos" (
   PRIMARY KEY (scope_id, id)
 );
 
+CREATE INDEX IF NOT EXISTS "todos_rank" ON "todos" (scope_id, "rank");
+
 CREATE TABLE IF NOT EXISTS "todo_events" (
   "id" TEXT NOT NULL,
   "scope_id" TEXT NOT NULL,
@@ -95,3 +97,5 @@ CREATE TABLE IF NOT EXISTS "todo_events" (
   _weft_null_fields TEXT,
   PRIMARY KEY (scope_id, id)
 );
+
+CREATE INDEX IF NOT EXISTS "todo_events_kind" ON "todo_events" (scope_id, "kind");

@@ -25,14 +25,15 @@ export const schema = defineSchema({
   ),
   issues: S.collection(
     {
-      project_id: S.string(),
+      // The rail narrows the list to one project, so this is what the statement reads.
+      project_id: S.string({ index: true }),
       title: S.string(),
       // Prose merges line by line, so two tabs editing different lines both keep their work.
       body: S.string({ merge: "diff3" }),
       // A fixed set: the generated row type is the union, the mutators refuse anything else, and
       // the column gets a CHECK that says the same thing to the database.
-      status: S.enum(["open", "started", "closed"]),
-      rank: S.string({ merge: "fracIndex" }),
+      status: S.enum(["open", "started", "closed"], { index: true }),
+      rank: S.string({ merge: "fracIndex", index: true }),
     },
     {
       project: S.hasOne("projects", "project_id", "id"),
@@ -44,7 +45,8 @@ export const schema = defineSchema({
   // rather than only for this page, and the generated mutators carry `create` alone.
   comments: S.eventLog(
     {
-      issue_id: S.string(),
+      // A thread is one issue's comments, which is what every read of this collection asks for.
+      issue_id: S.string({ index: true }),
       body: S.string(),
       // The thread's order. `created` cannot carry it: it is stamped from the client's clock, so
       // comments written in one pass share a millisecond, and ordering by a value several rows

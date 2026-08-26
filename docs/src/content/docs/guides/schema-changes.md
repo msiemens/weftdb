@@ -43,12 +43,11 @@ normally on every open, and nothing moves until its code changes.
 ## Reconciling the database on open
 
 Before a device's first sync after an upgrade, its local SQLite database only has the columns an
-earlier schema created. `SqliteClientStore.installSchema()` runs the generated DDL for any new
-tables, then, per collection, `generateClientAddMissingColumnDdl()` issues an `ALTER TABLE ADD
-COLUMN` statement for whatever the current schema expects and the table lacks: the field itself, its
-`_weft_hlc_<field>` stamp column, and, for a field whose [merge annotation](/concepts/merge-model/)
-is `diff3`, its `_weft_base_<field>` column. This runs on every open, so a device that skipped
-several schema versions while offline catches up in one pass.
+earlier schema created. `SqliteClientStore.installSchema()` creates any table the current schema
+adds, and adds whatever column that schema expects and an existing table lacks. That covers the
+field itself, its `_weft_hlc_<field>` stamp column, and, for a field whose
+[merge annotation](/concepts/merge-model/) is `diff3`, its `_weft_base_<field>` column. This runs on
+every open, so a device that skipped several schema versions while offline catches up in one pass.
 
 Reconciliation only ever adds a column. It does not compare an existing column's stored type
 against the field's current one, and it never drops or renames a column.

@@ -14,7 +14,7 @@ import {
   type WireValue,
   type FieldName,
 } from "weftdb/core";
-import { httpTransport, WeftClient, type AsyncSyncTransport, type FetchLike } from "weftdb/client";
+import { type AsyncSyncTransport, type FetchLike, httpTransport, inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { createRelayHandler, type TokenVerifier } from "weftdb/server/relay";
 import { schemaHash } from "weftdb/schema";
@@ -48,8 +48,8 @@ function values(input: Record<string, WireValue>): Record<FieldName, WireValue> 
   return input;
 }
 
-function newTodo(target: WeftClient, id: string, title: string, notes = ""): void {
-  target.create(
+async function newTodo(target: WeftClient, id: string, title: string, notes = ""): Promise<void> {
+  await target.create(
     TODOS,
     rowId(id),
     values({ title, notes, done: false, rank: "a0", due_at: null, auto_delete_days: null }),
@@ -62,7 +62,7 @@ test("two devices converge through the relay's HTTP surface", async () => {
   const alpha = client("alpha");
   const beta = client("beta");
 
-  newTodo(alpha, "todo-1", "buy milk", "Monday: nothing yet\nTuesday: nothing yet");
+  await newTodo(alpha, "todo-1", "buy milk", "Monday: nothing yet\nTuesday: nothing yet");
   await alpha.syncWith(relayTransport(server, ALPHA), HASH);
   await beta.syncWith(relayTransport(server, BETA), HASH);
 
@@ -74,17 +74,22 @@ test("edits to different note lines merge across the wire", async () => {
   const server = new WeftServer();
   const alpha = client("alpha");
   const beta = client("beta");
-  newTodo(alpha, "todo-1", "plan", "Monday: nothing yet\nTuesday: nothing yet");
+  await newTodo(alpha, "todo-1", "plan", "Monday: nothing yet\nTuesday: nothing yet");
   await alpha.syncWith(relayTransport(server, ALPHA), HASH);
   await beta.syncWith(relayTransport(server, BETA), HASH);
 
-  alpha.update(
+  await alpha.update(
     TODOS,
     rowId("todo-1"),
     values({ notes: "Monday: draft the proposal\nTuesday: nothing yet" }),
     txnId("a1"),
   );
-  beta.update(TODOS, rowId("todo-1"), values({ notes: "Monday: nothing yet\nTuesday: review with Sam" }), txnId("b1"));
+  await beta.update(
+    TODOS,
+    rowId("todo-1"),
+    values({ notes: "Monday: nothing yet\nTuesday: review with Sam" }),
+    txnId("b1"),
+  );
 
   await alpha.syncWith(relayTransport(server, ALPHA), HASH);
   await beta.syncWith(relayTransport(server, BETA), HASH);
@@ -109,13 +114,13 @@ test("a rejection survives the wire and quarantines the diverged work", async ()
   const server = new WeftServer(clock);
   const alpha = client("alpha", clock);
   const beta = client("beta", clock);
-  newTodo(alpha, "todo-1", "plan");
+  await newTodo(alpha, "todo-1", "plan");
   await alpha.syncWith(relayTransport(server, ALPHA), HASH);
   await beta.syncWith(relayTransport(server, BETA), HASH);
 
   // Alpha, offline, edits the row beta is about to delete.
-  alpha.update(TODOS, rowId("todo-1"), values({ title: "plan (edited)" }), txnId("a-edit"));
-  beta.delete(TODOS, rowId("todo-1"), txnId("b-delete"));
+  await alpha.update(TODOS, rowId("todo-1"), values({ title: "plan (edited)" }), txnId("a-edit"));
+  await beta.delete(TODOS, rowId("todo-1"), txnId("b-delete"));
   await beta.syncWith(relayTransport(server, BETA), HASH);
 
   now += 31 * 24 * 60 * 60 * 1000;
@@ -130,7 +135,7 @@ test("a rejection survives the wire and quarantines the diverged work", async ()
   assert.equal(alpha.getRow(TODOS, rowId("todo-1"))?.fields.get(TITLE), "plan (edited)");
 
   for (const transaction of new Set(quarantined.map((op) => op.txnId))) {
-    alpha.discardQuarantinedTxn(transaction);
+    await alpha.discardQuarantinedTxn(transaction);
   }
   await alpha.syncWith(relayTransport(server, ALPHA), HASH);
   assert.equal(alpha.listQuarantine().length, 0);
@@ -139,7 +144,7 @@ test("a rejection survives the wire and quarantines the diverged work", async ()
 
 test("an unreachable relay leaves the work in the outbox rather than losing it", async () => {
   const alpha = client("alpha");
-  newTodo(alpha, "todo-1", "buy milk");
+  await newTodo(alpha, "todo-1", "buy milk");
   const pending = alpha.outbox.length;
 
   const dead = httpTransport({
@@ -156,7 +161,7 @@ test("an unreachable relay leaves the work in the outbox rather than losing it",
 test("a token the relay does not recognise fails loudly instead of silently not syncing", async () => {
   const server = new WeftServer();
   const alpha = client("alpha");
-  newTodo(alpha, "todo-1", "buy milk");
+  await newTodo(alpha, "todo-1", "buy milk");
 
   await assert.rejects(
     alpha.syncWith(relayTransport(server, "not-a-demo-token"), HASH),
@@ -178,15 +183,15 @@ test("the asynchronous session ends where the synchronous one does", async () =>
     [
       local,
       async () => {
-        local.sync(inProcess, HASH);
+        await local.syncWith(inProcessTransport(inProcess), HASH);
       },
     ],
   ] as const) {
-    newTodo(target, "todo-1", "plan", "Monday: nothing yet");
+    await newTodo(target, "todo-1", "plan", "Monday: nothing yet");
     await run();
-    target.update(TODOS, rowId("todo-1"), values({ title: "plan the week" }), txnId("edit"));
+    await target.update(TODOS, rowId("todo-1"), values({ title: "plan the week" }), txnId("edit"));
     await run();
-    target.delete(TODOS, rowId("todo-1"), txnId("remove"));
+    await target.delete(TODOS, rowId("todo-1"), txnId("remove"));
     await run();
   }
 
@@ -203,7 +208,7 @@ test("the asynchronous session ends where the synchronous one does", async () =>
 test("the relay refuses a handshake for a scope the token does not name", async () => {
   const server = new WeftServer();
   const impostor = new WeftClient(scopeId("someone-elses-list"), deviceId("alpha"), schema);
-  newTodo(impostor, "todo-1", "buy milk");
+  await newTodo(impostor, "todo-1", "buy milk");
 
   await assert.rejects(
     impostor.syncWith(relayTransport(server, ALPHA), HASH),

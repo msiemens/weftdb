@@ -12,16 +12,14 @@ configure either path identically.
 
 ## Starting a relay
 
-`weft serve` is the CLI's `serve` command: it imports `main` only when invoked, and passes it the
-process environment together with its own arguments. Running the bundled file reaches the same
-`main` without the CLI in between.
+`weft serve` passes `main` the process environment together with its own arguments. Running the
+bundled file reaches the same `main` without the CLI in between.
 
-`pnpm build:server` runs a Vite build, configured in `vite.config.ts`, that bundles
-`server/main.ts` and the workspace packages it imports into `dist/server.mjs`, one ECMAScript
-module with only Node's own builtins left external. The SQLite executor stays a separate chunk in
-the same output, loaded only when `--db` names a file, so a deployment that runs in memory never
-loads it. This is why the runtime image carries no package manager, no `node_modules`, and no
-source tree: `dist` holds only what a relay needs to run.
+`pnpm build:server` bundles the relay and the workspace packages it imports into `dist/server.mjs`,
+one ECMAScript module with only Node's own builtins left external. The SQLite executor stays a
+separate chunk in the same output, loaded only when `--db` names a file, so a deployment that runs
+in memory never loads it. This is why the runtime image carries no package manager, no
+`node_modules`, and no source tree: `dist` holds only what a relay needs to run.
 
 ```sh
 pnpm build:server
@@ -107,8 +105,8 @@ than come up and reject every one.
 
 ## Answering health checks
 
-`GET /health` answers before authentication runs: the request listener checks the path first and
-returns `{"ok": true}` with a 200 status, so a probe needs no token. This is the endpoint the
+`GET /health` answers before authentication runs, returning `{"ok": true}` with a 200 status, so a
+probe needs no token. This is the endpoint the
 image's `HEALTHCHECK` instruction polls every 30 seconds, with a 3-second timeout, a 2-second
 start period, and 3 retries before Docker marks the container unhealthy.
 

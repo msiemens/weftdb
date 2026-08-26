@@ -52,8 +52,8 @@ export function decodeMessages(row: MaterializedRow): MessagesRow {
 
 export function messagesMutators(client: MutationTarget, notify: () => void = () => undefined): MessagesMutators {
   return {
-    create(id: string, values: MessagesMutation, transaction?: TxnId): void {
-      client.append(messagesTable, rowId(id), wire(values), transaction ?? txnId(`create-${id}`));
+    async create(id: string, values: MessagesMutation, transaction?: TxnId): Promise<void> {
+      await client.append(messagesTable, rowId(id), wire(values), transaction ?? txnId(`create-${id}`));
       notify();
     },
   };
@@ -106,16 +106,16 @@ export function decodeDevices(row: MaterializedRow): DevicesRow {
 
 export function devicesMutators(client: MutationTarget, notify: () => void = () => undefined): DevicesMutators {
   return {
-    create(id: string, values: DevicesMutation, transaction?: TxnId): void {
-      client.create(devicesTable, rowId(id), wire(values), transaction ?? txnId(`create-${id}`));
+    async create(id: string, values: DevicesMutation, transaction?: TxnId): Promise<void> {
+      await client.create(devicesTable, rowId(id), wire(values), transaction ?? txnId(`create-${id}`));
       notify();
     },
-    update(id: string, values: DevicesMutation, transaction?: TxnId): void {
-      client.update(devicesTable, rowId(id), wire(values), transaction ?? txnId(`update-${id}-${crypto.randomUUID()}`));
+    async update(id: string, values: DevicesMutation, transaction?: TxnId): Promise<void> {
+      await client.update(devicesTable, rowId(id), wire(values), transaction ?? txnId(`update-${id}-${crypto.randomUUID()}`));
       notify();
     },
-    delete(id: string, transaction?: TxnId): void {
-      client.delete(devicesTable, rowId(id), transaction ?? txnId(`delete-${id}-${crypto.randomUUID()}`));
+    async delete(id: string, transaction?: TxnId): Promise<void> {
+      await client.delete(devicesTable, rowId(id), transaction ?? txnId(`delete-${id}-${crypto.randomUUID()}`));
       notify();
     },
   };

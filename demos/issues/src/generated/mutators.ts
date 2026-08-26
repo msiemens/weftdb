@@ -5,9 +5,9 @@ export interface ProjectsMutation {
   readonly rank?: string;
 }
 export interface ProjectsMutators {
-  create(id: string, values: ProjectsMutation, txnId?: TxnId): void;
-  update(id: string, values: ProjectsMutation, txnId?: TxnId): void;
-  delete(id: string, txnId?: TxnId): void;
+  create(id: string, values: ProjectsMutation, txnId?: TxnId): Promise<void>;
+  update(id: string, values: ProjectsMutation, txnId?: TxnId): Promise<void>;
+  delete(id: string, txnId?: TxnId): Promise<void>;
 }
 
 export interface IssuesMutation {
@@ -18,9 +18,9 @@ export interface IssuesMutation {
   readonly rank?: string;
 }
 export interface IssuesMutators {
-  create(id: string, values: IssuesMutation, txnId?: TxnId): void;
-  update(id: string, values: IssuesMutation, txnId?: TxnId): void;
-  delete(id: string, txnId?: TxnId): void;
+  create(id: string, values: IssuesMutation, txnId?: TxnId): Promise<void>;
+  update(id: string, values: IssuesMutation, txnId?: TxnId): Promise<void>;
+  delete(id: string, txnId?: TxnId): Promise<void>;
 }
 
 export interface CommentsMutation {
@@ -31,5 +31,5 @@ export interface CommentsMutation {
   readonly author__device?: string;
 }
 export interface CommentsMutators {
-  create(id: string, values: CommentsMutation, txnId?: TxnId): void;
+  create(id: string, values: CommentsMutation, txnId?: TxnId): Promise<void>;
 }

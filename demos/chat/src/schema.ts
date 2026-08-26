@@ -18,7 +18,8 @@ export const schema = defineSchema({
   // A mutable collection alongside the log: one row per device, rewritten on every heartbeat.
   // Last-writer-wins is the right merge for a value whose only reader wants the newest one.
   devices: S.collection({
-    label: S.string(),
+    // The device strip selects on it, so the statement it runs after every heartbeat reads an index.
+    label: S.string({ index: true }),
     last_seen: S.number(),
   }),
 });

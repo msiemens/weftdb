@@ -255,7 +255,25 @@ ${[
   // and a key on `id` alone turns the second one into a constraint failure.
   "  PRIMARY KEY (scope_id, id)",
 ].join(",\n")}
-);`;
+);${indexDdl(tableName, fields)}`;
+}
+
+/**
+ * An index per field the schema asked for, led by `scope_id`.
+ *
+ * Every statement a device runs is scoped, so a query narrows by `scope_id` before anything else
+ * and an index that left it out could only be reached after that. `installSchema` runs the whole
+ * DDL on every open, so a field that gains an index has one from the next open.
+ */
+function indexDdl(tableName: string, fields: readonly (readonly [string, FieldDefinition])[]): string {
+  return fields
+    .filter(([, field]) => field.index === true)
+    .map(
+      ([name]) =>
+        `\n\nCREATE INDEX IF NOT EXISTS ${quoteIdent(`${tableName}_${name}`)} ` +
+        `ON ${quoteIdent(tableName)} (scope_id, ${quoteIdent(name)});`,
+    )
+    .join("");
 }
 
 function generateDatabaseTypes(schema: SchemaDefinition, internal: boolean): string {
@@ -324,9 +342,11 @@ export function generateMutators(schema: SchemaDefinition): string {
         // records it, in two collections — share one, and left to the default they would be two
         // transactions that can be accepted separately.
         `export interface ${typeName(tableName, "Mutators")} {`,
-        `  create(id: string, values: ${inputName}, txnId?: TxnId): void;`,
-        collection.kind === "eventLog" ? "" : `  update(id: string, values: ${inputName}, txnId?: TxnId): void;`,
-        collection.kind === "eventLog" ? "" : "  delete(id: string, txnId?: TxnId): void;",
+        `  create(id: string, values: ${inputName}, txnId?: TxnId): Promise<void>;`,
+        collection.kind === "eventLog"
+          ? ""
+          : `  update(id: string, values: ${inputName}, txnId?: TxnId): Promise<void>;`,
+        collection.kind === "eventLog" ? "" : "  delete(id: string, txnId?: TxnId): Promise<void>;",
         "}",
       ]
         .filter((line) => line.length > 0)
@@ -416,19 +436,19 @@ export function generateBindings(schema: SchemaDefinition): string {
       "",
       `export function ${memberName(name, "Mutators")}(client: MutationTarget, notify: () => void = () => undefined): ${typeName(name, "Mutators")} {`,
       "  return {",
-      `    create(id: string, values: ${typeName(name, "Mutation")}, transaction?: TxnId): void {`,
-      `      client.${collection.kind === "eventLog" ? "append" : "create"}(${table}, rowId(id), wire(values), transaction ?? txnId(\`create-\${id}\`));`,
+      `    async create(id: string, values: ${typeName(name, "Mutation")}, transaction?: TxnId): Promise<void> {`,
+      `      await client.${collection.kind === "eventLog" ? "append" : "create"}(${table}, rowId(id), wire(values), transaction ?? txnId(\`create-\${id}\`));`,
       "      notify();",
       "    },",
       ...(collection.kind === "eventLog"
         ? []
         : [
-            `    update(id: string, values: ${typeName(name, "Mutation")}, transaction?: TxnId): void {`,
-            `      client.update(${table}, rowId(id), wire(values), transaction ?? txnId(\`update-\${id}-\${crypto.randomUUID()}\`));`,
+            `    async update(id: string, values: ${typeName(name, "Mutation")}, transaction?: TxnId): Promise<void> {`,
+            `      await client.update(${table}, rowId(id), wire(values), transaction ?? txnId(\`update-\${id}-\${crypto.randomUUID()}\`));`,
             "      notify();",
             "    },",
-            "    delete(id: string, transaction?: TxnId): void {",
-            `      client.delete(${table}, rowId(id), transaction ?? txnId(\`delete-\${id}-\${crypto.randomUUID()}\`));`,
+            "    async delete(id: string, transaction?: TxnId): Promise<void> {",
+            `      await client.delete(${table}, rowId(id), transaction ?? txnId(\`delete-\${id}-\${crypto.randomUUID()}\`));`,
             "      notify();",
             "    },",
           ]),
@@ -490,13 +510,13 @@ function reorderHelpers(name: string, collection: CollectionDefinition): readonl
     " * taken from between the two rows it lands between — so nothing below it is renumbered and",
     " * two devices reordering at once do not undo each other.",
     " */",
-    `export function move${typeName(name, "")}(`,
+    `export async function move${typeName(name, "")}(`,
     `  mutators: ${mutators},`,
     `  rows: readonly ${rowType}[],`,
     "  index: number,",
     '  direction: "up" | "down",',
     "  device: DeviceId,",
-    "): void {",
+    "): Promise<void> {",
     `  const rankOf = ${rankOf};`,
     "  const moving = rows[index];",
     '  const neighbour = rows[direction === "up" ? index - 1 : index + 1];',
@@ -504,7 +524,7 @@ function reorderHelpers(name: string, collection: CollectionDefinition): readonl
     "  // Landing between the neighbour and whatever is on its far side.",
     '  const beyond = rows[direction === "up" ? index - 2 : index + 2];',
     '  const [before, after] = direction === "up" ? [beyond, neighbour] : [neighbour, beyond];',
-    `  mutators.update(String(moving["id"]), { ${propertyName(rankField)}: rankBetween(rankOf(before), rankOf(after), device) });`,
+    `  await mutators.update(String(moving["id"]), { ${propertyName(rankField)}: rankBetween(rankOf(before), rankOf(after), device) });`,
     "}",
   ];
 }

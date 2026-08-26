@@ -7,7 +7,7 @@ import { test } from "vitest";
 import fc from "fast-check";
 import { fieldName, rowId, txnId, type RowId, type WeftOp } from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
-import { WeftClient } from "weftdb/client";
+import { inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import {
   at,
@@ -54,10 +54,10 @@ const mutationArb: fc.Arbitrary<Mutation> = fc.oneof(
 const historyArb = fc.array(mutationArb, { minLength: 1, maxLength: 30 });
 const permutationKeysArb = fc.array(fc.integer({ min: 0, max: 1_000 }), { minLength: 64, maxLength: 64 });
 
-test("§9.1 any delivery order of the same op set yields identical state", () => {
-  fc.assert(
-    fc.property(historyArb, permutationKeysArb, permutationKeysArb, (history, leftKeys, rightKeys) => {
-      const batches = transactionsFor(history);
+test("§9.1 any delivery order of the same op set yields identical state", async () => {
+  await fc.assert(
+    fc.asyncProperty(historyArb, permutationKeysArb, permutationKeysArb, async (history, leftKeys, rightKeys) => {
+      const batches = await transactionsFor(history);
       assert.deepEqual(
         serverRowFingerprints(deliver(batches, leftKeys)),
         serverRowFingerprints(deliver(batches, rightKeys)),
@@ -67,10 +67,10 @@ test("§9.1 any delivery order of the same op set yields identical state", () =>
   );
 });
 
-test("§9.2 duplicate delivery of any op is a no-op", () => {
-  fc.assert(
-    fc.property(historyArb, permutationKeysArb, (history, keys) => {
-      const batches = transactionsFor(history);
+test("§9.2 duplicate delivery of any op is a no-op", async () => {
+  await fc.assert(
+    fc.asyncProperty(historyArb, permutationKeysArb, async (history, keys) => {
+      const batches = await transactionsFor(history);
       assert.deepEqual(
         serverRowFingerprints(deliver(batches, keys)),
         serverRowFingerprints(deliver(batches, keys, { duplicate: true })),
@@ -80,26 +80,26 @@ test("§9.2 duplicate delivery of any op is a no-op", () => {
   );
 });
 
-test("§9.5 snapshot plus outbox replay equals incremental pull plus outbox replay", () => {
-  fc.assert(
-    fc.property(worldCommands(60), fc.string({ minLength: 1, maxLength: 10 }), (commands, replayed) => {
-      const world = runWorld(commands);
-      quiesce(world);
+test("§9.5 snapshot plus outbox replay equals incremental pull plus outbox replay", async () => {
+  await fc.assert(
+    fc.asyncProperty(worldCommands(60), fc.string({ minLength: 1, maxLength: 10 }), async (commands, replayed) => {
+      const world = await runWorld(commands);
+      await quiesce(world);
 
       const snapshot = world.server.snapshot(world.scopeId);
       const incremental = world.server.pull(world.scopeId, 0);
       const fromSnapshot = freshClient(world);
       const fromPull = freshClient(world);
-      fromSnapshot.applySnapshot(snapshot);
-      fromPull.applyPull(incremental);
+      await fromSnapshot.applySnapshot(snapshot);
+      await fromPull.applyPull(incremental);
 
       if (incremental.tombstoneFloorSeq > 0) {
         // Purging destroys the records a from-zero stream would need, so the equivalence is
         // only claimed above the floor: below it the client must resync instead (§1.5).
         assert.equal(fromPull.resyncRequired, true, "an unusable incremental stream was applied anyway");
-        fromPull.applySnapshot(snapshot);
+        await fromPull.applySnapshot(snapshot);
       }
-      for (const client of [fromSnapshot, fromPull]) replayOutbox(client, replayed);
+      for (const client of [fromSnapshot, fromPull]) await replayOutbox(client, replayed);
 
       assert.deepEqual(clientState(fromSnapshot), clientState(fromPull));
     }),
@@ -107,24 +107,24 @@ test("§9.5 snapshot plus outbox replay equals incremental pull plus outbox repl
   );
 });
 
-test("§9.6 pruning tombstones leaves every device above the floor unchanged", () => {
-  fc.assert(
-    fc.property(fc.array(fc.boolean(), { minLength: 4, maxLength: 4 }), (doomed) => {
+test("§9.6 pruning tombstones leaves every device above the floor unchanged", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.array(fc.boolean(), { minLength: 4, maxLength: 4 }), async (doomed) => {
       const world = createWorld(3);
       const owner = deviceAt(world, 0).client;
       const rows = doomed.map((_, index) => rowId(`floor-${index}`));
-      for (const row of rows) owner.create(TASKS, row, taskValues(String(row)), txnId(`create-${row}`));
-      quiesce(world);
+      for (const row of rows) await owner.create(TASKS, row, taskValues(String(row)), txnId(`create-${row}`));
+      await quiesce(world);
       for (const [index, row] of rows.entries()) {
-        if (at(doomed, index)) owner.delete(TASKS, row, txnId(`delete-${row}`));
+        if (at(doomed, index)) await owner.delete(TASKS, row, txnId(`delete-${row}`));
       }
-      quiesce(world);
+      await quiesce(world);
 
       const cursors = world.devices.map((device) => device.client.lastServerSeq);
       const before = world.devices.map((device) => clientState(device.client));
       world.now += TOMBSTONE_FLOOR_MS + DAY_MS;
       world.server.pruneTombstones(world.scopeId);
-      quiesce(world);
+      await quiesce(world);
 
       const floor = world.server.scopes.get(world.scopeId)?.tombstoneFloorSeq ?? 0;
       assert.equal(
@@ -141,7 +141,7 @@ test("§9.6 pruning tombstones leaves every device above the floor unchanged", (
   );
 });
 
-test("§9.7 a client one schema version behind cannot alter a newer field", () => {
+test("§9.7 a client one schema version behind cannot alter a newer field", async () => {
   const newerSchema = defineSchema(
     {
       tasks: S.collection({
@@ -156,26 +156,30 @@ test("§9.7 a client one schema version behind cannot alter a newer field", () =
   );
   const priority = fieldName("priority");
 
-  fc.assert(
-    fc.property(fc.integer({ min: 1, max: 9_000 }), fc.string({ minLength: 1, maxLength: 10 }), (value, staleTitle) => {
-      const world = createWorld(1);
-      const stale = deviceAt(world, 0).client;
-      const upgraded = new WeftClient(world.scopeId, stale.deviceId, newerSchema, () => world.now);
-      const row = rowId("versioned");
-      upgraded.create(TASKS, row, { [TITLE]: "upgraded", [priority]: value }, txnId("upgraded"));
-      upgraded.sync(world.server, schemaHash(newerSchema));
+  await fc.assert(
+    fc.asyncProperty(
+      fc.integer({ min: 1, max: 9_000 }),
+      fc.string({ minLength: 1, maxLength: 10 }),
+      async (value, staleTitle) => {
+        const world = createWorld(1);
+        const stale = deviceAt(world, 0).client;
+        const upgraded = new WeftClient(world.scopeId, stale.deviceId, newerSchema, () => world.now);
+        const row = rowId("versioned");
+        await upgraded.create(TASKS, row, { [TITLE]: "upgraded", [priority]: value }, txnId("upgraded"));
+        await upgraded.syncWith(inProcessTransport(world.server), schemaHash(newerSchema));
 
-      stale.applyPull(world.server.pull(world.scopeId, 0));
-      stale.update(TASKS, row, { [TITLE]: staleTitle }, txnId("stale-write"));
-      const outbox = JSON.stringify(stale.outbox);
-      stale.sync(world.server, propertySchemaHash);
+        await stale.applyPull(world.server.pull(world.scopeId, 0));
+        await stale.update(TASKS, row, { [TITLE]: staleTitle }, txnId("stale-write"));
+        const outbox = JSON.stringify(stale.outbox);
+        await stale.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
-      const stored = world.server
-        .snapshot(world.scopeId)
-        .fields.find((field) => field.rowId === row && field.field === priority);
-      assert.equal(stored?.value, value, "a stale client altered a newer field");
-      assert.equal(JSON.stringify(stale.outbox), outbox, "a blocked session moved the outbox");
-    }),
+        const stored = world.server
+          .snapshot(world.scopeId)
+          .fields.find((field) => field.rowId === row && field.field === priority);
+        assert.equal(stored?.value, value, "a stale client altered a newer field");
+        assert.equal(JSON.stringify(stale.outbox), outbox, "a blocked session moved the outbox");
+      },
+    ),
     { numRuns: SCENARIO_RUNS },
   );
 });
@@ -185,10 +189,10 @@ test("§9.7 a client one schema version behind cannot alter a newer field", () =
  * `lww` fields take part: a `diff3` field makes acceptance depend on arrival order by
  * design (§5.4), which is the opposite of what commutativity asks about.
  */
-function transactionsFor(history: readonly Mutation[]): {
+async function transactionsFor(history: readonly Mutation[]): Promise<{
   readonly creates: readonly (readonly WeftOp[])[];
   readonly rest: readonly (readonly WeftOp[])[];
-} {
+}> {
   const world = createWorld(1);
   const client = deviceAt(world, 0).client;
   const creates: WeftOp[][] = [];
@@ -202,7 +206,7 @@ function transactionsFor(history: readonly Mutation[]): {
 
   for (const row of MODEL_ROWS) {
     world.now += 1;
-    client.create(TASKS, row, taskValues(String(row)), txnId(`create-${row}`));
+    await client.create(TASKS, row, taskValues(String(row)), txnId(`create-${row}`));
     creates.push(take());
   }
   for (const [index, mutation] of history.entries()) {
@@ -210,11 +214,16 @@ function transactionsFor(history: readonly Mutation[]): {
     const row = at(MODEL_ROWS, mutation.row);
     const state = localState(client, TASKS, row);
     if (mutation.kind === "update" && state === "live") {
-      client.update(TASKS, row, { [mutation.onTitle ? TITLE : STATUS]: mutation.value }, txnId(`update-${index}`));
+      await client.update(
+        TASKS,
+        row,
+        { [mutation.onTitle ? TITLE : STATUS]: mutation.value },
+        txnId(`update-${index}`),
+      );
     } else if (mutation.kind === "delete" && state === "live") {
-      client.delete(TASKS, row, txnId(`delete-${index}`));
+      await client.delete(TASKS, row, txnId(`delete-${index}`));
     } else if (mutation.kind === "restore" && state === "tombstoned") {
-      client.restore(TASKS, row, { [TITLE]: mutation.value }, txnId(`restore-${index}`));
+      await client.restore(TASKS, row, { [TITLE]: mutation.value }, txnId(`restore-${index}`));
     }
     const ops = take();
     if (ops.length > 0) rest.push(ops);
@@ -260,10 +269,10 @@ function freshClient(world: PropertyWorld): WeftClient {
 }
 
 /** The same local writes on top of either sync path, standing in for an undrained outbox. */
-function replayOutbox(client: WeftClient, value: string): void {
+async function replayOutbox(client: WeftClient, value: string): Promise<void> {
   const target = [...client.rows.keys()].filter((key) => key.startsWith(`${TASKS}\0`)).sort()[0];
   if (target === undefined) return;
-  client.update(TASKS, target.slice(`${TASKS}\0`.length) as RowId, { [TITLE]: value }, txnId("replayed"));
+  await client.update(TASKS, target.slice(`${TASKS}\0`.length) as RowId, { [TITLE]: value }, txnId("replayed"));
 }
 
 function clientState(client: WeftClient): readonly string[] {

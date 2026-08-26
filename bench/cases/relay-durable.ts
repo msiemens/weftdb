@@ -33,7 +33,7 @@ async function bulkPush(config: BenchConfig, ops: number, nextPath: () => string
   const samples = await repeatAsync(async () => {
     const relay = await startBenchRelay(1, nextPath());
     try {
-      const client = queuedClient(ops);
+      const client = await queuedClient(ops);
       const transport = httpTransport({ baseUrl: relay.baseUrl, token: relay.token(0) });
       const start = performance.now();
       await client.flushWith(transport);
@@ -66,10 +66,10 @@ async function incrementalPush(config: BenchConfig, resident: number, nextPath: 
     const relay = await startBenchRelay(1, nextPath());
     try {
       const transport = httpTransport({ baseUrl: relay.baseUrl, token: relay.token(0) });
-      const seeder = queuedClient(resident);
+      const seeder = await queuedClient(resident);
       await seeder.flushWith(transport);
       const writer = benchClient("device-0");
-      seedRows(writer, 1, resident / OPS_PER_CREATE + 1);
+      await seedRows(writer, 1, resident / OPS_PER_CREATE + 1);
       const start = performance.now();
       await writer.flushWith(transport);
       const elapsed = performance.now() - start;

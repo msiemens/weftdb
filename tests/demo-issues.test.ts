@@ -25,7 +25,7 @@ function browser(): DemoBrowser {
 async function openTab(browser: DemoBrowser, name: string, options: TabOptions = {}): Promise<IssueStore> {
   const { identity, database } = await browser.tab(name, options);
   const store = new IssueStore({ identity, database });
-  store.seed(browser.local);
+  await store.seed(browser.local);
   await settle(store);
   return store;
 }
@@ -51,7 +51,7 @@ test("a first visit is seeded, and only the first", async (t) => {
   const second = await openTab(world, "two");
   assert.equal(first.identity.scopeId, second.identity.scopeId, "both tabs are one visitor");
   assert.notEqual(first.deviceId, second.deviceId, "each tab is its own device");
-  assert.equal(world.workers.length, 2, "the second tab was given the first tab's storage worker");
+  assert.equal(world.storage.serving.length, 2, "the second tab was given the first tab's database");
 
   // Seeded once and reached the second tab by syncing, not by being written again: the guard is a
   // key beside the scope, which every tab of one browser reads.
@@ -65,8 +65,8 @@ test("emptying the scope does not bring the seed back", async (t) => {
   const world = browser();
   t.onTestFinished(() => world.close());
   const first = await openTab(world, "one");
-  for (const project of first.projectRows()) first.projects.delete(project.id);
-  for (const issue of first.issueRows()) first.issues.delete(issue.id);
+  for (const project of first.projectRows()) await first.projects.delete(project.id);
+  for (const issue of first.issueRows()) await first.issues.delete(issue.id);
   await settle(first);
 
   const second = await openTab(world, "two");
@@ -77,25 +77,27 @@ test("emptying the scope does not bring the seed back", async (t) => {
 test("comments are append-only, and an edit to one is refused rather than ignored", async (t) => {
   const world = browser();
   t.onTestFinished(() => world.close());
-  const refused: Error[] = [];
-  const store = await openTab(world, "one", { onError: (error) => refused.push(error) });
+  const store = await openTab(world, "one");
   const surface = store.comments as unknown as Readonly<Record<string, unknown>>;
   assert.equal(typeof surface["create"], "function");
   assert.equal(surface["update"], undefined, "an event log must not generate update");
   assert.equal(surface["delete"], undefined, "an event log must not generate delete");
 
   // The schema is what enforces this, not the page. Reaching past the generated mutators posts the
-  // edit anyway; the client in the storage worker refuses it, and because a mutator returns `void`
-  // the only place that refusal can surface is the error the page was opened with.
+  // edit anyway; the client in the storage worker refuses it, and the refusal reaches the caller as
+  // the mutator's own promise rejecting.
   const comment = store.source.listRows(commentsTable)[0];
   assert.ok(comment !== undefined, "the seed should have written comments");
-  store.source.update(commentsTable, rowId(comment.id), { body: "edited" });
-  await waitFor(() => refused.length > 0, "an edit to an append-class row was accepted in silence");
-  assert.match(refused[0]?.message ?? "", /append-class/u, "the refusal did not say why");
-
-  store.source.delete(commentsTable, rowId(comment.id));
-  await waitFor(() => refused.length > 1, "a delete of an append-class row was accepted in silence");
-  assert.match(refused[1]?.message ?? "", /append-class/u, "the refusal did not say why");
+  await assert.rejects(
+    () => store.source.update(commentsTable, rowId(comment.id), { body: "edited" }),
+    /append-class/u,
+    "an edit to an append-class row was accepted in silence",
+  );
+  await assert.rejects(
+    () => store.source.delete(commentsTable, rowId(comment.id)),
+    /append-class/u,
+    "a delete of an append-class row was accepted in silence",
+  );
 });
 
 test("deleting a project leaves its issues and does not quarantine anything", async (t) => {
@@ -108,7 +110,7 @@ test("deleting a project leaves its issues and does not quarantine anything", as
   const orphaned = store.issueRows().filter((row) => row.project_id === project.id).length;
   assert.ok(orphaned > 0, "the seeded project should have issues");
 
-  store.projects.delete(project.id);
+  await store.projects.delete(project.id);
   await settle(store);
   await settle(store);
 
@@ -119,14 +121,6 @@ test("deleting a project leaves its issues and does not quarantine anything", as
   );
   assert.equal(store.status().quarantined, 0, "deleting a project quarantined a change");
 });
-
-async function waitFor(condition: () => boolean, message: string): Promise<void> {
-  for (let attempt = 0; attempt < 500; attempt += 1) {
-    if (condition()) return;
-    await new Promise((resolve) => setTimeout(resolve, 2));
-  }
-  throw new Error(message);
-}
 
 let page: () => Promise<void>;
 
@@ -306,7 +300,7 @@ beforeAll(async () => {
       root.unmount();
     });
     await store.dispose();
-    world.close();
+    await world.close();
   };
 });
 

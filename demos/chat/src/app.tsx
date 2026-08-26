@@ -200,7 +200,7 @@ function Composer({ store }: { readonly store: ChatStore }): ReactNode {
   const [body, setBody] = useState("");
   const send = (): void => {
     if (body.trim() === "") return;
-    store.send(body);
+    void store.send(body);
     setBody("");
   };
 

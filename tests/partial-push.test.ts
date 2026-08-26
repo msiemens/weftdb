@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { deviceId, fieldName, rowId, scopeId, tableName, txnId, type FieldName, type WireValue } from "weftdb/core";
-import { WeftClient, type AsyncSyncTransport } from "weftdb/client";
+import { type AsyncSyncTransport, inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { schemaHash } from "weftdb/schema";
 import { schema } from "weftdb-demo-todo/schema";
@@ -31,16 +31,16 @@ function skewedPair(): { readonly server: WeftServer; readonly client: WeftClien
   return { server, client, skew: () => void (state.skewed = true) };
 }
 
-test("a push that half succeeds acknowledges the half that landed", () => {
+test("a push that half succeeds acknowledges the half that landed", async () => {
   const { server, client, skew } = skewedPair();
-  client.create(
+  await client.create(
     TODOS,
     ROW,
     values({ title: "plan", notes: "first", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
     txnId("create"),
   );
   skew();
-  client.update(TODOS, ROW, values({ notes: "second" }), txnId("edit"));
+  await client.update(TODOS, ROW, values({ notes: "second" }), txnId("edit"));
 
   const result = server.push(SCOPE, [...client.outbox]);
   assert.equal(result.ok, false, "the skewed transaction was accepted");
@@ -53,18 +53,18 @@ test("a push that half succeeds acknowledges the half that landed", () => {
   );
 });
 
-test("a device does not collide with its own half-landed push", () => {
+test("a device does not collide with its own half-landed push", async () => {
   const { server, client, skew } = skewedPair();
-  client.create(
+  await client.create(
     TODOS,
     ROW,
     values({ title: "plan", notes: "first", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
     txnId("create"),
   );
   skew();
-  client.update(TODOS, ROW, values({ notes: "second" }), txnId("edit"));
+  await client.update(TODOS, ROW, values({ notes: "second" }), txnId("edit"));
 
-  client.sync(server, HASH);
+  await client.syncWith(inProcessTransport(server), HASH);
 
   assert.deepEqual(
     client.listQuarantine().map((op) => `${op.txnId}:${op.reason}`),
@@ -101,14 +101,14 @@ test("what a half-successful push applied is durable, not just in memory", async
     const first = openSqliteExecutor(path);
     const server = new SqliteWeftServer(first, () => state.now);
     const client = new WeftClient(SCOPE, deviceId("tab-1"), schema, () => state.now + (state.skewed ? SKEW_MS : 0));
-    client.create(
+    await client.create(
       TODOS,
       ROW,
       values({ title: "plan", notes: "first", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
       txnId("create"),
     );
     state.skewed = true;
-    client.update(TODOS, ROW, values({ notes: "second" }), txnId("edit"));
+    await client.update(TODOS, ROW, values({ notes: "second" }), txnId("edit"));
 
     const result = server.push(SCOPE, [...client.outbox]);
     assert.equal(result.ok, false);
@@ -131,7 +131,7 @@ test("a wholly successful async push does not drain edits queued while it was in
   // Draining by anything other than what was actually sent takes the edit with it, and the
   // device is told the push worked, so nothing ever asks after it again.
   const { server, client } = skewedPair();
-  client.create(
+  await client.create(
     TODOS,
     ROW,
     values({ title: "plan", notes: "first", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
@@ -143,7 +143,7 @@ test("a wholly successful async push does not drain edits queued while it was in
     push: async (scope, ops) => {
       if (!injected) {
         injected = true;
-        client.update(TODOS, ROW, values({ title: "typed while the push was in flight" }), txnId("edit"));
+        await client.update(TODOS, ROW, values({ title: "typed while the push was in flight" }), txnId("edit"));
       }
       return server.push(scope, ops);
     },
@@ -159,7 +159,7 @@ test("a wholly successful async push does not drain edits queued while it was in
   );
 });
 
-test("a device with nothing queued does not push at all", () => {
+test("a device with nothing queued does not push at all", async () => {
   // The loop's own condition is what decides this. A client that has just synced, or has never
   // written anything, talks to the relay on a schedule; sending it empty batches is traffic
   // every idle device in a deployment pays for.
@@ -172,38 +172,38 @@ test("a device with nothing queued does not push at all", () => {
     return original(scope, ops);
   };
 
-  client.flush(counting);
+  await client.flushWith(inProcessTransport(counting));
   assert.equal(pushes, 0, "an empty outbox still reached the relay");
 
-  client.create(
+  await client.create(
     TODOS,
     ROW,
     values({ title: "plan", notes: "first", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
     txnId("create"),
   );
-  client.flush(counting);
+  await client.flushWith(inProcessTransport(counting));
   assert.equal(pushes, 1, "queued work took more than one push to deliver");
 
-  client.flush(counting);
+  await client.flushWith(inProcessTransport(counting));
   assert.equal(pushes, 1, "a drained outbox pushed again");
 });
 
 test("a partly acknowledged async push does not drain edits queued while it was in flight", async () => {
   const { server, client, skew } = skewedPair();
-  client.create(
+  await client.create(
     TODOS,
     ROW,
     values({ title: "plan", notes: "first", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
     txnId("create"),
   );
   skew();
-  client.update(TODOS, ROW, values({ notes: "second" }), txnId("edit"));
+  await client.update(TODOS, ROW, values({ notes: "second" }), txnId("edit"));
   let injected = false;
   const transport: Pick<AsyncSyncTransport, "push"> = {
     push: async (scope, ops) => {
       if (!injected) {
         injected = true;
-        client.update(TODOS, ROW, values({ title: "typed while push was pending" }), txnId("create"));
+        await client.update(TODOS, ROW, values({ title: "typed while push was pending" }), txnId("create"));
       }
       return server.push(scope, ops);
     },

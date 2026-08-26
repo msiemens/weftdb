@@ -20,7 +20,7 @@ import {
   type WireValue,
 } from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
-import { WeftClient } from "weftdb/client";
+import { inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { authContext, createRelayHandler, staticTokenVerifier } from "weftdb/server/relay";
 import {
@@ -48,14 +48,14 @@ const fieldDefinitionArb = fc.record({
   merge: fc.constantFrom("lww" as const, "diff3" as const, "fracIndex" as const, "immutable" as const),
 });
 
-test("§9.28 an op stamped with another scope is rejected server-side", () => {
-  fc.assert(
-    fc.property(labelArb, labelArb, (foreignLabel, value) => {
+test("§9.28 an op stamped with another scope is rejected server-side", async () => {
+  await fc.assert(
+    fc.asyncProperty(labelArb, labelArb, async (foreignLabel, value) => {
       const world = createWorld(1);
       const client = deviceAt(world, 0).client;
       const row = rowId("scoped");
-      client.create(TASKS, row, taskValues("scoped"), txnId("create"));
-      client.sync(world.server, propertySchemaHash);
+      await client.create(TASKS, row, taskValues("scoped"), txnId("create"));
+      await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
       const result = world.server.push(world.scopeId, [
         {
@@ -99,14 +99,14 @@ test("§9.28 the relay refuses a body scope the token does not carry", async () 
   assert.equal(response.status, 403);
 });
 
-test("§9.29 scope_id is immutable after insert", () => {
-  fc.assert(
-    fc.property(labelArb, (value) => {
+test("§9.29 scope_id is immutable after insert", async () => {
+  await fc.assert(
+    fc.asyncProperty(labelArb, async (value) => {
       const world = createWorld(1);
       const client = deviceAt(world, 0).client;
       const row = rowId("immutable-scope");
-      client.create(TASKS, row, taskValues("immutable"), txnId("create"));
-      client.sync(world.server, propertySchemaHash);
+      await client.create(TASKS, row, taskValues("immutable"), txnId("create"));
+      await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
       const result = world.server.push(world.scopeId, [
         {
@@ -128,9 +128,9 @@ test("§9.29 scope_id is immutable after insert", () => {
   );
 });
 
-test("§9.29 opening base fields must describe the row being created", () => {
-  fc.assert(
-    fc.property(labelArb, labelArb, (badId, badScope) => {
+test("§9.29 opening base fields must describe the row being created", async () => {
+  await fc.assert(
+    fc.asyncProperty(labelArb, labelArb, async (badId, badScope) => {
       const world = createWorld(1);
       const row = rowId("base-row");
       fc.pre(badId !== String(row) || badScope !== String(world.scopeId));
@@ -199,9 +199,9 @@ test("§9.24 base fields are framework-owned for every collection", () => {
   );
 });
 
-test("§9.31 identical row ids in two scopes never collide", () => {
-  fc.assert(
-    fc.property(labelArb, labelArb, (firstTitle, secondTitle) => {
+test("§9.31 identical row ids in two scopes never collide", async () => {
+  await fc.assert(
+    fc.asyncProperty(labelArb, labelArb, async (firstTitle, secondTitle) => {
       fc.pre(firstTitle !== secondTitle);
       const server = new WeftServer(() => BASE_TIME);
       const shared = rowId("same-id");
@@ -210,13 +210,13 @@ test("§9.31 identical row ids in two scopes never collide", () => {
 
       for (const [index, scope] of scopes.entries()) {
         const client = new WeftClient(scope, deviceFor(scope), propertySchema, () => BASE_TIME);
-        client.create(
+        await client.create(
           TASKS,
           shared,
           { ...taskValues("shared"), [TITLE]: titles[index] ?? "" },
           txnId(`create-${index}`),
         );
-        client.sync(server, propertySchemaHash);
+        await client.syncWith(inProcessTransport(server), propertySchemaHash);
       }
 
       for (const [index, scope] of scopes.entries()) {
@@ -233,14 +233,14 @@ test("§9.31 identical row ids in two scopes never collide", () => {
   );
 });
 
-test("§9.32 an op past the skew threshold is rejected, and one inside it is not", () => {
-  fc.assert(
-    fc.property(fc.integer({ min: -10 * 60 * 1000, max: 30 * 60 * 1000 }), labelArb, (ahead, value) => {
+test("§9.32 an op past the skew threshold is rejected, and one inside it is not", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.integer({ min: -10 * 60 * 1000, max: 30 * 60 * 1000 }), labelArb, async (ahead, value) => {
       const world = createWorld(1);
       const client = deviceAt(world, 0).client;
       const row = rowId("skew");
-      client.create(TASKS, row, taskValues("skew"), txnId("create"));
-      client.sync(world.server, propertySchemaHash);
+      await client.create(TASKS, row, taskValues("skew"), txnId("create"));
+      await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
       const result = world.server.push(world.scopeId, [
         {
@@ -270,7 +270,7 @@ test("§9.33 the outbox survives session expiry and re-login into the same scope
   });
 
   const client = new WeftClient(scope, deviceId("session-device"), propertySchema, () => BASE_TIME);
-  client.create(TASKS, rowId("pending"), taskValues("pending"), txnId("pending"));
+  await client.create(TASKS, rowId("pending"), taskValues("pending"), txnId("pending"));
   const pending = JSON.stringify(client.outbox);
 
   const expired = await handler(
@@ -295,9 +295,9 @@ test("§9.33 the outbox survives session expiry and re-login into the same scope
   assert.equal(server.rows.size, 1, "the preserved outbox never reached the server after re-login");
 });
 
-test("§9.43 schema_version never decreases for a scope, whatever clients turn up", () => {
-  fc.assert(
-    fc.property(fc.array(fc.integer({ min: 1, max: 6 }), { minLength: 1, maxLength: 25 }), (versions) => {
+test("§9.43 schema_version never decreases for a scope, whatever clients turn up", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.array(fc.integer({ min: 1, max: 6 }), { minLength: 1, maxLength: 25 }), async (versions) => {
       const scope = scopeId("versions");
       const server = new WeftServer(() => BASE_TIME);
       let highest = 0;
@@ -318,9 +318,9 @@ test("§9.43 schema_version never decreases for a scope, whatever clients turn u
   );
 });
 
-test("§9.44 a client below the scope's schema version cannot write", () => {
-  fc.assert(
-    fc.property(fc.integer({ min: 2, max: 6 }), labelArb, (newerVersion, title) => {
+test("§9.44 a client below the scope's schema version cannot write", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.integer({ min: 2, max: 6 }), labelArb, async (newerVersion, title) => {
       const newerSchema = defineSchema(
         {
           tasks: S.collection({
@@ -334,13 +334,13 @@ test("§9.44 a client below the scope's schema version cannot write", () => {
       const world = createWorld(1);
       const stale = deviceAt(world, 0).client;
       const upgraded = new WeftClient(world.scopeId, stale.deviceId, newerSchema, () => world.now);
-      upgraded.create(TASKS, rowId("newer"), { [TITLE]: "newer" }, txnId("newer"));
-      upgraded.sync(world.server, schemaHash(newerSchema));
+      await upgraded.create(TASKS, rowId("newer"), { [TITLE]: "newer" }, txnId("newer"));
+      await upgraded.syncWith(inProcessTransport(world.server), schemaHash(newerSchema));
       const before = serverState(world);
 
-      stale.create(TASKS, rowId("stale"), taskValues(title), txnId("stale"));
+      await stale.create(TASKS, rowId("stale"), taskValues(title), txnId("stale"));
       const outbox = JSON.stringify(stale.outbox);
-      stale.sync(world.server, propertySchemaHash);
+      await stale.syncWith(inProcessTransport(world.server), propertySchemaHash);
 
       assert.deepEqual(serverState(world), before, "a stale client wrote");
       assert.equal(JSON.stringify(stale.outbox), outbox, "a blocked session moved the outbox");
@@ -349,9 +349,9 @@ test("§9.44 a client below the scope's schema version cannot write", () => {
   );
 });
 
-test("§9.45 an equal version with a different hash always fails and adopts neither side", () => {
-  fc.assert(
-    fc.property(fc.integer({ min: 1, max: 6 }), labelArb, labelArb, (version, established, divergent) => {
+test("§9.45 an equal version with a different hash always fails and adopts neither side", async () => {
+  await fc.assert(
+    fc.asyncProperty(fc.integer({ min: 1, max: 6 }), labelArb, labelArb, async (version, established, divergent) => {
       fc.pre(established !== divergent);
       const scope = scopeId("hashes");
       const server = new WeftServer(() => BASE_TIME);

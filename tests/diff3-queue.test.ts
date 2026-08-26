@@ -17,7 +17,7 @@ import {
   type FieldName,
   type WireValue,
 } from "weftdb/core";
-import { WeftClient } from "weftdb/client";
+import { inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import { schemaHash } from "weftdb/schema";
 import { schema } from "weftdb-demo-todo/schema";
@@ -33,16 +33,16 @@ function values(input: Record<string, WireValue>): Record<FieldName, WireValue> 
   return input;
 }
 
-function seeded(): { readonly server: WeftServer; readonly client: WeftClient } {
+async function seeded(): Promise<{ readonly server: WeftServer; readonly client: WeftClient }> {
   const server = new WeftServer();
   const client = new WeftClient(SCOPE, deviceId("tab-1"), schema);
-  client.create(
+  await client.create(
     TODOS,
     ROW,
     values({ title: "plan", notes: "", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
     txnId("create"),
   );
-  client.sync(server, HASH);
+  await client.syncWith(inProcessTransport(server), HASH);
   return { server, client };
 }
 
@@ -54,12 +54,12 @@ function serverRowValue(server: WeftServer, row: ReturnType<typeof rowId>, field
   return server.snapshot(SCOPE).fields.find((record) => record.field === field && record.rowId === row)?.value;
 }
 
-test("keystrokes queued into a diff3 field before a sync all push", () => {
-  const { server, client } = seeded();
+test("keystrokes queued into a diff3 field before a sync all push", async () => {
+  const { server, client } = await seeded();
   for (const [index, text] of ["h", "he", "hel", "hell", "hello"].entries()) {
-    client.update(TODOS, ROW, values({ notes: text }), txnId(`key-${index}`));
+    await client.update(TODOS, ROW, values({ notes: text }), txnId(`key-${index}`));
   }
-  client.sync(server, HASH);
+  await client.syncWith(inProcessTransport(server), HASH);
 
   assert.equal(client.listQuarantine().length, 0, "a device's own successive edits were quarantined");
   assert.equal(client.outbox.length, 0, "the outbox never drained");
@@ -67,20 +67,20 @@ test("keystrokes queued into a diff3 field before a sync all push", () => {
   assert.equal(client.getRow(TODOS, ROW)?.fields.get(NOTES), "hello", "the local value was rewritten backwards");
 });
 
-test("one device's edits to a diff3 field converge on what it last typed", () => {
-  fc.assert(
-    fc.property(
+test("one device's edits to a diff3 field converge on what it last typed", async () => {
+  await fc.assert(
+    fc.asyncProperty(
       fc.array(fc.string({ minLength: 1, maxLength: 40 }), { minLength: 1, maxLength: 12 }),
       fc.integer({ min: 1, max: 4 }),
-      (edits, syncEvery) => {
-        const { server, client } = seeded();
+      async (edits, syncEvery) => {
+        const { server, client } = await seeded();
         for (const [index, text] of edits.entries()) {
-          client.update(TODOS, ROW, values({ notes: text }), txnId(`edit-${index}`));
+          await client.update(TODOS, ROW, values({ notes: text }), txnId(`edit-${index}`));
           // Syncing at an arbitrary rhythm: what matters is that the queue may hold any number
           // of edits when it is finally pushed.
-          if ((index + 1) % syncEvery === 0) client.sync(server, HASH);
+          if ((index + 1) % syncEvery === 0) await client.syncWith(inProcessTransport(server), HASH);
         }
-        client.sync(server, HASH);
+        await client.syncWith(inProcessTransport(server), HASH);
 
         const last = edits.at(-1);
         assert.equal(client.listQuarantine().length, 0, "a device's own edits were quarantined");
@@ -93,22 +93,22 @@ test("one device's edits to a diff3 field converge on what it last typed", () =>
   );
 });
 
-test("a queued diff3 edit is still rebased against another device's write", () => {
+test("a queued diff3 edit is still rebased against another device's write", async () => {
   // The chained base must not paper over a real conflict: an edit from elsewhere landing
   // between the queue and the push still has to be merged rather than overwritten.
-  const { server, client } = seeded();
-  client.update(TODOS, ROW, values({ notes: "Monday: nothing\nTuesday: nothing" }), txnId("seed"));
-  client.sync(server, HASH);
+  const { server, client } = await seeded();
+  await client.update(TODOS, ROW, values({ notes: "Monday: nothing\nTuesday: nothing" }), txnId("seed"));
+  await client.syncWith(inProcessTransport(server), HASH);
 
   const other = new WeftClient(SCOPE, deviceId("tab-2"), schema);
-  other.sync(server, HASH);
-  other.update(TODOS, ROW, values({ notes: "Monday: nothing\nTuesday: review with Sam" }), txnId("remote"));
-  other.sync(server, HASH);
+  await other.syncWith(inProcessTransport(server), HASH);
+  await other.update(TODOS, ROW, values({ notes: "Monday: nothing\nTuesday: review with Sam" }), txnId("remote"));
+  await other.syncWith(inProcessTransport(server), HASH);
 
-  client.update(TODOS, ROW, values({ notes: "Monday: draft it\nTuesday: nothing" }), txnId("local-1"));
-  client.update(TODOS, ROW, values({ notes: "Monday: draft the proposal\nTuesday: nothing" }), txnId("local-2"));
-  client.sync(server, HASH);
-  client.sync(server, HASH);
+  await client.update(TODOS, ROW, values({ notes: "Monday: draft it\nTuesday: nothing" }), txnId("local-1"));
+  await client.update(TODOS, ROW, values({ notes: "Monday: draft the proposal\nTuesday: nothing" }), txnId("local-2"));
+  await client.syncWith(inProcessTransport(server), HASH);
+  await client.syncWith(inProcessTransport(server), HASH);
 
   const merged = wireText(client.getRow(TODOS, ROW)?.fields.get(NOTES) ?? "");
   assert.match(merged, /draft the proposal/u, "the local edit was lost");
@@ -116,30 +116,30 @@ test("a queued diff3 edit is still rebased against another device's write", () =
   assert.equal(client.outbox.length, 0, "the merged result never reached the server");
 });
 
-test("a merge survives the field's last-writer-wins comparison", () => {
+test("a merge survives the field's last-writer-wins comparison", async () => {
   // The rebased write is stamped by a clock that has never seen the value it merged with, so
   // without the server's stamp travelling back with the rejection the push accepts the merge
   // and the field comparison then discards it — an edit the client was told had landed.
-  const { server, client } = seeded();
-  client.update(TODOS, ROW, values({ notes: "line one\nline two" }), txnId("seed"));
-  client.sync(server, HASH);
+  const { server, client } = await seeded();
+  await client.update(TODOS, ROW, values({ notes: "line one\nline two" }), txnId("seed"));
+  await client.syncWith(inProcessTransport(server), HASH);
 
   // A device whose id sorts after this one, so it wins every tie the clocks cannot break.
   const later = new WeftClient(SCOPE, deviceId("zz-last"), schema);
-  later.sync(server, HASH);
-  later.update(TODOS, ROW, values({ notes: "line one\nline two, revised" }), txnId("remote"));
-  later.sync(server, HASH);
+  await later.syncWith(inProcessTransport(server), HASH);
+  await later.update(TODOS, ROW, values({ notes: "line one\nline two, revised" }), txnId("remote"));
+  await later.syncWith(inProcessTransport(server), HASH);
 
-  client.update(TODOS, ROW, values({ notes: "line one, edited\nline two" }), txnId("local"));
-  client.sync(server, HASH);
-  client.sync(server, HASH);
+  await client.update(TODOS, ROW, values({ notes: "line one, edited\nline two" }), txnId("local"));
+  await client.syncWith(inProcessTransport(server), HASH);
+  await client.syncWith(inProcessTransport(server), HASH);
 
   assert.match(wireText(serverValue(server, NOTES) ?? ""), /line one, edited/u, "the merge was outvoted and dropped");
   assert.match(wireText(client.getRow(TODOS, ROW)?.fields.get(NOTES) ?? ""), /line one, edited/u);
   assert.match(wireText(client.getRow(TODOS, ROW)?.fields.get(NOTES) ?? ""), /line two, revised/u);
 });
 
-test("rebasing one diff3 row does not rewrite another row in the same transaction", () => {
+test("rebasing one diff3 row does not rewrite another row in the same transaction", async () => {
   const server = new WeftServer();
   const local = new WeftClient(SCOPE, deviceId("tab-1"), schema);
   const remote = new WeftClient(SCOPE, deviceId("tab-2"), schema);
@@ -147,7 +147,7 @@ test("rebasing one diff3 row does not rewrite another row in the same transactio
   const second = rowId("todo-2");
 
   for (const row of [first, second]) {
-    local.create(
+    await local.create(
       TODOS,
       row,
       values({
@@ -161,17 +161,17 @@ test("rebasing one diff3 row does not rewrite another row in the same transactio
       txnId(`create-${row}`),
     );
   }
-  local.sync(server, HASH);
-  remote.sync(server, HASH);
+  await local.syncWith(inProcessTransport(server), HASH);
+  await remote.syncWith(inProcessTransport(server), HASH);
 
-  remote.update(TODOS, first, values({ notes: "line one\nline two, remote" }), txnId("remote-first"));
-  remote.sync(server, HASH);
+  await remote.update(TODOS, first, values({ notes: "line one\nline two, remote" }), txnId("remote-first"));
+  await remote.syncWith(inProcessTransport(server), HASH);
 
   const transaction = txnId("local-both");
-  local.update(TODOS, first, values({ notes: "line one, local\nline two" }), transaction);
-  local.update(TODOS, second, values({ notes: "second row only" }), transaction);
-  local.sync(server, HASH);
-  local.sync(server, HASH);
+  await local.update(TODOS, first, values({ notes: "line one, local\nline two" }), transaction);
+  await local.update(TODOS, second, values({ notes: "second row only" }), transaction);
+  await local.syncWith(inProcessTransport(server), HASH);
+  await local.syncWith(inProcessTransport(server), HASH);
 
   assert.equal(
     local.listQuarantine().some((op) => op.rowId === second),
@@ -194,25 +194,25 @@ test("rebasing one diff3 row does not rewrite another row in the same transactio
   assert.match(mergedFirst, /line two, remote/u, "the rebased row lost the remote edit");
 });
 
-test("a create transaction may refine a diff3 field before it is pushed", () => {
-  fc.assert(
-    fc.property(
+test("a create transaction may refine a diff3 field before it is pushed", async () => {
+  await fc.assert(
+    fc.asyncProperty(
       fc.string({ minLength: 1, maxLength: 40 }),
       fc.string({ minLength: 1, maxLength: 40 }),
-      (initialNotes, refinedNotes) => {
+      async (initialNotes, refinedNotes) => {
         fc.pre(initialNotes !== refinedNotes);
         const server = new WeftServer(() => 1_000);
         const client = new WeftClient(SCOPE, deviceId("tab-1"), schema, () => 1_000);
         const transaction = txnId("create-and-refine");
 
-        client.create(
+        await client.create(
           TODOS,
           ROW,
           values({ title: "plan", notes: initialNotes, done: false, rank: "a0", due_at: null, auto_delete_days: null }),
           transaction,
         );
-        client.update(TODOS, ROW, values({ notes: refinedNotes }), transaction);
-        client.sync(server, HASH);
+        await client.update(TODOS, ROW, values({ notes: refinedNotes }), transaction);
+        await client.syncWith(inProcessTransport(server), HASH);
 
         assert.equal(client.listQuarantine().length, 0, "a valid create transaction was quarantined");
         assert.equal(client.outbox.length, 0, "the valid transaction did not drain");
@@ -223,7 +223,7 @@ test("a create transaction may refine a diff3 field before it is pushed", () => 
   );
 });
 
-test("prose written before the relay was ever heard from does not come back marked", () => {
+test("prose written before the relay was ever heard from does not come back marked", async () => {
   // The ancestor a rebase merges against is recorded on every pull, applied or not. Record it
   // only when the value is applied and a device that wrote the field before it ever received one —
   // a row made offline, or one whose every pull is shadowed by the unsent write sitting on top of
@@ -235,41 +235,41 @@ test("prose written before the relay was ever heard from does not come back mark
   const server = new WeftServer();
 
   const first = new WeftClient(SCOPE, deviceId("tab-1"), schema);
-  first.create(
+  await first.create(
     TODOS,
     ROW,
     values({ title: "plan", notes: prose, done: false, rank: "a0", due_at: null, auto_delete_days: null }),
     txnId("create-first"),
   );
-  first.sync(server, HASH);
+  await first.syncWith(inProcessTransport(server), HASH);
 
   // The second device makes the same row offline, so its create is refused and set aside. That
   // leaves it holding the row with a quarantined write on `notes`, which is what shadows every
   // pull that would otherwise have told it what the relay holds.
   const second = new WeftClient(SCOPE, deviceId("tab-2"), schema);
-  second.create(
+  await second.create(
     TODOS,
     ROW,
     values({ title: "plan", notes: prose, done: false, rank: "a0", due_at: null, auto_delete_days: null }),
     txnId("create-second"),
   );
-  second.sync(server, HASH);
+  await second.syncWith(inProcessTransport(server), HASH);
 
   // Only now does it edit one line, of prose the relay's copy still agrees with word for word.
-  second.update(TODOS, ROW, values({ notes: prose.replace("alpha", "revised") }), txnId("edit-second"));
-  for (let attempt = 0; attempt < 4; attempt += 1) second.sync(server, HASH);
+  await second.update(TODOS, ROW, values({ notes: prose.replace("alpha", "revised") }), txnId("edit-second"));
+  for (let attempt = 0; attempt < 4; attempt += 1) await second.syncWith(inProcessTransport(server), HASH);
 
   const local = wireText(second.getRow(TODOS, ROW)?.fields.get(NOTES) ?? "");
   assert.doesNotMatch(local, /WEFT_LOCAL/u, `an uncontended edit came back marked: ${JSON.stringify(local)}`);
   assert.equal(local.split("\n")[0], "revised", "the edit was lost rather than kept");
 });
 
-test("the same rhythm on a last-writer-wins field is unaffected", () => {
-  const { server, client } = seeded();
+test("the same rhythm on a last-writer-wins field is unaffected", async () => {
+  const { server, client } = await seeded();
   for (const [index, text] of ["p", "pl", "pla", "plan"].entries()) {
-    client.update(TODOS, ROW, values({ title: text }), txnId(`title-${index}`));
+    await client.update(TODOS, ROW, values({ title: text }), txnId(`title-${index}`));
   }
-  client.sync(server, HASH);
+  await client.syncWith(inProcessTransport(server), HASH);
 
   assert.equal(client.listQuarantine().length, 0);
   assert.equal(client.outbox.length, 0);

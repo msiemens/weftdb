@@ -52,8 +52,11 @@ export interface SessionOptions {
 export interface SocketHandlers {
   /** The relay says the scope moved and this client should catch up. */
   readonly onWake: () => void;
-  /** The relay sent what changed; it is applied through the ordinary pull path. */
-  readonly onBatch: (batch: PullBatch) => void;
+  /**
+   * The relay sent what changed; it is applied through the ordinary pull path, and the promise
+   * settles once it has been committed.
+   */
+  readonly onBatch: (batch: PullBatch) => Promise<void>;
   readonly onStatusChange: () => void;
   /** Where this client has got to, so the relay can send what it is missing. */
   readonly cursor: () => number;
@@ -77,6 +80,8 @@ export class WeftSession {
   #queued = false;
   #lastError: string | undefined;
   #lastSyncedAt: number | undefined;
+  /** What is currently allowed to touch the client. See `#alone`. */
+  #serial: Promise<unknown> = Promise.resolve();
 
   constructor(options: SessionOptions) {
     this.#options = options;
@@ -97,10 +102,11 @@ export class WeftSession {
     if (this.#options.openSocket !== undefined) {
       this.#socket = this.#options.openSocket({
         onWake: () => void this.sync(),
-        onBatch: (batch) => {
-          this.client.applyPull(batch);
-          this.#changed(false);
-        },
+        onBatch: (batch) =>
+          this.#alone(async () => {
+            await this.client.applyPull(batch);
+            this.#changed(false);
+          }),
         onStatusChange: () => {
           this.#publish();
           this.#restartTimer();
@@ -145,10 +151,12 @@ export class WeftSession {
   }
 
   /** Drops this device's diverged work and re-derives the rows from the server (§5.5). */
-  discardQuarantine(): void {
-    for (const transaction of new Set(this.client.listQuarantine().map((op) => op.txnId))) {
-      this.client.discardQuarantinedTxn(transaction);
-    }
+  async discardQuarantine(): Promise<void> {
+    await this.#alone(async () => {
+      for (const transaction of new Set(this.client.listQuarantine().map((op) => op.txnId))) {
+        await this.client.discardQuarantinedTxn(transaction);
+      }
+    });
     this.changed();
   }
 
@@ -165,7 +173,7 @@ export class WeftSession {
       // The socket while it is up, HTTP when it is not. Both run the same session: only the
       // way the four calls travel differs.
       const transport = this.#socket?.connected === true ? this.#socket : this.#options.transport;
-      await this.client.syncWith(transport, this.#options.schemaHash);
+      await this.#alone(() => this.client.syncWith(transport, this.#options.schemaHash));
       this.#lastError = undefined;
       this.#lastSyncedAt = (this.#options.now ?? Date.now)();
     } catch (error) {
@@ -181,6 +189,23 @@ export class WeftSession {
       this.#queued = false;
       await this.sync();
     }
+  }
+
+  /**
+   * Runs one piece of work against the client at a time.
+   *
+   * Applying a batch and running a sync both read the outbox, rebase against it and write the
+   * result through, and neither can be suspended half way through and resumed against a client the
+   * other has moved: a subscribed socket routinely delivers a batch while the sync that provoked it
+   * is still draining the outbox, so the two overlap in ordinary use rather than under load.
+   */
+  #alone<Result>(work: () => Promise<Result>): Promise<Result> {
+    const result = this.#serial.then(work, work);
+    this.#serial = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   /** Called after a local change: tell this tab's views, then the relay, then the other tabs. */

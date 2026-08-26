@@ -10,8 +10,9 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/core";
+import { asyncSqlExecutor } from "weftdb/shared";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
-import { WeftClient } from "weftdb/client";
+import { inProcessTransport, WeftClient } from "weftdb/client";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
 import { SqliteWeftServer } from "weftdb/server/sqlite";
@@ -28,23 +29,23 @@ const DEVICE = deviceId("laptop");
 const TASKS = tableName("tasks");
 const TITLE = fieldName("title");
 
-test("unsent local work survives losing the process", (t) => {
+test("unsent local work survives losing the process", async (t) => {
   const directory = temporaryDirectory(t);
   const path = join(directory, "client.sqlite");
 
   {
-    using executor = openSqliteExecutor(path);
-    const store = new SqliteClientStore(executor, schema);
-    store.installSchema();
-    const client = store.attach(new WeftClient(SCOPE, DEVICE, schema, () => 1_000));
+    using file = openSqliteExecutor(path);
+    const store = new SqliteClientStore(asyncSqlExecutor(file), schema);
+    await store.installSchema();
+    const client = await store.attach(new WeftClient(SCOPE, DEVICE, schema, () => 1_000));
 
-    client.create(TASKS, rowId("task-1"), { [TITLE]: "written before the crash" }, txnId("create"));
-    client.update(TASKS, rowId("task-1"), { [TITLE]: "edited before the crash" }, txnId("edit"));
-    // No save() call anywhere: persistence is a property of making the change.
+    await client.create(TASKS, rowId("task-1"), { [TITLE]: "written before the crash" }, txnId("create"));
+    await client.update(TASKS, rowId("task-1"), { [TITLE]: "edited before the crash" }, txnId("edit"));
+    // Nothing calls save(): a mutation's promise resolves once the write it made has committed.
   }
 
-  using executor = openSqliteExecutor(path);
-  const hydrated = new SqliteClientStore(executor, schema).hydrate(SCOPE, DEVICE);
+  using file = openSqliteExecutor(path);
+  const hydrated = await new SqliteClientStore(asyncSqlExecutor(file), schema).hydrate(SCOPE, DEVICE);
   assert.equal(hydrated.getRow(TASKS, rowId("task-1"))?.fields.get(TITLE), "edited before the crash");
   assert.equal(hydrated.outbox.length > 0, true, "the outbox did not survive");
   assert.deepEqual(
@@ -54,7 +55,7 @@ test("unsent local work survives losing the process", (t) => {
   );
 });
 
-test("quarantined work survives losing the process, and can still be repaired", (t) => {
+test("quarantined work survives losing the process, and can still be repaired", async (t) => {
   const directory = temporaryDirectory(t);
   const clientPath = join(directory, "client.sqlite");
   const serverPath = join(directory, "server.sqlite");
@@ -62,28 +63,28 @@ test("quarantined work survives losing the process, and can still be repaired", 
   {
     using clientDb = openSqliteExecutor(clientPath);
     using serverDb = openSqliteExecutor(serverPath);
-    const store = new SqliteClientStore(clientDb, schema);
-    store.installSchema();
+    const store = new SqliteClientStore(asyncSqlExecutor(clientDb), schema);
+    await store.installSchema();
     const server = new SqliteWeftServer(serverDb, () => 1_000);
-    const client = store.attach(new WeftClient(SCOPE, DEVICE, schema, () => 1_000));
+    const client = await store.attach(new WeftClient(SCOPE, DEVICE, schema, () => 1_000));
 
-    client.create(TASKS, rowId("task-1"), { [TITLE]: "first" }, txnId("create"));
-    client.sync(server, schemaHash(schema));
+    await client.create(TASKS, rowId("task-1"), { [TITLE]: "first" }, txnId("create"));
+    await client.syncWith(inProcessTransport(server), schemaHash(schema));
     // A base field write is a quarantine-class rejection.
-    client.update(TASKS, rowId("task-1"), { [fieldName("created")]: "rewritten" }, txnId("bad"));
-    client.sync(server, schemaHash(schema));
+    await client.update(TASKS, rowId("task-1"), { [fieldName("created")]: "rewritten" }, txnId("bad"));
+    await client.syncWith(inProcessTransport(server), schemaHash(schema));
     assert.equal(client.quarantine.length > 0, true, "nothing was quarantined to begin with");
   }
 
   using clientDb = openSqliteExecutor(clientPath);
-  const hydrated = new SqliteClientStore(clientDb, schema).hydrate(SCOPE, DEVICE);
+  const hydrated = await new SqliteClientStore(asyncSqlExecutor(clientDb), schema).hydrate(SCOPE, DEVICE);
   assert.equal(
     hydrated.quarantine.some((op) => op.txnId === txnId("bad") && op.reason === "base_field_violation"),
     true,
     "quarantined work was lost, so the user could never be asked about it",
   );
   assert.equal(hydrated.exportQuarantinedTxn(txnId("bad")).length > 0, true, "the repair API cannot see it");
-  hydrated.discardQuarantinedTxn(txnId("bad"));
+  await hydrated.discardQuarantinedTxn(txnId("bad"));
   assert.deepEqual(hydrated.quarantine, [], "discarding after a restart did not take");
 });
 
@@ -128,7 +129,7 @@ test("the server database is configured to survive power loss, not just process 
 const PUSH_THEN_DIE = `
 import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
-import { WeftClient } from "weftdb/client";
+import { inProcessTransport, WeftClient } from "weftdb/client";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
 import { SqliteWeftServer } from "weftdb/server/sqlite";
 
@@ -142,8 +143,8 @@ const schema = defineSchema({
 const executor = openSqliteExecutor(process.argv[2]);
 const server = new SqliteWeftServer(executor, () => 1_000);
 const client = new WeftClient(scopeId("durability"), deviceId("laptop"), schema, () => 1_000);
-client.create(tableName("tasks"), rowId("task-1"), { [fieldName("title")]: "acknowledged before the kill" }, txnId("create"));
-client.sync(server, schemaHash(schema));
+await client.create(tableName("tasks"), rowId("task-1"), { [fieldName("title")]: "acknowledged before the kill" }, txnId("create"));
+await client.syncWith(inProcessTransport(server), schemaHash(schema));
 
 if (client.outbox.length !== 0) throw new Error("the push was not acknowledged");
 process.stdout.write("acked\\n");

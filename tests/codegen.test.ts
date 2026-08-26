@@ -6,16 +6,46 @@ import ts from "typescript";
 import {
   generateArtifacts,
   generateBindings,
+  generateClientDdl,
   generateMutators,
   generateNestedMappers,
   generateRelationshipHelpers,
   lintAdditiveEvolution,
 } from "weftdb/codegen";
+import { splitSql } from "#root/packages/weftdb/src/sql.ts";
 import { SqliteClientStore } from "weftdb/client/sqlite";
-import type { SqlExecutor, SqlRow } from "weftdb/shared";
+import { asyncSqlExecutor, type SqlExecutor, type SqlRow } from "weftdb/shared";
 import { defineSchema, S, schemaHash, type DatabaseOf, type SchemaDefinition } from "weftdb/schema";
 
-test("the generated query builder scopes its statement and selects the id the engine reads", () => {
+test("a field the schema marks indexed gets an index led by scope_id, and no other field does", async () => {
+  const schema = defineSchema({
+    todos: S.collection({ title: S.string(), done: S.boolean({ index: true }) }),
+  });
+  const ddl = generateClientDdl(schema);
+
+  // Led by `scope_id` because every statement a device runs is scoped: one database file holds
+  // every scope this device is signed into, so a query narrows by it before anything else.
+  assert.match(ddl, /CREATE INDEX IF NOT EXISTS "todos_done" ON "todos" \(scope_id, "done"\);/u);
+  assert.doesNotMatch(ddl, /"todos_title"/u, "a field the schema said nothing about was indexed");
+  // `IF NOT EXISTS`, because `installSchema` runs the whole DDL on every open.
+  assert.deepEqual(
+    splitSql(ddl).filter((statement) => statement.startsWith("CREATE INDEX")),
+    ['CREATE INDEX IF NOT EXISTS "todos_done" ON "todos" (scope_id, "done")'],
+    "the index did not come out of the script as a statement of its own",
+  );
+});
+
+test("an index is invisible to the schema hash, so adding one syncs no differently", async () => {
+  // The hash is what two devices refuse to sync across. An index is a fact about how one device
+  // reads its own file, and a device that added one would otherwise look like a device on another
+  // schema and force a resync for a change no row can tell apart.
+  const plain = defineSchema({ todos: S.collection({ title: S.string(), done: S.boolean() }) });
+  const indexed = defineSchema({ todos: S.collection({ title: S.string(), done: S.boolean({ index: true }) }) });
+  assert.equal(schemaHash(indexed), schemaHash(plain));
+  assert.deepEqual(lintAdditiveEvolution(plain, indexed), [], "adding an index was reported as a schema change");
+});
+
+test("the generated query builder scopes its statement and selects the id the engine reads", async () => {
   const bindings = generateBindings(defineSchema({ todos: S.collection({ title: S.string() }) }));
   // Scoping is applied before the caller's callback runs, so an application cannot write a
   // statement that ranges past its own scope: one database file holds every scope.
@@ -24,7 +54,7 @@ test("the generated query builder scopes its statement and selects the id the en
   assert.match(bindings, /export function useTodosQuery\(source: WeftSource/u);
 });
 
-test("the generated hooks name one source type, so a component never has to pick between two", () => {
+test("the generated hooks name one source type, so a component never has to pick between two", async () => {
   const bindings = generateBindings(
     defineSchema({ todos: S.collection({ title: S.string() }), notes: S.collection({ body: S.string() }) }),
   );
@@ -43,7 +73,7 @@ test("the generated hooks name one source type, so a component never has to pick
   assert.doesNotMatch(bindings, /WeftSqlSource|QueryLifecycleSource|SqlQuerySource/u);
 });
 
-test("the json carriability checks are exported, so a strict consumer can still compile them", () => {
+test("the json carriability checks are exported, so a strict consumer can still compile them", async () => {
   const bindings = generateBindings(
     defineSchema({ views: S.collection({ sort: S.json({ as: "SortConfig", from: "../types.ts" }) }) }),
   );
@@ -56,7 +86,7 @@ test("the json carriability checks are exported, so a strict consumer can still 
   assert.doesNotMatch(bindings, /^type WeftJsonCheck/mu, "a check was emitted as a local type alias");
 });
 
-test("generated mutators take the transaction their caller wants them in", () => {
+test("generated mutators take the transaction their caller wants them in", async () => {
   const mutators = generateMutators(
     defineSchema({
       todos: S.collection({ title: S.string() }),
@@ -67,11 +97,11 @@ test("generated mutators take the transaction their caller wants them in", () =>
   // The relay applies a transaction as a unit, so two collections written together have to be able
   // to share one. Without this the only way to say so is the facade, and an application that
   // reaches for it to get atomicity loses the generated types on the way.
-  assert.match(mutators, /create\(id: string, values: TodosMutation, txnId\?: TxnId\): void;/u);
-  assert.match(mutators, /update\(id: string, values: TodosMutation, txnId\?: TxnId\): void;/u);
-  assert.match(mutators, /delete\(id: string, txnId\?: TxnId\): void;/u);
+  assert.match(mutators, /create\(id: string, values: TodosMutation, txnId\?: TxnId\): Promise<void>;/u);
+  assert.match(mutators, /update\(id: string, values: TodosMutation, txnId\?: TxnId\): Promise<void>;/u);
+  assert.match(mutators, /delete\(id: string, txnId\?: TxnId\): Promise<void>;/u);
   // An event log has no update or delete, and its create takes one on the same terms.
-  assert.match(mutators, /create\(id: string, values: TodoEventsMutation, txnId\?: TxnId\): void;/u);
+  assert.match(mutators, /create\(id: string, values: TodoEventsMutation, txnId\?: TxnId\): Promise<void>;/u);
   assert.match(mutators, /^import type \{ TxnId \} from "weftdb\/core";/mu);
 });
 
@@ -101,7 +131,7 @@ function declaredType(database: DatabaseSync, table: string, column: string): st
   return found === undefined ? undefined : String((found as Record<string, unknown>)["type"]);
 }
 
-test("evolution lint rejects non-additive schema changes", () => {
+test("evolution lint rejects non-additive schema changes", async () => {
   const from = defineSchema(
     {
       tasks: S.collection({
@@ -127,7 +157,7 @@ test("evolution lint rejects non-additive schema changes", () => {
   );
 });
 
-test("changing a field's type leaves the column a device already has as it was", () => {
+test("changing a field's type leaves the column a device already has as it was", async () => {
   // Reconciliation on open adds the columns a local database is missing and decides what is
   // missing by name alone. A field whose `type` changed still has a column, so nothing is added
   // and nothing is altered: the column keeps the storage class the old schema declared while the
@@ -139,11 +169,11 @@ test("changing a field's type leaves the column a device already has as it was",
   const after = defineSchema({ tasks: S.collection({ count: S.string() }) }, 2);
 
   using database = new DatabaseSync(":memory:");
-  new SqliteClientStore(executorOver(database), before).installSchema();
+  await new SqliteClientStore(asyncSqlExecutor(executorOver(database)), before).installSchema();
   assert.equal(declaredType(database, "tasks", "count"), "INTEGER", "the first install is already wrong");
 
   // The same device, opening on the build that changed the type.
-  new SqliteClientStore(executorOver(database), after).installSchema();
+  await new SqliteClientStore(asyncSqlExecutor(executorOver(database)), after).installSchema();
 
   assert.equal(
     declaredType(database, "tasks", "count"),
@@ -158,7 +188,7 @@ test("changing a field's type leaves the column a device already has as it was",
   );
 });
 
-test("artifact set includes mutators, Kysely types, relationships, and nested mappers", () => {
+test("artifact set includes mutators, Kysely types, relationships, and nested mappers", async () => {
   const schema = defineSchema({
     invoices: S.collection(
       {
@@ -184,7 +214,7 @@ test("artifact set includes mutators, Kysely types, relationships, and nested ma
   assert.equal(generateNestedMappers(schema), artifacts.nestedMappersTs);
 });
 
-test("has-one relationship helpers emit valid TypeScript result types", () => {
+test("has-one relationship helpers emit valid TypeScript result types", async () => {
   const schema = defineSchema({
     tasks: S.collection(
       {
@@ -205,7 +235,7 @@ test("has-one relationship helpers emit valid TypeScript result types", () => {
   );
 });
 
-test("a relationship result is the row type of the collection it names", () => {
+test("a relationship result is the row type of the collection it names", async () => {
   const schema = defineSchema({
     tasks: S.collection({ owner_id: S.string() }, { owner: S.hasOne("users", "owner_id", "id") }),
     users: S.collection({ name: S.string() }, { tasks: S.hasMany("tasks", "id", "owner_id") }),
@@ -279,7 +309,7 @@ function relationshipModule(schema: SchemaDefinition): Readonly<Record<string, u
   return exported;
 }
 
-test("a generated accessor relates a parent to its children and a child back to its parent", () => {
+test("a generated accessor relates a parent to its children and a child back to its parent", async () => {
   const generated = relationshipModule(JOINED);
   const issuesOf = (generated["projects_issuesRelation"] as IssuesOfProject)(ISSUES);
   const projectOf = (generated["issues_projectRelation"] as ProjectOfIssue)(PROJECTS);
@@ -298,7 +328,7 @@ test("a generated accessor relates a parent to its children and a child back to 
   assert.equal(projectOf({ project_id: "p2" })?.name, "Weaving room");
 });
 
-test("a parent with no children resolves empty, and a child whose parent is absent resolves to nothing", () => {
+test("a parent with no children resolves empty, and a child whose parent is absent resolves to nothing", async () => {
   const generated = relationshipModule(JOINED);
   const issuesOf = (generated["projects_issuesRelation"] as IssuesOfProject)(ISSUES);
   const projectOf = (generated["issues_projectRelation"] as ProjectOfIssue)(PROJECTS);
@@ -312,7 +342,7 @@ test("a parent with no children resolves empty, and a child whose parent is abse
   assert.equal(issuesOf({ id: "p3" }), issuesOf({ id: "p4" }));
 });
 
-test("a generated accessor indexes its targets once and answers every lookup from that index", () => {
+test("a generated accessor indexes its targets once and answers every lookup from that index", async () => {
   const generated = relationshipModule(JOINED);
 
   // Each row counts the reads of the field the join is keyed on. Indexing reads it once per row;
@@ -341,7 +371,7 @@ test("a generated accessor indexes its targets once and answers every lookup fro
   assert.equal(reads, issues.length, "a lookup read the target rows again, so the index is rebuilt per call");
 });
 
-test("an accessor's result is the target row type, so a call site needs no cast", () => {
+test("an accessor's result is the target row type, so a call site needs no cast", async () => {
   const artifacts = generateArtifacts(JOINED);
   const siblings = { "relationships.ts": artifacts.relationshipsTs, "database.d.ts": artifacts.databaseDts };
   const application = (field: string): string =>
@@ -372,7 +402,7 @@ test("an accessor's result is the target row type, so a call site needs no cast"
   );
 });
 
-test("a relationship naming a collection the schema does not define stays unknown", () => {
+test("a relationship naming a collection the schema does not define stays unknown", async () => {
   // Unreachable through `defineSchema`, which refuses this schema outright — in both senses,
   // since the literal below is a compile error as well as a throw. It is written by hand here
   // because generation still has to tolerate a `SchemaDefinition` that reached it another way: a
@@ -395,7 +425,7 @@ test("a relationship naming a collection the schema does not define stays unknow
   assert.deepEqual(typeDiagnostics("relationships.ts", relationships, relationshipSiblings(schema)), []);
 });
 
-test("relationship helper names are unambiguous after generation", () => {
+test("relationship helper names are unambiguous after generation", async () => {
   const distinct = defineSchema({
     tasks: S.collection({ owner_id: S.string() }, { owner: S.hasOne("users", "owner_id", "id") }),
     users: S.collection({ name: S.string() }, { tasks: S.hasMany("tasks", "id", "owner_id") }),
@@ -417,7 +447,7 @@ test("relationship helper names are unambiguous after generation", () => {
   assert.throws(() => generateRelationshipHelpers(colliding), /generate the same name/u);
 });
 
-test("a relationship is refused unless all three of its names resolve", () => {
+test("a relationship is refused unless all three of its names resolve", async () => {
   // A relationship is three names into the rest of the schema, and unchecked they fail quietly:
   // the join matches no row at runtime, and the result type degrades to `unknown` — a typo that
   // gets quieter rather than louder the more the generator learns.
@@ -473,7 +503,7 @@ test("a relationship is refused unless all three of its names resolve", () => {
   );
 });
 
-test("checking a relationship leaves the schema hash where it was", () => {
+test("checking a relationship leaves the schema hash where it was", async () => {
   // Which collection a join names is a local concern: no row travels differently for it, and the
   // hash is protocol visible, so two devices that disagreed about it would force a resync over a
   // change neither can see.
@@ -484,7 +514,7 @@ test("checking a relationship leaves the schema hash where it was", () => {
   assert.equal(schemaHash(schema), "2f66d9655767558e226873f9bef5ecc803cf0ac58515535486711a83b2010db6");
 });
 
-test("a relationship that names something the schema does not have is a compile error", () => {
+test("a relationship that names something the schema does not have is a compile error", async () => {
   // The runtime check is the safety net; this is the point of the exercise. `S.hasMany` keeps its
   // three arguments as the literals they were written as, so `defineSchema` can hold each one to
   // the names that would actually resolve.
@@ -519,7 +549,7 @@ test("a relationship that names something the schema does not have is a compile 
   );
 });
 
-test("a schema that declares no relationship is inferred exactly as it was", () => {
+test("a schema that declares no relationship is inferred exactly as it was", async () => {
   // The constraint rides on `defineSchema`'s parameter and mentions only `relationships`, so a
   // schema without any is constrained by nothing. Inference is what every generated type is built
   // out of, and a constraint that flattened it would cost far more than it caught.
@@ -546,7 +576,7 @@ test("a schema that declares no relationship is inferred exactly as it was", () 
   assert.equal(row.done, false);
 });
 
-test("nested mappers share helper definitions without redeclaring them", () => {
+test("nested mappers share helper definitions without redeclaring them", async () => {
   const schema = defineSchema({
     alpha: S.collection({ one__two: S.string() }),
     beta: S.collection({ three__four: S.string() }),
@@ -555,7 +585,7 @@ test("nested mappers share helper definitions without redeclaring them", () => {
   assert.deepEqual(typeDiagnostics("nested-mappers.ts", generateNestedMappers(schema)), []);
 });
 
-test("an enum field is worth its values everywhere they can be enforced", () => {
+test("an enum field is worth its values everywhere they can be enforced", async () => {
   const schema = defineSchema({
     todos: S.collection({
       status: S.enum(["open", "doing", "done"]),
@@ -581,7 +611,7 @@ test("an enum field is worth its values everywhere they can be enforced", () => 
   assert.match(bindings, /: "open"/u, "a non-nullable enum falls back to something outside its own values");
 });
 
-test("an enum cannot be declared with a value twice", () => {
+test("an enum cannot be declared with a value twice", async () => {
   assert.throws(() => S.enum(["open", "open"]), /repeat/u);
 });
 
@@ -598,7 +628,7 @@ const LABEL_MODULE = [
   "}",
 ].join("\n");
 
-test("a json field is worth the type the schema declares for it", () => {
+test("a json field is worth the type the schema declares for it", async () => {
   const schema = defineSchema({
     cards: S.collection({
       label: S.json({ as: "Label", from: "./types.ts" }),
@@ -630,7 +660,7 @@ test("a json field is worth the type the schema declares for it", () => {
   assert.match(artifacts.bindingsTs, /freeform: \(row\.fields\.get\(fieldName\("freeform"\)\) \?\? ''\) as unknown,/u);
 });
 
-test("a declared json type is checked against what JSON can carry", () => {
+test("a declared json type is checked against what JSON can carry", async () => {
   const schema = defineSchema({ cards: S.collection({ label: S.json({ as: "Label", from: "./types.ts" }) }) });
 
   // A json value is stored with `encodeWireValue`, so a type JSON cannot carry describes a field
@@ -660,7 +690,7 @@ test("a declared json type is checked against what JSON can carry", () => {
   );
 });
 
-test("a declared json type is read and written without a cast", () => {
+test("a declared json type is read and written without a cast", async () => {
   const schema = defineSchema({ cards: S.collection({ label: S.json({ as: "Label", from: "./types.ts" }) }) });
   const artifacts = generateArtifacts(schema);
 
@@ -689,7 +719,7 @@ test("a declared json type is read and written without a cast", () => {
   );
 });
 
-test("a declared json type does not reach the schema hash", () => {
+test("a declared json type does not reach the schema hash", async () => {
   // Two devices have to agree about which writes are legal, and a json field carries a
   // `WireValue` whatever name one device's generated code puts on it. Hashing the name would make
   // a device that only renamed a TypeScript type look like a device on another schema, and force
@@ -701,7 +731,7 @@ test("a declared json type does not reach the schema hash", () => {
   assert.deepEqual(lintAdditiveEvolution(bare, declared), []);
 });
 
-test("two json types cannot share a name", () => {
+test("two json types cannot share a name", async () => {
   // The generated file has one namespace, so the second import would land on top of the first and
   // silently give one collection the other's type.
   const colliding = defineSchema({
@@ -721,7 +751,7 @@ test("two json types cannot share a name", () => {
   assert.deepEqual(imports, ['import type { Label } from "./types.ts";']);
 });
 
-test("a json type that has to be imported has to be an identifier", () => {
+test("a json type that has to be imported has to be an identifier", async () => {
   // It is written verbatim into `import type { … }`, where an expression does not parse.
   assert.throws(() => S.json({ as: "readonly string[]", from: "./types.ts" }), /single identifier/u);
   assert.throws(() => S.json({ as: "  ", from: "./types.ts" }), /cannot be empty/u);
@@ -729,7 +759,7 @@ test("a json type that has to be imported has to be an identifier", () => {
   assert.doesNotThrow(() => S.json({ as: "Record<string, number>" }));
 });
 
-test("bindings give an application a hook, a decoder and mutators per collection", () => {
+test("bindings give an application a hook, a decoder and mutators per collection", async () => {
   const schema = defineSchema({
     todo_items: S.collection({
       title: S.string(),

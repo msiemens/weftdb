@@ -33,28 +33,26 @@ export interface WeftSource {
 map, `scopeId` is the scope the device was hydrated for, and `select` answers which rows a
 statement matched, in order.
 
-`select` is a function rather than a database because the database is not always on the thread
-that renders. A `WeftClientMirror` is a `WeftSource` already: it reads the ids the worker last
-pushed. A client on the thread that renders is paired with `executorRowSelect(executor)`, which
-runs the statement. Both answer synchronously, which is what a snapshot read during render
-requires, and a component sees none of the difference.
+`select` is a function rather than a database because the database is not on the thread that
+renders. It lives in a `SharedWorker`, and a compiled statement runs there. A `WeftClientMirror` is
+a `WeftSource` already: `select` reads the ids the worker last pushed, so it answers synchronously,
+which is what a snapshot read during render requires.
 
 `select` returns `undefined` for a statement the source has no answer for, which covers a statement
 nobody registered and a statement whose first answer has yet to arrive. A statement that ran and
 matched nothing returns an empty array. Both render as an empty list, and the returned value is
 what tells a caller which of the two it is holding.
 
-`watch` and `unwatch` tell a source whose database is elsewhere that a statement is being read. A
-mirror answers `select` out of what the worker last pushed, so a statement nobody registered has no
-answer for as long as the page is open. `use<Collection>Query` registers in an effect and hands the
-registration back on unmount, and registrations are counted, so two components reading one list are
-one statement in the worker. A source whose database is on the thread that renders implements both
-members as no-ops, because `select` runs the statement there and there is nobody to tell.
+`watch` and `unwatch` tell the worker that a statement is being read, so it re-runs that statement
+after every mutation. A mirror answers `select` out of what the worker last pushed, so a statement
+nobody registered has no answer for as long as the page is open. `use<Collection>Query` registers
+in an effect and hands the registration back on unmount, and registrations are counted, so two
+components reading one list are one statement in the worker.
 
 :::note
-A browser reaches SQLite through a worker, because the only synchronous handle exists inside one.
-[Storage on the device](/guides/device-storage/) covers the worker, the mirror that carries its
-rows to the page, and building a source over each backend.
+One `SharedWorker` per origin holds every database that origin has open, and every tab reads it
+over a port of its own. [Storage on the device](/guides/device-storage/) covers the worker and the
+mirror that carries its rows to the page.
 :::
 
 ## Filtering, ordering, and paging

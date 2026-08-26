@@ -22,11 +22,13 @@ import { generateArtifacts } from "weftdb/codegen";
 
 - `weftdb` - core types, schema helpers, and client APIs.
 - `weftdb/core` - branded ids, operation types, HLCs, diff3, ranks.
-- `weftdb/shared` - hashing, the wire-value codec, SQL port.
+- `weftdb/shared` - hashing, the wire-value codec, the `SqlExecutor` and `AsyncSqlExecutor` ports.
 - `weftdb/schema` - schema DSL and schema hashing.
-- `weftdb/client` - client model, sync, transports, subscriptions, query keys.
+- `weftdb/client` - client model, `openWeftDatabase`, sync, transports, subscriptions, query keys.
 - `weftdb/client/sqlite` - SQLite-backed client store.
-- `weftdb/client/wasm-sqlite` - sqlite-wasm executor helpers.
+- `weftdb/client/wasm-sqlite` - wa-sqlite executor helpers.
+- `weftdb/client/worker-entry` - `serveWeftStorageWorker`, the origin's storage `SharedWorker`.
+- `weftdb/client/worker-host` - `serveWeftWorker`, the protocol host over one database.
 - `weftdb/server` - in-memory schema-blind server.
 - `weftdb/server/sqlite` - SQLite-backed server store.
 - `weftdb/server/node-sqlite` - `node:sqlite` executor.
@@ -61,10 +63,13 @@ import { WeftClient } from "weftdb/client";
 
 const client = new WeftClient(scopeId("user-1"), deviceId("laptop"), schema);
 
-client.create(tableName("tasks"), rowId("task-1"), {
+await client.create(tableName("tasks"), rowId("task-1"), {
   [fieldName("title")]: "Write README",
 });
 ```
+
+Writes return a promise — it resolves once the change has committed and rejects when it was
+refused. Reads (`getRow`, `listRows`, `isRowDirty`) answer directly.
 
 ## SQLite Client Store
 
@@ -72,18 +77,39 @@ client.create(tableName("tasks"), rowId("task-1"), {
 import { SqliteClientStore } from "weftdb/client/sqlite";
 
 const store = new SqliteClientStore(executor, schema);
-const client = store.hydrate(scopeId, deviceId);
+const client = await store.hydrate(scopeId, deviceId);
 ```
 
-The store creates missing tables and columns from the current schema when opened.
+The executor is an `AsyncSqlExecutor`. The store creates missing tables and columns from the current
+schema when opened.
+
+## Storage Worker
+
+One `SharedWorker` per origin holds every database that origin has open, and each tab reaches it
+over a port of its own.
+
+```ts
+import { serveWeftStorageWorker, type WeftWorkerScope } from "weftdb/client/worker-entry";
+
+const worker = serveWeftStorageWorker({ schema, sqlite });
+
+(globalThis as unknown as WeftWorkerScope).onconnect = (event) => {
+  const port = event.ports[0];
+  if (port !== undefined) worker.connect(port);
+};
+```
+
+`sqlite` builds the wa-sqlite API, the module it was built over, and the VFS its databases live in.
+The page opens through `openWeftDatabase({ schema, scopeId, worker })`, naming that module's URL.
 
 ## Server
 
 ```ts
+import { inProcessTransport } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 
 const server = new WeftServer();
-client.sync(server, schemaHash(schema));
+await client.syncWith(inProcessTransport(server), schemaHash(schema));
 ```
 
 Durable server:

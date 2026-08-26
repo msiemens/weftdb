@@ -7,12 +7,11 @@
 // at the other end of it, which is what a demo on a static docs page cannot have.
 //
 // Nothing here needs storage. `WeftServer` imports only from `weftdb/core`, takes no executor and
-// keeps its records in maps, so there is no SQLite, no WebAssembly and no persistence — which is
-// also why a `SharedWorker` is enough to hold it, where the *database* worker is a dedicated worker
-// because Firefox refuses OPFS access handles in a shared one. The scope's history therefore lasts
-// exactly as long as the worker: close every tab of the origin and the relay's copy is gone, while
-// each tab keeps its own rows in its own storage. For two tabs open beside each other, which is the
-// whole of what these demos demonstrate, that is the entire lifetime that matters.
+// keeps its records in maps, so there is no SQLite, no WebAssembly and no persistence. The scope's
+// history therefore lasts exactly as long as the worker: close every tab of the origin and the
+// relay's copy is gone, while each tab keeps its own rows in its own storage. For two tabs open
+// beside each other, which is the whole of what these demos demonstrate, that is the entire
+// lifetime that matters.
 //
 // There is no authorisation here, and there must not be. A deployed relay derives the scope and the
 // device from a token, and that is what keeps one visitor's rows away from another's. This relay
@@ -21,10 +20,10 @@
 // own device in every call, and is believed. Anything modelled on this file needs the scope taken
 // out of the caller's hands before it is put in front of a second person.
 //
-// Split from the module that binds it to `onconnect` for the same reason the port broker is:
-// `SharedWorker` does not exist under Node, so a relay reachable only by constructing one would be
-// a relay no test ever ran. `connect` takes a port, so the tests connect ordinary `MessageChannel`
-// ends to the real thing and what they exercise is what ships.
+// Split from the module that binds it to `onconnect` because `SharedWorker` does not exist under
+// Node, and a relay reachable only by constructing one would be a relay no test ever ran. `connect`
+// takes a port, so the tests connect ordinary `MessageChannel` ends to the real thing and what they
+// exercise is what ships.
 import { WeftServer } from "weftdb/server";
 import { contentAddressSnapshot } from "weftdb/server/snapshot";
 import { isRelayRequest, type RelayPortLike, type RelayRequest, type RelayResults } from "./port-transport.ts";
@@ -43,9 +42,8 @@ export interface WeftDemoRelay {
 /**
  * Starts a relay over one server, which is made here unless a caller has one to hand.
  *
- * Every port is served alike: there is no leader, no provider and no succession, because unlike the
- * port broker this holds the state itself rather than moving a connection to whoever does. A tab
- * that goes takes its port with it and leaves nothing behind that another tab depends on.
+ * Every port is served alike, because this holds the state itself. A tab that goes takes its port
+ * with it and leaves nothing behind that another tab depends on.
  */
 export function serveDemoRelay(server: WeftServer = new WeftServer()): WeftDemoRelay {
   const connections = new Map<RelayPortLike, (event: MessageEvent<unknown>) => void>();

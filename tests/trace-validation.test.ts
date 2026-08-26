@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:
 import { join } from "node:path";
 import fc from "fast-check";
 import { rowId, txnId, type RowId } from "weftdb/core";
-import { WeftClient } from "weftdb/client";
+import { inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import {
   BASE_TIME,
@@ -108,7 +108,7 @@ test("recorded implementation behaviour is behaviour the specification allows", 
   const histories = fc.sample(fc.array(actionArb, { minLength: 16, maxLength: 40 }), { numRuns: 12, seed: 20_260_824 });
 
   for (const [index, history] of histories.entries()) {
-    const trace = record(history);
+    const trace = await record(history);
     // A history whose steps were all preconditions the implementation declined records a
     // single state and has nothing to check. The total-states guard below keeps the test
     // from quietly becoming all such histories.
@@ -136,7 +136,7 @@ test("recorded implementation behaviour is behaviour the specification allows", 
 });
 
 /** Drives the real client and server, recording the abstract state after every step. */
-function record(history: readonly Action[]): readonly SpecState[] {
+async function record(history: readonly Action[]): Promise<readonly SpecState[]> {
   const clock = { now: BASE_TIME };
   const server = new WeftServer(() => clock.now);
   const clients = DEVICES.map(
@@ -147,7 +147,7 @@ function record(history: readonly Action[]): readonly SpecState[] {
   // boundaries the whole history went through, which is not known until it has run.
   const raw: RawState[] = [observe(server, clients)];
   for (const [step, action] of history.entries()) {
-    apply(server, clients, clock, action, step);
+    await apply(server, clients, clock, action, step);
     raw.push(observe(server, clients));
   }
 
@@ -163,13 +163,13 @@ function record(history: readonly Action[]): readonly SpecState[] {
   return trace;
 }
 
-function apply(
+async function apply(
   server: WeftServer,
   clients: readonly WeftClient[],
   clock: { now: number },
   action: Action,
   step: number,
-): void {
+): Promise<void> {
   const client = clients[action.device];
   const row = ROW_IDS[ROWS[action.row] ?? "r1"];
   if (client === undefined) return;
@@ -182,16 +182,16 @@ function apply(
 
   switch (action.name) {
     case "localCreate":
-      if (state === "absent" && !queued) client.create(TASKS, row, { [TITLE]: `v${step}` }, transaction);
+      if (state === "absent" && !queued) await client.create(TASKS, row, { [TITLE]: `v${step}` }, transaction);
       return;
     case "localWrite":
-      if (state === "live" && !queued) client.update(TASKS, row, { [TITLE]: `v${step}` }, transaction);
+      if (state === "live" && !queued) await client.update(TASKS, row, { [TITLE]: `v${step}` }, transaction);
       return;
     case "localDelete":
-      if (state === "live" && !queued) client.delete(TASKS, row, transaction);
+      if (state === "live" && !queued) await client.delete(TASKS, row, transaction);
       return;
     case "localRestore":
-      if (state === "tombstoned" && !queued) client.restore(TASKS, row, { [TITLE]: `v${step}` }, transaction);
+      if (state === "tombstoned" && !queued) await client.restore(TASKS, row, { [TITLE]: `v${step}` }, transaction);
       return;
     case "push": {
       // The specification models a push as one row's one pending operation, while `flush`
@@ -203,19 +203,19 @@ function apply(
       const rows = new Set(client.outbox.map((op) => op.rowId));
       const transactions = new Set(client.outbox.map((op) => op.txnId));
       if (rows.size > 1 || transactions.size > 1) return;
-      client.flush(server);
+      await client.flushWith(inProcessTransport(server));
       return;
     }
     case "repair":
       for (const quarantined of new Set(client.quarantine.map((op) => op.txnId)))
-        client.discardQuarantinedTxn(quarantined);
+        await client.discardQuarantinedTxn(quarantined);
       return;
     case "pull":
-      client.applyPull(server.pull(propertyScope, client.lastServerSeq));
-      if (client.resyncRequired) client.applySnapshot(server.snapshot(propertyScope));
+      await client.applyPull(server.pull(propertyScope, client.lastServerSeq));
+      if (client.resyncRequired) await client.applySnapshot(server.snapshot(propertyScope));
       return;
     case "resync":
-      client.applySnapshot(server.snapshot(propertyScope));
+      await client.applySnapshot(server.snapshot(propertyScope));
       return;
     case "prune":
       clock.now += TOMBSTONE_FLOOR_MS + 1;

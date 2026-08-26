@@ -1,6 +1,6 @@
 ---
 title: React
-description: Generated query hooks, row identity, notification coalescing, and the editing cases that need care.
+description: Generated query hooks, row identity, notification coalescing, writing from a handler, and the editing cases that need care.
 sidebar:
   order: 5
 ---
@@ -34,20 +34,14 @@ its own. [Reading data](/guides/reading-data/) covers the query surface itself.
 ## Keeping re-renders cheap
 
 Running a query over a few thousand rows costs microseconds. What costs more is the round trip
-into the worker that holds the on-device database, on a build using the WebAssembly SQLite
-executor ([Storage on the device](/guides/device-storage/)). The other cost is a component
-re-rendering a row that has not changed.
+into the `SharedWorker` that holds the device's database
+([Storage on the device](/guides/device-storage/)). The other cost is a component re-rendering a
+row that has not changed.
 
-The engine keeps that cost proportional to what changed, not to the result size. It diffs a
-query's new rows against its previous ones into `added`, `removed`, and `changed` row ids, rather
-than handing back a fresh list to re-render from scratch. That diff runs on row identity: a
-materialized row is cached per `(table, id)`, keyed by a revision counter, `_weft_rev`, and a write
-bumps only the counter of the row it touches:
-
-```ts
-// inside RowIdentityCache.materialize
-if (cached?.rev === row.internals._weft_rev) return cached.row;
-```
+The engine keeps that cost proportional to what changed, not to the result size. It reports a
+query's change as `added`, `removed`, and `changed` row ids, so a result that gained one row costs
+one row. A write bumps the revision counter, `_weft_rev`, of the row it touches and of no other,
+which is what decides whether a row is handed back as the object it already was.
 
 An unchanged row keeps the same object reference across renders, a stronger guarantee than value
 equality. `React.memo` skips a row component's render when a prop is `===` to the one it rendered
@@ -56,12 +50,7 @@ with last, so an unchanged row costs a reference comparison rather than a repain
 ## Subscribing without tearing
 
 Every generated hook is `useSyncExternalStore` underneath, through `useWeftQuerySnapshot`, and
-`getSnapshot` always answers from a cache rather than recomputing:
-
-```ts
-// inside SubscriptionEngine.getSnapshot
-if (cached !== undefined && sameRows(cached.rows, nextRows)) return cached;
-```
+`getSnapshot` always answers from a cache rather than recomputing.
 
 React can call a component's render function more than once for one update, including
 concurrently with another update in progress. `useSyncExternalStore` requires `getSnapshot` to
@@ -70,27 +59,32 @@ makes that possible: two calls inside one render pass see the same object, teari
 
 ## Coalescing notifications
 
-A write does not notify a query's subscribers directly. Every generated mutator calls `notify`
-after it writes, wired to the session's `changed()`. An incoming batch over the sync socket wires
-the same call, and a finished sync, incremental or a full snapshot resync alike, calls it exactly
-once. Each reaches the engine's `notify()`, which queues at most one microtask flush per burst:
-
-```ts
-// inside SubscriptionEngine
-notify(): void {
-  if (this.#queued) return;
-  this.#queued = true;
-  queueMicrotask(() => {
-    this.#queued = false;
-    for (const listeners of this.#listeners.values()) {
-      for (const listener of listeners) listener();
-    }
-  });
-}
-```
+A write does not notify a query's subscribers directly. The storage worker applies the mutation,
+commits it, and pushes back the rows that moved; the mirror applies that push and wakes the
+subscriptions. An incoming batch over the sync socket arrives the same way, and a finished sync,
+incremental or a full snapshot resync alike, wakes them exactly once. The engine flushes at most
+once per microtask, however many wake-ups arrive before it runs.
 
 A burst of local writes inside one transaction, or a batch of remote rows, reaches a subscribed
 component as one re-render, not one per row.
+
+## Writing from an event handler
+
+Every mutator returns a promise, and a DOM handler has nowhere to await one. Discard it with
+`void`, which is the form `@typescript-eslint/no-floating-promises` requires a call site to write:
+
+```tsx title="src/done-button.tsx"
+import { todos } from "./store.ts";
+
+export function DoneButton({ id, done }: { id: string; done: boolean }) {
+  return <button onClick={() => void todos.update(id, { done: !done })}>{done ? "Undo" : "Done"}</button>;
+}
+```
+
+Nothing above renders from the promise. The row this button shows arrives on the worker's next
+push, which the mirror applies once the write has committed. Await the promise where the handler
+has something left to do: a dialog that closes on success, or a message that reports a refusal.
+[Writing data](/guides/writing-data/) covers what resolving and rejecting each mean.
 
 ## Editing a field that merges three ways
 
@@ -130,23 +124,26 @@ The demo flushes on blur only. An application also needs to flush on unmount and
 `rank`, the field `todos` is ordered by, is written so a reorder changes one value between its new
 neighbours rather than renumbering the list. The demo's up and down buttons call `moveTodos`:
 
-```ts
-export function moveTodos(
+```ts title="src/generated/bindings.ts"
+export async function moveTodos(
   mutators: TodosMutators,
   rows: readonly TodosRow[],
   index: number,
   direction: "up" | "down",
   device: DeviceId,
-): void {
+): Promise<void> {
   const rankOf = (row: TodosRow | undefined) => (row === undefined ? null : rankString(String(row["rank"])));
   const moving = rows[index];
   const neighbour = rows[direction === "up" ? index - 1 : index + 1];
   if (moving === undefined || neighbour === undefined) return;
   const beyond = rows[direction === "up" ? index - 2 : index + 2];
   const [before, after] = direction === "up" ? [beyond, neighbour] : [neighbour, beyond];
-  mutators.update(String(moving["id"]), { rank: rankBetween(rankOf(before), rankOf(after), device) });
+  await mutators.update(String(moving["id"]), { rank: rankBetween(rankOf(before), rankOf(after), device) });
 }
 ```
+
+`moveTodos` hands back the promise of the one write it makes, so a button discards it with `void`
+on the same terms as any other handler.
 
 A pointer-drag version of the same list needs one thing this button pair does not. The query's
 rows have to stay frozen while the drag is in progress, with any update that arrives applied only
@@ -155,36 +152,18 @@ on drop. Otherwise a remote reorder could resort the row out from under the poin
 
 ## Running across multiple tabs
 
-One tab of an origin holds the database and every other tab reaches it over a `MessagePort`.
-`openWeftDatabase` settles which tab that is and reconnects when it changes, so a component reads
-and writes the same way in both. [Multi-tab coordination](/concepts/multi-tab/) covers the election,
-the port broker, and succession.
+One `SharedWorker` per origin holds the database, and every tab connects a port of its own to it.
+A component reads the same rows and writes through the same outbox in every tab, and a tab has no
+coordination of its own to do. [Multi-tab coordination](/concepts/multi-tab/) covers what one
+worker per origin settles.
 
-The banner worth rendering is `weft.durability`, which says whether this window will remember what
-is typed into it:
+A browser may stop a `SharedWorker` under memory pressure, which closes every port to it at once.
+`openWeftDatabase` constructs one at the same URL again, and the mirror re-hydrates and registers
+every watched statement with whichever worker answers, so each `use<Collection>Query` re-renders
+with the rows that worker reports. A request in flight when the previous worker went away rejects
+rather than resolving, because the tab cannot know whether the write landed. That rejection reaches
+the mutator's own caller, and `onError` where nobody kept the promise.
 
-```tsx title="src/storage-banner.tsx"
-import { weft } from "./store.ts";
-
-export function StorageBanner() {
-  if (weft.durability === "durable") return null;
-  return <p>This window will forget these notes when it closes.</p>;
-}
-```
-
-No subscription, because `durability` is settled when the database opens and holds for the session.
-A tab that takes the database over reopens the same one, so a device that was durable stays durable.
-
-`weft.role` is `leader` in the tab that created the worker and `follower` in every other tab, and
-`weft.subscribeRole` fires when a tab is granted the lock. Both are diagnostics. Every tab holds a
-port straight to the worker, so a follower is one hop from the database exactly as the leader is.
-Which tab created the worker changes nothing a person can see or act on.
-
-When leadership moves, the mirror reconnects, re-hydrates, and registers every watched statement
-again, so each `use<Collection>Query` re-renders with the rows the new worker reports. A request in
-flight when the previous worker died rejects, which reaches `onError` rather than leaving a
-mutator's promise pending.
-
-The demo sidesteps this rather than exercising it: each tab opens its own database under a namespace
-of its own, so tabs sync as separate devices through the relay instead of sharing one on-device
-database. Its `BroadcastChannel` only wakes a tab's sync sooner when another tab writes.
+The demo sidesteps this rather than exercising it: each tab opens its own database under a
+namespace of its own, so tabs sync as separate devices through the relay instead of sharing one
+on-device database.

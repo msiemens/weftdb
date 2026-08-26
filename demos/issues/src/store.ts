@@ -19,9 +19,8 @@ import { openDemoDatabase, DemoSync, type DemoDatabase, type DemoOpenOverrides }
 import { tabIdentity, type TabIdentity } from "weftdb-demo-shared/identity";
 import { schema } from "./schema.ts";
 import { DEMO } from "./scope.ts";
-import brokerUrl from "./broker.ts?sharedworker&url";
 import relayWorkerUrl from "./relay-worker.ts?sharedworker&url";
-import storageWorkerUrl from "./storage-worker.ts?worker&url";
+import storageWorkerUrl from "./storage-worker.ts?sharedworker&url";
 import {
   commentsMutators,
   commentsQuery,
@@ -156,7 +155,7 @@ export class IssueStore {
    *
    * The scope comes from local storage, so every tab of this browser opens the same tracker while
    * another visitor opens their own. The namespace comes from session storage, so **each tab is a
-   * database of its own** — its own election, its own storage worker, its own OPFS pool and its own
+   * database of its own** — its own client in the storage worker, its own file and its own
    * device id — which is what makes a second tab a second device rather than a second view.
    */
   static async open(window: WindowLike, overrides?: DemoOpenOverrides): Promise<IssueStore> {
@@ -166,12 +165,11 @@ export class IssueStore {
       scopeId: identity.scopeId,
       namespace: `weftdb-demo/${DEMO}/${identity.deviceId}`,
       worker: storageWorkerUrl,
-      broker: brokerUrl,
       relayWorker: relayWorkerUrl,
       ...(overrides === undefined ? {} : { overrides }),
     });
     const store = new IssueStore({ identity, database });
-    store.seed(window.localStorage);
+    void store.seed(window.localStorage);
     return store;
   }
 
@@ -186,7 +184,7 @@ export class IssueStore {
    * device and hydrates empty until it has synced. The key is what decides; the row count only
    * keeps a cleared key from seeding a scope that already has rows.
    */
-  seed(local: StorageLike): void {
+  async seed(local: StorageLike): Promise<void> {
     const key = `weftdb-demo/${DEMO}/${this.identity.scopeId}/seeded`;
     if (local.getItem(key) !== null) return;
     // Written before the rows, so two tabs opened at the same instant on a first visit have the
@@ -203,12 +201,12 @@ export class IssueStore {
     for (const project of SEED) {
       const projectId = newProjectId();
       projectRank = rankBetween(projectRank === null ? null : rankString(projectRank), null, this.deviceId);
-      this.projects.create(projectId, { name: project.name, rank: projectRank });
+      await this.projects.create(projectId, { name: project.name, rank: projectRank });
 
       for (const issue of project.issues) {
         const issueId = newIssueId();
         issueRank = rankBetween(issueRank === null ? null : rankString(issueRank), null, this.deviceId);
-        this.issues.create(issueId, {
+        await this.issues.create(issueId, {
           project_id: projectId,
           title: issue.title,
           body: issue.body,
@@ -220,7 +218,7 @@ export class IssueStore {
         let commentRank: string | null = null;
         for (const comment of issue.comments ?? []) {
           commentRank = rankBetween(commentRank === null ? null : rankString(commentRank), null, this.deviceId);
-          this.comments.create(newCommentId(), {
+          await this.comments.create(newCommentId(), {
             issue_id: issueId,
             body: comment.body,
             rank: commentRank,
@@ -328,12 +326,12 @@ export class IssueStore {
    * see. Reordering writes one field, the row's new rank, so two devices reordering at once do not
    * undo each other.
    */
-  moveIssue(rows: readonly IssuesRow[], index: number, direction: "up" | "down"): void {
-    moveIssues(this.issues, rows, index, direction, this.deviceId);
+  async moveIssue(rows: readonly IssuesRow[], index: number, direction: "up" | "down"): Promise<void> {
+    await moveIssues(this.issues, rows, index, direction, this.deviceId);
   }
 
-  discardQuarantine(): void {
-    this.connection.discardQuarantine();
+  async discardQuarantine(): Promise<void> {
+    await this.connection.discardQuarantine();
   }
 
   async sync(): Promise<void> {

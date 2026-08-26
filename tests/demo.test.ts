@@ -1,7 +1,7 @@
 // The demo page, driven through its own buttons by two tabs at once. A page that builds is not
 // the same as a page that works, so this mounts the real component tree over the real assembly the
-// page opens — a storage worker per tab, elected through Web Locks, syncing through the relay that
-// runs in the browser — and clicks through the scenarios the page invites people to try.
+// page opens — one storage worker holding a client per tab, syncing through the relay that runs in
+// the browser — and clicks through the scenarios the page invites people to try.
 //
 // The two tabs here are two *devices*, and that is the property the whole file rests on. Each takes
 // a namespace of its own under the visitor's one scope, so each holds its own database, its own
@@ -166,7 +166,7 @@ beforeAll(async () => {
       browser,
       closeAll: async () => {
         for (const tab of [...openTabs]) await tab.unmount();
-        browser.close();
+        await browser.close();
       },
     };
   };
@@ -186,7 +186,7 @@ test("the page mounts empty and names the device this tab is", async (t) => {
   assert.match(tab.badges(), /tab 1/u, "the tab does not say which device it is");
 });
 
-test("tabs that race for the same ordinal are still telling themselves apart", () => {
+test("tabs that race for the same ordinal are still telling themselves apart", async () => {
   // Local storage has no atomic increment, so two tabs opening at the same moment both read
   // the same counter and both write the same next value. They are still separate devices, and
   // the label has to say so — otherwise two of them look like one and the merges make no sense
@@ -201,7 +201,7 @@ test("tabs that race for the same ordinal are still telling themselves apart", (
   assert.notEqual(first.label, second.label, "two devices are showing the same name");
 });
 
-test("a tab's token can travel as a WebSocket subprotocol", () => {
+test("a tab's token can travel as a WebSocket subprotocol", async () => {
   // The browser cannot set headers on a WebSocket, so the token goes in Sec-WebSocket-Protocol as
   // `weft.token.<token>`. RFC 6455 makes those values HTTP tokens, and the `WebSocket` constructor
   // throws on anything else. The failure is silent: the socket never opens, the page falls back to
@@ -218,9 +218,9 @@ test("a tab's token can travel as a WebSocket subprotocol", () => {
 
 test("two tabs of one browser are two devices, not two views of one database", async (t) => {
   // The arrangement everything below rests on, asserted rather than assumed. A namespace and a
-  // scope together name a database, so a namespace per tab is a database per tab: two elections,
-  // two storage workers, two device ids, two outboxes. Were it one database with two windows on it,
-  // every merge these demos are about would be a write and a read of the same rows.
+  // scope together name a database, so a namespace per tab is a database per tab: two clients in
+  // the one storage worker, two device ids, two outboxes. Were it one database with two windows on
+  // it, every merge these demos are about would be a write and a read of the same rows.
   const world = openWorld();
   t.onTestFinished(() => world.closeAll());
   const first = await world.open("first");
@@ -228,9 +228,7 @@ test("two tabs of one browser are two devices, not two views of one database", a
 
   assert.equal(first.store.identity.scopeId, second.store.identity.scopeId, "the two tabs are not one visitor");
   assert.notEqual(first.store.deviceId, second.store.deviceId, "two tabs were opened as one device");
-  assert.equal(world.browser.workers.length, 2, "the second tab was given the first tab's storage worker");
-  assert.equal(first.store.database.weft.role, "leader");
-  assert.equal(second.store.database.weft.role, "leader", "the second tab stood in the first tab's election");
+  assert.equal(world.browser.storage.serving.length, 2, "the second tab was given the first tab's database");
 
   // And nothing crosses between them without a sync. The write is in the first tab's own database
   // from the moment it is made, and in nobody else's until the relay has been told.
@@ -270,7 +268,7 @@ test("the activity list is a compiled statement, and it answers with what the wh
 
   // Written straight through the mirror, because the page has no button that files one: the whole
   // question is what the statement does with a row the page did not ask for.
-  tab.store.todoEvents.create(`event-${crypto.randomUUID()}`, {
+  await tab.store.todoEvents.create(`event-${crypto.randomUUID()}`, {
     todo_id: "todo-nobody",
     kind: "renamed",
     actor: "somebody",
@@ -476,22 +474,22 @@ test("a reload keeps unsent work: the device's database is the state, not a cach
   assert.doesNotMatch(reloaded.badges(), /unsent/u, "work restored from storage never reached the relay");
 });
 
-test("a mutation the worker refuses is reported rather than silently having no effect", async (t) => {
-  // A mutator posts and returns `void`, so a refusal has nowhere to surface but `onError`. The
-  // event log is where the demo can arrange one: its rows are append-class, and the client in the
-  // worker refuses an edit to one whatever the page sends.
+test("a mutation the worker refuses rejects the promise the caller was given", async (t) => {
+  // The event log is where the demo can arrange a refusal: its rows are append-class, and the
+  // client in the worker refuses an edit to one whatever the page sends.
   const world = openWorld();
   t.onTestFinished(() => world.closeAll());
-  const refused: Error[] = [];
-  const tab = await world.open("first", { onError: (error) => refused.push(error) });
+  const tab = await world.open("first");
 
   await addTodo(tab, "one thing");
   const [event] = tab.store.source.listRows(todoEventsTable);
   assert.ok(event !== undefined, "adding a todo did not write an activity entry");
-  tab.store.source.update(todoEventsTable, event.id, { actor: "somebody else" });
 
-  await tab.until(() => refused.length > 0, "an edit to an append-class row was accepted in silence");
-  assert.match(refused[0]?.message ?? "", /append-class/u, "the refusal did not say why");
+  await assert.rejects(
+    () => tab.store.source.update(todoEventsTable, event.id, { actor: "somebody else" }),
+    /append-class/u,
+    "an edit to an append-class row was accepted in silence",
+  );
   // And the row is as it was: nothing is applied on the page first, so nothing had to be undone.
   await tab.flush();
   assert.equal(

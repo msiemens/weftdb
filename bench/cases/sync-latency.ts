@@ -2,7 +2,13 @@
 // relay over the loopback interface, so what separates them is the protocol and the transport
 // rather than the network — see the caveats in RESULTS.md before quoting any of it.
 import type { WireValue } from "weftdb/core";
-import { connectSocketTransport, httpTransport, WeftClient, type SocketTransport } from "weftdb/client";
+import {
+  connectSocketTransport,
+  httpTransport,
+  inProcessTransport,
+  type SocketTransport,
+  WeftClient,
+} from "weftdb/client";
 import { WeftServer } from "weftdb/server";
 import {
   HASH,
@@ -22,30 +28,30 @@ const GROUP = "Sync round trip";
 export const syncLatency: BenchGroup = {
   name: GROUP,
   run: async (config: BenchConfig): Promise<readonly CaseResult[]> => [
-    inProcessRoundTrip(config),
+    await inProcessRoundTrip(config),
     ...(await httpCases(config)),
     ...(await socketCases(config)),
   ],
 };
 
 /** The floor: the same session with no transport under it at all. */
-function inProcessRoundTrip(config: BenchConfig): CaseResult {
+async function inProcessRoundTrip(config: BenchConfig): Promise<CaseResult> {
   const server = new WeftServer();
   const alpha = benchClient("device-0");
   const beta = benchClient("device-1");
   const row = todoId(0);
-  seedRows(alpha, 1);
-  alpha.sync(server, HASH);
-  beta.sync(server, HASH);
+  await seedRows(alpha, 1);
+  await alpha.syncWith(inProcessTransport(server), HASH);
+  await beta.syncWith(inProcessTransport(server), HASH);
   let counter = 0;
   const samples = [] as number[];
   for (let index = 0; index < config.latencyBudget.warmup + config.latencyBudget.iterations; index += 1) {
     counter += 1;
     const expected = `title ${counter}`;
     const start = performance.now();
-    alpha.update(TODOS, row, { [TITLE]: expected }, updateTxn(row));
-    alpha.sync(server, HASH);
-    beta.sync(server, HASH);
+    await alpha.update(TODOS, row, { [TITLE]: expected }, updateTxn(row));
+    await alpha.syncWith(inProcessTransport(server), HASH);
+    await beta.syncWith(inProcessTransport(server), HASH);
     const elapsed = performance.now() - start;
     assertLanded(beta, expected);
     if (index >= config.latencyBudget.warmup) samples.push(elapsed);
@@ -68,7 +74,7 @@ async function httpCases(config: BenchConfig): Promise<readonly CaseResult[]> {
     const beta = benchClient("device-1");
     const alphaTransport = httpTransport({ baseUrl: relay.baseUrl, token: relay.token(0) });
     const betaTransport = httpTransport({ baseUrl: relay.baseUrl, token: relay.token(1) });
-    seedRows(alpha, 1);
+    await seedRows(alpha, 1);
     await alpha.syncWith(alphaTransport, HASH);
     await beta.syncWith(betaTransport, HASH);
 
@@ -94,7 +100,7 @@ async function httpCases(config: BenchConfig): Promise<readonly CaseResult[]> {
         note: "device A runs a full session (handshake, push, pull) and then device B does; five requests in all",
       },
       await measureRoundTrip(config, alpha, beta, async (expected) => {
-        alpha.update(TODOS, todoId(0), { [TITLE]: expected }, updateTxn(todoId(0)));
+        await alpha.update(TODOS, todoId(0), { [TITLE]: expected }, updateTxn(todoId(0)));
         await alpha.syncWith(alphaTransport, HASH);
         await beta.syncWith(betaTransport, HASH);
       }),
@@ -124,7 +130,7 @@ async function sessionOverSocket(config: BenchConfig): Promise<readonly CaseResu
     sockets.push(alphaSocket, betaSocket);
     await waitForSocket(alphaSocket);
     await waitForSocket(betaSocket);
-    seedRows(alpha, 1);
+    await seedRows(alpha, 1);
     await alpha.syncWith(alphaSocket, HASH);
     await beta.syncWith(betaSocket, HASH);
 
@@ -150,7 +156,7 @@ async function sessionOverSocket(config: BenchConfig): Promise<readonly CaseResu
         note: "device B asks for the change rather than being sent it — what a poller does when its timer fires",
       },
       await measureRoundTrip(config, alpha, beta, async (expected) => {
-        alpha.update(TODOS, todoId(0), { [TITLE]: expected }, updateTxn(todoId(0)));
+        await alpha.update(TODOS, todoId(0), { [TITLE]: expected }, updateTxn(todoId(0)));
         await alpha.syncWith(alphaSocket, HASH);
         await beta.syncWith(betaSocket, HASH);
       }),
@@ -182,8 +188,8 @@ async function pushedBatch(config: BenchConfig): Promise<CaseResult> {
       url: relay.socketUrl,
       token: relay.token(1),
       cursor: () => beta.lastServerSeq,
-      onBatch: (batch) => {
-        beta.applyPull(batch);
+      onBatch: async (batch) => {
+        await beta.applyPull(batch);
         if (awaiting === undefined) return;
         if (beta.getRow(TODOS, row)?.fields.get(TITLE) !== awaiting.expected) return;
         const { resolve } = awaiting;
@@ -194,7 +200,7 @@ async function pushedBatch(config: BenchConfig): Promise<CaseResult> {
     sockets.push(alphaSocket, betaSocket);
     await waitForSocket(alphaSocket);
     await waitForSocket(betaSocket);
-    seedRows(alpha, 1);
+    await seedRows(alpha, 1);
     await alpha.syncWith(alphaSocket, HASH);
     await beta.syncWith(betaSocket, HASH);
 
@@ -206,7 +212,7 @@ async function pushedBatch(config: BenchConfig): Promise<CaseResult> {
         awaiting = { expected, resolve };
       });
       const start = performance.now();
-      alpha.update(TODOS, row, { [TITLE]: expected }, updateTxn(row));
+      await alpha.update(TODOS, row, { [TITLE]: expected }, updateTxn(row));
       const session = alpha.syncWith(alphaSocket, HASH);
       await withTimeout(landed, "the relay never pushed the edit to the subscribed device");
       const elapsed = performance.now() - start;

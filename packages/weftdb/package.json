@@ -3,9 +3,6 @@
   "version": "0.0.0",
   "license": "MPL-2.0",
   "type": "module",
-  "sideEffects": [
-    "./src/client/broker-entry.ts"
-  ],
   "exports": {
     ".": "./src/index.ts",
     "./core": "./src/core.ts",
@@ -16,7 +13,6 @@
     "./client/wasm-sqlite": "./src/client/wasm-sqlite.ts",
     "./client/worker-entry": "./src/client/worker-entry.ts",
     "./client/worker-host": "./src/client/worker-host.ts",
-    "./client/broker-entry": "./src/client/broker-entry.ts",
     "./server": "./src/server/index.ts",
     "./server/sqlite": "./src/server/sqlite.ts",
     "./server/node-sqlite": "./src/server/node-sqlite.ts",

@@ -5,6 +5,7 @@ import { HlcClock, diff3, txnId, type SetOp, type WeftOp } from "weftdb/core";
 import { WeftServer, fieldKey } from "weftdb/server";
 import { HASH, SCOPE, TITLE, TODOS, benchClient, seedRows, todoId } from "../fixtures.ts";
 import { consume, repeat, throughput, type BenchConfig, type BenchGroup, type CaseResult } from "../harness.ts";
+import { inProcessTransport } from "weftdb/client";
 
 const GROUP = "Merge";
 
@@ -17,7 +18,7 @@ export const merge: BenchGroup = {
   run: async (config: BenchConfig): Promise<readonly CaseResult[]> => [
     diff3Case(config, "disjoint"),
     diff3Case(config, "conflicting"),
-    lwwFieldWrite(config),
+    await lwwFieldWrite(config),
   ],
 };
 
@@ -48,11 +49,11 @@ function diff3Case(config: BenchConfig, kind: "disjoint" | "conflicting"): CaseR
  * One field write as the server sees it: validated, compared against the stamp already stored,
  * applied, and given a sequence. In process, so nothing here is network or disk.
  */
-function lwwFieldWrite(config: BenchConfig): CaseResult {
+async function lwwFieldWrite(config: BenchConfig): Promise<CaseResult> {
   const server = new WeftServer();
   const client = benchClient("device-0");
-  seedRows(client, 1);
-  client.sync(server, HASH);
+  await seedRows(client, 1);
+  await client.syncWith(inProcessTransport(server), HASH);
   const row = todoId(0);
   const key = fieldKey({ scopeId: SCOPE, tableName: TODOS, rowId: row, field: TITLE });
   const clock = new HlcClock(client.deviceId);

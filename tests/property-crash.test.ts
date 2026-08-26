@@ -1,6 +1,6 @@
 // Durability, as a property rather than as three moments somebody thought of. §4.1 makes local
-// storage the client's state rather than a cache of the server's, which means an edit that has
-// been made is on disk before the call returns — so a process killed at *any* point must come
+// storage the client's state rather than a cache of the server's, so a mutation's promise
+// resolves only once its edit has committed — and a process killed at *any* point must come
 // back holding every edit made before it died, whether or not any of them ever reached a
 // server. The existing durability tests pick particular instants to die at; this generates both
 // the work and the instant.
@@ -11,6 +11,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { deviceId, fieldName, rowId, scopeId, tableName, wireText } from "weftdb/core";
+import { asyncSqlExecutor } from "weftdb/shared";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
 import { SqliteWeftServer } from "weftdb/server/sqlite";
@@ -94,9 +95,9 @@ test("a process killed at any point comes back holding every edit it had made", 
         assert.equal(child.signal, "SIGKILL", `the child exited instead of being killed: ${child.stderr}`);
 
         // Reopened from disk alone — the process that made these edits no longer exists.
-        using executor = openSqliteExecutor(clientPath);
-        const store = new SqliteClientStore(executor, schema);
-        const reopened = store.hydrate(SCOPE, DEVICE);
+        using clientFile = openSqliteExecutor(clientPath);
+        const store = new SqliteClientStore(asyncSqlExecutor(clientFile), schema);
+        const reopened = await store.hydrate(SCOPE, DEVICE);
 
         for (const [id, title] of expectedTitles(steps, crashAfter)) {
           const row = reopened.getRow(TASKS, rowId(id));
@@ -132,9 +133,11 @@ test("a process killed at any point comes back holding every edit it had made", 
 const WORK_THEN_DIE = `
 import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
+import { asyncSqlExecutor } from "weftdb/shared";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
 import { SqliteWeftServer } from "weftdb/server/sqlite";
+import { inProcessTransport } from "weftdb/client";
 
 const schema = defineSchema({
   tasks: S.collection({
@@ -146,10 +149,10 @@ const schema = defineSchema({
 const [, , clientPath, serverPath, encodedSteps] = process.argv;
 const steps = JSON.parse(encodedSteps);
 
-const clientExecutor = openSqliteExecutor(clientPath);
+const clientExecutor = asyncSqlExecutor(openSqliteExecutor(clientPath));
 const store = new SqliteClientStore(clientExecutor, schema);
-store.installSchema();
-const client = store.attach(store.hydrate(scopeId("durability"), deviceId("laptop")));
+await store.installSchema();
+const client = await store.attach(await store.hydrate(scopeId("durability"), deviceId("laptop")));
 const server = new SqliteWeftServer(openSqliteExecutor(serverPath), () => 1_000);
 
 let counter = 0;
@@ -157,18 +160,18 @@ for (const step of steps) {
   counter += 1;
   const id = rowId("task-" + step.row);
   if (step.kind === "sync") {
-    client.sync(server, schemaHash(schema));
+    await client.syncWith(inProcessTransport(server), schemaHash(schema));
     continue;
   }
   const exists = client.getRow(tableName("tasks"), id) !== undefined;
   if (step.kind === "create" && exists) continue;
   if (step.kind === "edit" && !exists) continue;
   const values = { [fieldName("title")]: step.title };
-  if (exists) client.update(tableName("tasks"), id, values, txnId("t" + counter));
-  else client.create(tableName("tasks"), id, values, txnId("t" + counter));
+  if (exists) await client.update(tableName("tasks"), id, values, txnId("t" + counter));
+  else await client.create(tableName("tasks"), id, values, txnId("t" + counter));
 }
 
-// Die the way a power cut does: no close, no flush, no exit handlers. Everything above was
-// supposed to be on disk before the call that made it returned.
+// Die the way a power cut does: no close, no flush, no exit handlers. Everything above is on
+// disk: each mutation's promise resolved only once its write had committed.
 process.kill(process.pid, "SIGKILL");
 `;

@@ -1,37 +1,31 @@
 // The worker's front door: the other half of `openWeftDatabase`, and the whole of what a storage
 // worker has to say.
 //
-// It is a module of its own rather than another export of `worker-host.ts` because it reaches for
+// A module of its own rather than another export of `worker-host.ts` because it reaches for
 // `./sqlite.ts`, which pulls the codegen module in with it. `worker-host.ts` takes its executor and
 // its store as options precisely so that it does not, and the page's entry point is kept clear of
 // codegen for the same reason. A worker entry point is the one place that dependency belongs, so
 // this has a package subpath of its own and nothing on the page imports it.
 //
-// Storage is OPFS, through a synchronous access handle pool, wherever a browser will hand one out.
-// Where it will not — private browsing is the case that matters — the database is opened in memory
-// instead and the page is told which it got, so an application can say that this window will not
-// remember. What is never worked around is a *build* with no pool VFS in it at all: see below.
+// One `SharedWorker` serves the whole origin, and a port arrives through `onconnect` saying nothing
+// about which database it wants. The first request on it does: a `hydrate` carries the scope and
+// the namespace, and those two together name both the file to open and the client to hold (see
+// `./database-key.ts`). So this module reads a port until that first request, opens what it names,
+// and hands the port and everything it read to the host that owns it.
 //
-// Which pool is the namespace's to decide, and it arrives on this worker's own URL. A pool is held
-// exclusively, so two workers of one origin sharing one is the second of them being refused
-// storage; the namespace is what tells the page's two databases apart, so it is what tells their
-// pools apart too. See `poolNameFor` and `namespaceFromLocation`.
+// Two maps, because the two things are keyed differently. A file belongs to a namespace: one
+// application in this origin, one IndexedDB database, one connection. A client belongs to a
+// namespace and a scope together, because `SqliteClientStore.hydrate` filters every read by scope
+// and a client that read the lot would push another scope's rows under this device's id.
 import { schemaHash, type SchemaDefinition } from "weftdb/schema";
-import type { SqlExecutor } from "weftdb/shared";
-import { DEFAULT_NAMESPACE, WEFT_NAMESPACE_PARAM } from "./database-key.ts";
+import { weftDatabaseKey } from "./database-key.ts";
 import { SqliteClientStore } from "./sqlite.ts";
 import { connectSocketTransport, type SocketTransport } from "./socket-transport.ts";
 import { httpTransport, type AsyncSyncTransport, type FetchLike } from "./transport.ts";
 import type { SocketHandlers } from "./session.ts";
-import {
-  openMemorySqliteExecutor,
-  openWebSqliteExecutor,
-  WasmSqliteUnavailableError,
-  type Sqlite3Module,
-  type WasmSqliteExecutor,
-} from "./wasm-sqlite.ts";
+import { openWebSqliteExecutor, type WaSqliteBuild, type WebSqliteExecutor } from "./wasm-sqlite.ts";
 import { serveWeftWorker, type WeftWorkerHost, type WorkerHostPortLike } from "./worker-host.ts";
-import type { WeftDurability, WeftWorkerReady } from "./worker.ts";
+import type { WorkerRequest } from "./worker.ts";
 import type { WebSocketFactory } from "./socket-transport.ts";
 
 /** How hard to try, whichever way the relay is named. Timing, and nothing about where it is. */
@@ -45,7 +39,7 @@ export interface WeftWorkerRelayTuning {
 /**
  * The relay at a URL, which is the case a deployment is.
  *
- * The credential is deliberately absent: the page holds that, because the page is the only place a
+ * The credential is not here: the page holds it, because the page is the only place a
  * token can be got, and it arrives over the port. What is here is what the worker builds a transport
  * out of — and it is here rather than on the page because the worker is where the transport is
  * built. A base URL declared on both sides that had to agree is a value nothing checks, wrong only
@@ -65,17 +59,16 @@ export interface WeftWorkerRelayUrl extends WeftWorkerRelayTuning {
 /**
  * The relay as a transport this worker was handed, for a relay that is not at a URL at all.
  *
- * The two members are the ones `WeftWorkerSessionOptions` already declares, and deliberately so:
- * this is the general case and `WeftWorkerRelayUrl` is the shorthand for the common one, so an
- * application that outgrows the shorthand keeps everything else `serveWeftWorkerDefaults` does —
- * opening the pool its namespace names, installing the schema, announcing what it got — instead of
- * assembling the worker by hand to change one line. `transport` is a function of the credential for
- * the same reason it is one there: a transport carries its token, so signing in as somebody else is
- * a new transport rather than a mutated one.
+ * The two members are the ones `WeftWorkerSessionOptions` already declares, because this is the
+ * general case and `WeftWorkerRelayUrl` is the shorthand for the common one — so an
+ * application that outgrows the shorthand keeps everything else `serveWeftStorageWorker` does —
+ * opening the file its namespace names, installing the schema, serving each arriving port — instead
+ * of assembling the worker by hand to change one line. `transport` is a function of the credential
+ * for the same reason it is one there: a transport carries its token, so signing in as somebody
+ * else is a new transport rather than a mutated one.
  *
- * The case it exists for is a relay reachable over a `MessagePort` — one running in a
- * `SharedWorker` of the same browser, which is what a page with no server behind it can still sync
- * through. No URL describes that, and `fetch` cannot reach it.
+ * The case it exists for is a relay reachable over a `MessagePort`. No URL describes that, and
+ * `fetch` cannot reach it.
  *
  * `baseUrl` and `transport` are each `never` on the other side, so the two ways of saying where the
  * relay is cannot be given at once and silently have one of them ignored.
@@ -94,167 +87,217 @@ export interface WeftWorkerRelaySupplied extends WeftWorkerRelayTuning {
 /** Where the relay is: a URL the worker builds a transport from, or a transport it is handed. */
 export type WeftWorkerRelayOptions = WeftWorkerRelayUrl | WeftWorkerRelaySupplied;
 
-export interface ServeWeftWorkerDefaultsOptions {
+/**
+ * `SharedWorkerGlobalScope`, named because this package is typechecked without the DOM library.
+ *
+ * An application's worker module is this, and nothing else:
+ *
+ * ```ts title="src/storage-worker.ts"
+ * const worker = serveWeftStorageWorker({ schema, sqlite });
+ * (globalThis as unknown as WeftWorkerScope).onconnect = (event) => {
+ *   const port = event.ports[0];
+ *   if (port !== undefined) worker.connect(port);
+ * };
+ * ```
+ *
+ * The two lines are written out rather than done here, so a worker that has something of its own to
+ * say to each arriving port — a demo handing over a relay it can only reach as a `MessagePort` —
+ * listens on that port before passing it on.
+ */
+export interface WeftWorkerScope {
+  onconnect: ((event: { readonly ports: readonly WorkerHostPortLike[] }) => void) | null;
+}
+
+export interface ServeWeftStorageWorkerOptions {
   readonly schema: SchemaDefinition;
   /**
-   * The `@sqlite.org/sqlite-wasm` default export, uncalled. The module is the application's to
-   * supply, so which build of SQLite ships — or whether one ships at all — stays its decision and
-   * this package keeps no SQLite runtime dependency.
+   * This application's SQLite build, uninitialised. The module is the application's to supply, so
+   * which build of SQLite ships — and which VFS its databases live in — stays its decision and this
+   * package keeps no SQLite runtime dependency.
    */
-  readonly sqlite3InitModule: () => Promise<Sqlite3Module>;
+  readonly sqlite: () => Promise<WaSqliteBuild>;
   /** Left out for a device that never syncs: the three session verbs are then refused, not ignored. */
   readonly relay?: WeftWorkerRelayOptions;
-  /** The port to serve on. The worker's own global by default, which is what a real worker wants. */
-  readonly port?: WorkerHostPortLike;
-  /** The database's name within the pool. */
+  /** The file one namespace's databases are kept in, within that namespace's VFS. */
   readonly path?: string;
-  /**
-   * Which pool of OPFS files to open in.
-   *
-   * Derived from the namespace on this worker's own URL unless it is said here, which is what keeps
-   * two applications of one origin off each other's access handles. A worker an application built
-   * and loaded itself, under a URL nothing wrote a namespace into, is what this is for.
-   */
-  readonly poolName?: string;
-  readonly initialCapacity?: number;
+}
+
+/** Serves every database this origin opens, on every port handed to `connect`. */
+export function serveWeftStorageWorker(options: ServeWeftStorageWorkerOptions): WeftStorageWorker {
+  return new WeftStorageWorker(options);
+}
+
+/** One namespace's database: the connection, and the store that installs the schema into it. */
+interface OpenDatabase {
+  readonly executor: WebSqliteExecutor;
+  readonly store: SqliteClientStore;
 }
 
 /**
- * Opens this device's database and serves it, then says so.
+ * One `(namespace, scope)`'s client, as the host that owns it.
  *
- * The announcement is the point of the return path. Whether OPFS will hand out a synchronous access
- * handle pool is a property of the worker and of nothing the page can see, so the page cannot decide
- * in advance; and a failure thrown here would reach it as an `error` event with no detail, or as an
- * unhandled rejection with none at all. Reported as an ordinary message, it becomes a rejected
- * `openWeftDatabase` naming the cause — or, where the database was opened in memory instead, an open
- * that succeeds and reports `durability: "ephemeral"`.
- *
- * Resolves with the host, or with nothing when there was no database to serve — the page has already
- * been told which by then.
+ * The namespace sits beside the promise rather than inside what it resolves to, so `#release` can
+ * ask which other clients share a file without awaiting: a port that arrives while it is deciding
+ * would otherwise be handed a connection it is about to close.
  */
-export async function serveWeftWorkerDefaults(
-  options: ServeWeftWorkerDefaultsOptions,
-): Promise<WeftWorkerHost | undefined> {
-  // A dedicated worker's own global is the port it serves on.
-  const port: WorkerHostPortLike = options.port ?? globalThis;
-  let executor: (SqlExecutor & { close(): void }) | undefined;
-  try {
-    const sqlite3 = await options.sqlite3InitModule();
-    const opened = await openDatabase(sqlite3, options);
-    executor = opened.executor;
-    const durability = opened.durability;
-    const store = new SqliteClientStore(executor, options.schema);
+interface OpenClient {
+  readonly namespace: string;
+  readonly opening: Promise<WeftWorkerHost>;
+  /** The same host once it exists, for `watching` to read without awaiting. */
+  host: WeftWorkerHost | undefined;
+}
+
+export class WeftStorageWorker {
+  readonly #options: ServeWeftStorageWorkerOptions;
+  readonly #schemaHash: ReturnType<typeof schemaHash>;
+  /** namespace -> the file it is kept in. Held as promises, so two ports racing open one database. */
+  readonly #databases = new Map<string, Promise<OpenDatabase>>();
+  /** database key -> the client serving it, for the same reason. */
+  readonly #clients = new Map<string, OpenClient>();
+  #serving = true;
+
+  constructor(options: ServeWeftStorageWorkerOptions) {
+    this.#options = options;
+    this.#schemaHash = schemaHash(options.schema);
+  }
+
+  /**
+   * Serves one arriving port, once it has said which database it is for.
+   *
+   * Everything the port sends before the routing is settled is collected rather than dropped. The
+   * listener stays attached until the host has one of its own, and the two swap in the same turn,
+   * so nothing arrives while nobody is listening.
+   */
+  connect(port: WorkerHostPortLike): void {
+    const queued: WorkerRequest[] = [];
+    let routed = false;
+    const listener = (event: MessageEvent<WorkerRequest>): void => {
+      const request = event.data;
+      queued.push(request);
+      if (routed || request.type !== "hydrate") return;
+      routed = true;
+      const { scopeId, namespace } = request;
+      void this.#serve(port, listener, queued, scopeId, namespace);
+    };
+    port.addEventListener("message", listener);
+    port.start?.();
+  }
+
+  /** Everything this worker has open, by database key. For a test to read. */
+  get serving(): readonly string[] {
+    return [...this.#clients.keys()];
+  }
+
+  /**
+   * Every statement this worker is still recomputing after each mutation, across every database.
+   *
+   * For a test to read. A registration nobody released is a statement recomputed for the life of
+   * the browser, and no individual port can see one: a push carries only that port's own
+   * statements.
+   */
+  get watching(): readonly string[] {
+    return [...this.#clients.values()].flatMap((client) => client.host?.watching ?? []);
+  }
+
+  /** Stops every client and closes every file. */
+  async stop(): Promise<void> {
+    this.#serving = false;
+    for (const client of [...this.#clients.values()]) (await client.opening).stop();
+    this.#clients.clear();
+    for (const pending of [...this.#databases.values()]) await (await pending).executor.close();
+    this.#databases.clear();
+  }
+
+  async #serve(
+    port: WorkerHostPortLike,
+    listener: (event: MessageEvent<WorkerRequest>) => void,
+    queued: readonly WorkerRequest[],
+    scopeId: string,
+    namespace: string,
+  ): Promise<void> {
+    const key = weftDatabaseKey(scopeId, namespace);
+    const client = this.#clients.get(key) ?? { namespace, opening: this.#open(key, namespace), host: undefined };
+    this.#clients.set(key, client);
+    const host = await client.opening;
+    client.host = host;
+    if (!this.#serving) return;
+    port.removeEventListener("message", listener);
+    host.connect(port, queued);
+  }
+
+  async #open(key: string, namespace: string): Promise<WeftWorkerHost> {
+    const database = await this.#database(namespace);
+    return serveWeftWorker({
+      executor: database.executor,
+      store: database.store,
+      schemaHash: this.#schemaHash,
+      onIdle: () => void this.#release(key, namespace),
+      ...(this.#options.relay === undefined ? {} : { session: this.#session(this.#options.relay) }),
+    });
+  }
+
+  #database(namespace: string): Promise<OpenDatabase> {
+    const existing = this.#databases.get(namespace);
+    if (existing !== undefined) return existing;
+    const opening = this.#openDatabase(namespace);
+    this.#databases.set(namespace, opening);
+    return opening;
+  }
+
+  async #openDatabase(namespace: string): Promise<OpenDatabase> {
+    const build = await this.#options.sqlite();
+    const executor = await openWebSqliteExecutor(build, {
+      path: this.#options.path ?? "weft.sqlite3",
+      name: storageNameFor(namespace),
+    });
+    const store = new SqliteClientStore(executor, this.#options.schema);
     // Every open, not only the first: this is also what adds the columns a schema edit introduced
     // since the database was last opened.
-    store.installSchema();
-    const host = serveWeftWorker({
-      port,
-      executor,
-      store,
-      durability,
-      ...(options.relay === undefined ? {} : { session: session(options.schema, options.relay) }),
-    });
-    // After `serveWeftWorker`, never before. The page waits for this before it posts anything, so a
-    // request cannot arrive while there is no listener to receive it — which on a dedicated worker
-    // is a message delivered to nobody rather than a message queued.
-    post(port, { weft: "ready", ok: true, schemaHash: schemaHash(options.schema), durability });
-    return host;
-  } catch (error) {
-    // The handle, if one was ever taken, before the page is told there is no database: a pool left
-    // open would keep the file locked against the tab that takes over.
-    executor?.close();
-    post(port, { weft: "ready", ok: false, error: describe(error) });
-    return undefined;
+    await store.installSchema();
+    return { executor, store };
+  }
+
+  /**
+   * Drops a client whose last tab has gone, and the file with it once no client of that namespace
+   * is left.
+   *
+   * A tab that comes back opens both again, and what it reads is whatever committed. Holding them
+   * would keep one database per `(namespace, scope)` this origin had ever opened resident in the
+   * worker's heap, for as long as the browser keeps the worker.
+   */
+  async #release(key: string, namespace: string): Promise<void> {
+    const client = this.#clients.get(key);
+    if (client === undefined) return;
+    this.#clients.delete(key);
+    (await client.opening).stop();
+    for (const other of this.#clients.values()) if (other.namespace === namespace) return;
+    const database = this.#databases.get(namespace);
+    if (database === undefined) return;
+    this.#databases.delete(namespace);
+    await (await database).executor.close();
+  }
+
+  #session(relay: WeftWorkerRelayOptions): NonNullable<Parameters<typeof serveWeftWorker>[0]["session"]> {
+    return {
+      schemaHash: this.#schemaHash,
+      ...reach(relay),
+      ...(relay.pollWhileLiveMs === undefined ? {} : { pollWhileLiveMs: relay.pollWhileLiveMs }),
+      ...(relay.pollWhileBlindMs === undefined ? {} : { pollWhileBlindMs: relay.pollWhileBlindMs }),
+      ...(relay.debounceMs === undefined ? {} : { debounceMs: relay.debounceMs }),
+      ...(relay.now === undefined ? {} : { now: relay.now }),
+    };
   }
 }
 
 /**
- * OPFS if the browser will have it, memory if it will not — and nothing at all if the build cannot
- * do OPFS in the first place.
+ * What one namespace's storage is called, which is the name of its IndexedDB database.
  *
- * The two failures are one failure to look at and could not be further apart in what they mean.
- *
- * `WasmSqliteUnavailableError` says the sqlite3 module has no `installOpfsSAHPoolVfs` on it: there
- * is no pool VFS in this build, on any browser, for anybody. Falling back there would hand a
- * developer a database that works perfectly through every reload of development and loses every
- * device's data in production, with the build that shipped wrong never once saying so. So it is
- * rethrown and the open is refused.
- *
- * Anything else thrown from installing the pool or opening the file means the function is there and
- * this worker did not get a pool. Which is as much as can be said from in here, and less than it
- * looks: a browser with no OPFS to give and a pool another document has not finished giving back
- * throw the same way. Private browsing is the first, and the person asked for a session that would
- * not be remembered; they get a working database that keeps nothing and the page is told so. A
- * successor tab opening a moment ahead of a crashed predecessor's teardown is the second, and it is
- * the page that tells the two apart, because the page is the only place that knows this device was
- * reading a durable database a moment ago — see `DatabaseTab.#succeedToWorker`, which throws such a
- * worker away and asks for another. So what is reported here is what was opened, not why.
+ * Encoded because a namespace is a string an application chose and this names storage.
+ * `encodeURIComponent` leaves an ordinary name readable and cannot map two namespaces onto one
+ * store, because it can be decoded back.
  */
-async function openDatabase(
-  sqlite3: Sqlite3Module,
-  options: ServeWeftWorkerDefaultsOptions,
-): Promise<{ readonly executor: WasmSqliteExecutor; readonly durability: WeftDurability }> {
-  try {
-    const executor = await openWebSqliteExecutor(sqlite3, {
-      path: options.path ?? "weft.sqlite3",
-      poolName: options.poolName ?? poolNameFor(namespaceFromLocation()),
-      ...(options.initialCapacity === undefined ? {} : { initialCapacity: options.initialCapacity }),
-    });
-    return { executor, durability: "durable" };
-  } catch (error) {
-    if (error instanceof WasmSqliteUnavailableError) throw error;
-    // `:memory:` needs no OPFS, no VFS install and no access handle, so nothing that just failed can
-    // fail again here. It is a real SQLite: every statement the durable path answers, this answers.
-    return { executor: openMemorySqliteExecutor(sqlite3), durability: "ephemeral" };
-  }
-}
-
-/**
- * Which pool of OPFS files this worker opens in, for one namespace.
- *
- * The pool rather than the file inside it, because the pool is where the exclusion lives: installing
- * one takes a synchronous access handle on every file it holds, so a second worker asking for the
- * same pool is refused it whatever name it meant to open within. Two namespaces in one origin are
- * two applications and need two pools; two scopes of one namespace share a pool and take a file each
- * out of it, which is what keeps a device signed into several scopes on one set of reserved files.
- *
- * Encoded because a namespace is a string an application chose and this is an OPFS directory name.
- * `encodeURIComponent` leaves an ordinary name readable, escapes the separator rather than nesting a
- * directory on it, and cannot map two namespaces onto one pool: it can be decoded back.
- */
-function poolNameFor(namespace: string): string {
+function storageNameFor(namespace: string): string {
   return `weft-${encodeURIComponent(namespace)}`;
-}
-
-/**
- * The namespace `openWeftDatabase` wrote into this worker's URL.
- *
- * The default where nothing did, which is a worker an application constructed itself or one a test
- * drives directly. Such a worker is the only worker of its origin unless the application arranged
- * otherwise, and where it is not, `poolName` says so outright.
- */
-function namespaceFromLocation(): string {
-  const href = (globalThis as { location?: { href?: string } }).location?.href;
-  if (href === undefined) return DEFAULT_NAMESPACE;
-  try {
-    return new URL(href).searchParams.get(WEFT_NAMESPACE_PARAM) ?? DEFAULT_NAMESPACE;
-  } catch {
-    return DEFAULT_NAMESPACE;
-  }
-}
-
-function session(
-  schema: SchemaDefinition,
-  relay: WeftWorkerRelayOptions,
-): NonNullable<Parameters<typeof serveWeftWorker>[0]["session"]> {
-  return {
-    schemaHash: schemaHash(schema),
-    ...reach(relay),
-    ...(relay.pollWhileLiveMs === undefined ? {} : { pollWhileLiveMs: relay.pollWhileLiveMs }),
-    ...(relay.pollWhileBlindMs === undefined ? {} : { pollWhileBlindMs: relay.pollWhileBlindMs }),
-    ...(relay.debounceMs === undefined ? {} : { debounceMs: relay.debounceMs }),
-    ...(relay.now === undefined ? {} : { now: relay.now }),
-  };
 }
 
 /**
@@ -297,18 +340,4 @@ function reach(relay: WeftWorkerRelayOptions): {
             }),
         }),
   };
-}
-
-/**
- * The announcement is not part of the request/response protocol `WorkerHostPortLike` describes — it
- * carries neither the id a reply is recognised by nor the tag a push is — so it goes out through the
- * port's own widest shape rather than widening that interface. Everything already listening on
- * either end drops it untouched; see `WeftWorkerReady`.
- */
-function post(port: WorkerHostPortLike, message: WeftWorkerReady): void {
-  (port as unknown as { postMessage(message: WeftWorkerReady): void }).postMessage(message);
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

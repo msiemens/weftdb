@@ -1,12 +1,18 @@
 ---
 title: Storage on the device
-description: The SqlExecutor port, its SQLite implementations, the worker that holds the database, and the mirror the page reads.
+description: The executor ports, the SharedWorker that holds the database, opening it from a page, and the mirror a component reads.
 sidebar:
   order: 6
 ---
 
-A device persists what it holds through `SqlExecutor`, the port two SQLite builds implement.
-`SqliteClientStore` runs against it, and it declares:
+A device keeps its rows in SQLite compiled to WebAssembly, in one `SharedWorker` per origin that
+serves every tab. The page holds a mirror of the rows that worker last pushed, and every read a
+component makes is answered from it.
+
+## The executor ports
+
+`weftdb/shared` declares two ports over the same statements. The relay runs on `node:sqlite`, which
+answers a statement by returning its rows. `SqlExecutor` is synchronous:
 
 ```ts
 export interface SqlExecutor {
@@ -17,167 +23,145 @@ export interface SqlExecutor {
 }
 ```
 
-`SqliteClientStore` takes an executor and a schema and turns them into a device's durable
-state. `installSchema()` runs the generated DDL, and adds any column a schema edit introduced
-since the database was last opened. `hydrate(scopeId, deviceId)` reads every row, tombstone,
-outbox entry and quarantined op back into a fresh `WeftClient`. It sets itself as the client's
-persistence before `hydrate` returns, so every write the client makes afterward is saved.
+A device runs SQLite over a storage layer that yields: IndexedDB is reached by a request and an
+event. `AsyncSqlExecutor` is the same four methods over promises:
 
-## Choosing a storage backend
-
-| Backend                 | Built from                                                                 | What it is for                                                            |
-| ----------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `openSqliteExecutor`    | `node:sqlite`                                                              | The relay's own storage, and a synchronous stand-in for a device in tests |
-| `openWebSqliteExecutor` | SQLite compiled to WebAssembly, over the Origin Private File System (OPFS) | A device's durable database in a browser                                  |
-
-`openWebSqliteExecutor` needs the worker setup below. `openSqliteExecutor` is for the relay and
-the test suite; neither runs in a browser.
-
-## Building the source a hook reads
-
-A generated hook takes a `WeftSource` ([reading data](/guides/reading-data/)), which a client on
-the thread that renders is not on its own: it holds the rows and the scope, and the subscription
-engine and the statement selection come from beside it.
-
-`executorRowSelect(executor)` supplies the statement selection where the executor is on the thread
-that renders:
-
-```ts title="src/store.ts"
-import { executorRowSelect, SubscriptionEngine, type WeftSource } from "weftdb/client";
-import { SqliteClientStore } from "weftdb/client/sqlite";
-import { deviceId, scopeId } from "weftdb/core";
-import { openSqliteExecutor } from "weftdb/server/node-sqlite";
-import { schema } from "./schema.ts";
-
-const executor = openSqliteExecutor("weft.sqlite3");
-const store = new SqliteClientStore(executor, schema);
-store.installSchema();
-const client = store.hydrate(scopeId("user-1"), deviceId("laptop"));
-
-export const source: WeftSource = {
-  engine: new SubscriptionEngine(),
-  rows: client.rows,
-  scopeId: client.scopeId,
-  select: executorRowSelect(executor),
-  watch: () => Promise.resolve(),
-  unwatch: () => undefined,
-};
+```ts
+export interface AsyncSqlExecutor {
+  all<Decoded>(statement: SqlStatement<Decoded>): Promise<readonly Decoded[]>;
+  get<Decoded>(statement: SqlStatement<Decoded>): Promise<Decoded | undefined>;
+  run(statement: { readonly sql: string; readonly parameters: SqlParameters }): Promise<void>;
+  transaction<Result>(body: (tx: AsyncSqlTransaction) => Result | PromiseLike<Result>): Promise<Result>;
+}
 ```
 
-Give it the executor the store writes through. Otherwise a statement runs against one database
-while the rows it selects are saved into another. `watch` and `unwatch` are no-ops here, because
-the statement runs on the thread that reads it and there is nothing to register it with. Both
-`use<Collection>` and `use<Collection>Query` read through this source unchanged.
+A `SqlStatement` composed for one runs on the other. `asyncSqlExecutor(executor)` lifts a
+synchronous executor onto the asynchronous port, which is what lets a `node:sqlite` database stand
+in for a device under Node.
 
-The executor above is `node:sqlite`, which is synchronous and reachable from the thread that
-renders. A browser reaches SQLite only through the worker below.
+One transaction is open at a time across every caller of an asynchronous executor. `transaction`
+hands its body an `AsyncSqlTransaction`, and that handle is what tells the body's statements apart
+from everybody else's. A statement issued through the handle runs inside the transaction. A
+statement issued through the executor itself queues until the connection is free. Without the
+distinction a write issued from outside would land inside somebody else's transaction and be rolled
+back with it, having already resolved its own promise.
 
-SQLite is used on the device rather than IndexedDB because:
+## The client store
+
+`SqliteClientStore` takes an executor and a schema and turns them into a device's durable state.
+`installSchema()` runs the generated DDL, and adds any column a schema edit introduced since the
+database was last opened. `hydrate(scopeId, deviceId)` reads every row, tombstone, outbox entry and
+quarantined op back into a fresh `WeftClient`, installing the schema first where nothing has. Every
+write that client makes once it resolves is saved. Both return promises.
+
+SQLite is used on the device rather than IndexedDB directly, because:
 
 - The generated tables are relational.
 - `transaction()` gives a batch of related writes a real commit and rollback to rest on.
-- The same compiled SQL that runs on a device runs unchanged against `node:sqlite` on the server.
+- The same compiled SQL that runs on a device runs unchanged against `node:sqlite` on the relay.
 
-## Running the database in a worker
+## Writing the storage worker
 
-`SqlExecutor` is synchronous: every method returns its result directly, not a promise. The only
-browser storage SQLite can reach synchronously is an OPFS sync access handle, one exists only
-inside a dedicated worker, and it is held exclusively, so no other context can open the same file
-while it is held.
+The SQLite build is the application's to supply, so weftdb keeps no SQLite runtime dependency and
+which build ships stays a decision the application makes. A `WaSqliteBuild` holds the initialised
+wa-sqlite API, the module it was built over, and a function building the VFS.
 
-The whole `WeftClient` therefore runs in the worker, next to the database it writes through to.
-`serveWeftWorker` puts it there: it owns the client, applies each mutation the page asks for, and
-posts back the rows that moved. It knows nothing about OPFS, so the same host runs against any
-`SqlExecutor`.
+Which VFS the build names is the application's choice, and the constraint on it is that it must be
+asynchronous. `IDBMirrorVFS` in the sample below ships in the wa-sqlite repository rather than in
+the version published to npm, so an application that wants it depends on the repository at a commit
+of its own choosing.
 
-The worker module is `serveWeftWorkerDefaults` and the schema:
+```ts title="src/sqlite.ts"
+import SQLiteESMFactory from "wa-sqlite/dist/wa-sqlite-async.mjs";
+import * as SQLite from "wa-sqlite";
+import { IDBMirrorVFS } from "wa-sqlite/src/examples/IDBMirrorVFS.js";
+import type { WaSqliteBuild } from "weftdb/client/wasm-sqlite";
 
-```ts title="src/storage-worker.ts"
-import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
-import { serveWeftWorkerDefaults } from "weftdb/client/worker-entry";
-import { schema } from "./schema.ts";
-
-serveWeftWorkerDefaults({
-  schema,
-  sqlite3InitModule,
-  relay: { baseUrl: "/api/db", socketUrl: "/api/db/sync" },
-});
+export async function sqlite(): Promise<WaSqliteBuild> {
+  const module = await SQLiteESMFactory();
+  return {
+    sqlite3: SQLite.Factory(module),
+    module,
+    vfs: (built, name) => IDBMirrorVFS.create(name, built),
+  };
+}
 ```
 
-It opens the OPFS executor, builds the store, installs the schema, serves the protocol, and tells
-the page whether the database opened. A browser with no access handle pool is reported rather than
-thrown, so the page can fail the open with the reason rather than a stack from a worker.
+`IDBMirrorVFS` holds each open database in memory and mirrors it into IndexedDB. That is what makes
+it fast, and what bounds how large a database it can serve.
 
-`relay` says where the relay is. `{ baseUrl, socketUrl }` is the shorthand for the common case, and
-the worker builds the transport from it. A relay that is not at a URL is given as a transport
-instead:
+The asynchronous build of wa-sqlite is what that VFS needs. An IndexedDB read is a request and an
+event, so SQLite has to be able to suspend inside a page fault, and `wa-sqlite-async.mjs` is the
+Asyncify build that can. It locates its `.wasm` file relative to its own module URL, so a bundler
+that rewrites that URL has to be told to leave the package alone. Under Vite that is
+`optimizeDeps.exclude`.
+
+The worker module itself is `serveWeftStorageWorker` and two lines that hand it each arriving port:
 
 ```ts title="src/storage-worker.ts"
-serveWeftWorkerDefaults({
+import { serveWeftStorageWorker, type WeftWorkerScope } from "weftdb/client/worker-entry";
+import { schema } from "./schema.ts";
+import { sqlite } from "./sqlite.ts";
+
+const worker = serveWeftStorageWorker({
   schema,
-  sqlite3InitModule,
+  sqlite,
+  relay: { baseUrl: "/api/db", socketUrl: "/api/db/sync" },
+});
+
+(globalThis as unknown as WeftWorkerScope).onconnect = (event) => {
+  const port = event.ports[0];
+  if (port !== undefined) worker.connect(port);
+};
+```
+
+`WeftWorkerScope` is `SharedWorkerGlobalScope`, named in the package because `weftdb` is typechecked
+without the DOM library. A worker with something of its own to say to each arriving port can listen
+on that port before passing it to `connect`.
+
+`sqlite` is called once for each namespace this worker opens a database in, and the module it
+returns is a WebAssembly instance and its heap. `path` names the file within the VFS and defaults to
+`weft.sqlite3`. The VFS is named from the `namespace` the connecting page opened under, so two
+applications in one origin hold two IndexedDB databases rather than contending for one.
+
+The returned `WeftStorageWorker` has `connect(port)`, which serves one arriving port once that port
+has said which database it wants, and `stop()`, which stops every client and closes every file.
+`serving` and `watching` report the databases it holds and the statements it is recomputing, for a
+test to read.
+
+## Pointing the worker at a relay
+
+`relay` says where the relay is. `{ baseUrl, socketUrl }` is the shorthand for the common case, and
+the worker builds the transport from it. Leaving `socketUrl` out means HTTP and a poll, which still
+syncs. Leaving `relay` out altogether is a device that never syncs, and the three session verbs are
+then refused rather than ignored.
+
+A relay that is not at a URL is given as a transport instead:
+
+```ts title="src/storage-worker.ts"
+// `sqlite` is the build above. `portTransport` and `portSocket` are this application's own,
+// built over a `MessagePort` the page transferred in.
+const worker = serveWeftStorageWorker({
+  schema,
+  sqlite,
   relay: {
-    transport: (token) => myTransport(token),
-    openSocket: (handlers, token) => myLiveConnection(handlers, token),
+    transport: (token) => portTransport(token),
+    openSocket: (handlers, token) => portSocket(handlers, token),
   },
 });
 ```
 
-Those two members are the ones `serveWeftWorker`'s own `session` declares. The supplied form is
-therefore the general one and the URL form is a shorthand for it, so an application that outgrows
-the shorthand keeps everything else this entry point does. `transport` is a function of the
-credential because a transport carries its token. The two forms cannot be mixed: each is `never` on
-the other side, so a `baseUrl` beside a `transport` does not compile. The demos use the supplied
-form. Their relay is a `WeftServer` in a `SharedWorker` of the same browser, reachable over a
-`MessagePort` that no URL describes and `fetch` cannot reach.
-
-The pool it opens in is named from the namespace `openWeftDatabase` wrote into this worker's URL, so
-two applications in one origin hold two pools rather than contending for one. `poolName` names the
-pool outright, for a worker an application loads itself.
-
-The same worker assembled by hand, for an application that needs a piece of it:
-
-```ts title="src/storage-worker.ts"
-import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
-import { openWebSqliteExecutor } from "weftdb/client/wasm-sqlite";
-import { SqliteClientStore } from "weftdb/client/sqlite";
-import { serveWeftWorker, type WorkerHostPortLike } from "weftdb/client/worker-host";
-import { schema } from "./schema.ts";
-
-const sqlite3 = await sqlite3InitModule();
-const executor = await openWebSqliteExecutor(sqlite3, { path: "weft.sqlite3" });
-const store = new SqliteClientStore(executor, schema);
-store.installSchema();
-
-serveWeftWorker({ port: globalThis as unknown as WorkerHostPortLike, executor, store });
-```
-
-`WorkerHostPortLike` is the port the host serves on: `postMessage`, `addEventListener`, and
-`removeEventListener`. Under the DOM library `self` is typed as a `Window`, whose `postMessage`
-takes an origin, so the worker's global is cast to the port type.
-
-The executor and the store are the host's options, so the database is open before the host is
-built, and `serveWeftWorker` hydrates the client from the store when the page asks it to. Give the
-host the same executor the store writes through, or a watched statement runs against one file while
-the rows it selects are saved into another.
-
-`openWebSqliteExecutor` takes an initialised `sqlite3` module rather than importing one. The caller
-supplies the module, so the library keeps no SQLite runtime dependency of its own, and which build
-ships, or whether one ships at all, stays the application's decision. Its `poolName` defaults to
-whatever the SQLite build defaults to, so a worker assembled this way names its own pool wherever an
-origin holds more than one database.
-
-A build with no `installOpfsSAHPoolVfs` is refused rather than opened against memory:
-`openWebSqliteExecutor` throws a `WasmSqliteUnavailableError`. Such a build has no durable storage
-on any browser, so a memory-backed database would serve every read and write through development
-and lose the data in production. `openMemorySqliteExecutor` opens an in-memory database directly,
-and `serveWeftWorkerDefaults` opens one when a browser declines the pool.
+An application that outgrows the URL shorthand keeps everything else this entry point does.
+`transport` is a function of the credential because a transport carries its token. The two forms
+cannot be mixed: each is `never` on the other side, so a `baseUrl` beside a `transport` does not
+compile. The demos use the supplied form. Their relay is a `WeftServer` in a second `SharedWorker`
+of the same browser, reachable over a `MessagePort` that no URL describes and `fetch` cannot reach.
 
 ## Opening a database
 
-`openWeftDatabase` is the whole of what a page does. It elects this tab, creates the worker or gets
-a port to the one another tab created, mints and stores a device id, builds the mirror, hydrates it,
-and hands back what the generated code reads and writes through:
+`openWeftDatabase` is the whole of what a page does. It mints and stores a device id, connects to
+the storage worker, refuses a worker serving a different schema, and hydrates the mirror. What it
+hands back is what the generated code reads and writes through:
 
 ```ts title="src/store.ts"
 import { openWeftDatabase } from "weftdb/client";
@@ -188,7 +172,6 @@ export const weft = await openWeftDatabase({
   schema,
   scopeId: "user-1",
   worker: new URL("./storage-worker.ts", import.meta.url),
-  broker: new URL("./broker.ts", import.meta.url),
   relay: { token: () => localStorage.getItem("token") },
   onError: (error) => {
     console.error(error);
@@ -198,60 +181,93 @@ export const weft = await openWeftDatabase({
 export const todos = todosMutators(weft.source);
 ```
 
-Two modules, and each is one import. The storage worker holds the database; the broker is a
-`SharedWorker` that hands a port to it from one tab to another. See
-[Reaching the worker from another tab](#reaching-the-worker-from-another-tab).
+`worker` is the storage worker module's URL. It is the application's to name because a
+`SharedWorker` is identified by its script URL, so every tab of the origin has to name the same one
+to be served by the same instance.
 
-`weft.source` is a `WeftSource`, so `use<Collection>` and `use<Collection>Query` take it unchanged,
-and it is a `MutationTarget`, so `<collection>Mutators` writes through it. `weft.durability` is
-`durable` or `ephemeral`; drive a banner from it, and tell a person their window will not remember.
-It is settled at the open and holds for the session, so there is nothing to subscribe to.
-`weft.role` is `leader` or `follower` and `weft.subscribeRole()` fires on a promotion; both are
-diagnostics, because every tab reaches the worker in one hop whichever part it plays.
-`weft.status()` and `weft.subscribeStatus()` report the
-worker's sync session, `weft.setToken()` hands over a credential or signs out, and `weft.dispose()`
-unwinds everything in the order it was built.
+`weft.source` is a `WeftClientMirror`. It is a `WeftSource`, so `use<Collection>` and
+`use<Collection>Query` take it unchanged, and it is a `MutationTarget`, so `<collection>Mutators`
+writes through it. `weft.status()` and `weft.subscribeStatus()` report the worker's sync session.
+`weft.setToken()` hands over a credential or signs out, and resolves once the worker has it.
+`weft.dispose()` unwinds everything in the order it was built.
 
 `namespace` says which application in the origin this database belongs to, and defaults to `"weft"`.
 It identifies the database together with `scopeId`. Two calls that agree on both are two tabs of one
-database. Two that differ in either are two databases, even under one `scopeId`: separate elections,
-separate workers, separate device identifiers, and separate OPFS pools.
-[Multi-tab coordination](/concepts/multi-tab/) covers the composed key and how the namespace reaches
-the worker.
+database: one client in the worker, one outbox, one device id. Two that differ in either are two
+databases that share nothing, even under one `scopeId`. `deviceStorage` is where the device id is
+kept, `localStorage` by default. `connect` says how the connection to the worker is made, and by
+default constructs a `SharedWorker` and hands back its port. Node has no `SharedWorker`, so
+supplying `connect` is what lets a test drive the whole assembly there.
 
 The relay's address is not among the options. The worker builds the transport, so the base URL
 belongs there; the token is the exception, because a worker has no `localStorage` to read one from.
 It is a function so that re-reading it is how a refreshed credential reaches the session, which is
 what `setToken()` with no argument does.
 
-A browser that declines the synchronous access handle pool is served an in-memory database, and
-`weft.durability` reports `ephemeral`. Safari's private browsing mode is the case that reaches it.
-Every query and hook works unchanged there. Rows, outbox, and quarantine all go when the window
-closes, a reload included. [Multi-tab coordination](/concepts/multi-tab/) covers both modes.
+`onError` is where a failure with no caller to reject reaches the page: a statement the worker
+refused, a reconnect that failed, and a mutation whose promise nobody kept. A mutator's own refusal
+is its own promise rejecting, and reaches the code that called it.
 
-An open still fails when the worker can open no database at all, and `WeftOpenError` carries a
-`reason` naming the condition. Nothing is left running behind a failed open.
+An open that cannot proceed rejects with a `WeftOpenError` carrying a `reason`:
+
+| `reason`            | Condition                                                                    |
+| ------------------- | ---------------------------------------------------------------------------- |
+| `schema-mismatch`   | The page and the worker were built from different schemas                    |
+| `no-worker`         | This environment has no `SharedWorker` and no `connect` was supplied         |
+| `no-device-storage` | This environment has no `localStorage` for a device id and none was supplied |
+
+Nothing is left running behind a failed open. The worker's tables are generated from its own copy of
+the schema, so a page built from another one would select columns that database has never had.
 
 ## Assembling the same thing by hand
 
 `openWeftDatabase` is built from parts that stay public, for an application that needs a piece of
-this it cannot express through the front door. `WorkerPortTransport` numbers each request and
-settles the reply that carries the same number, over a dedicated `Worker` or over a `MessagePort` to
-one. `WeftClientMirror` holds the rows the worker last said the scope contains, applies every delta
-the worker pushes, and wakes the subscriptions that read them:
+this it cannot express through the front door. The worker half opens the database itself, and hands
+each arriving port to `serveWeftWorker`:
+
+```ts title="src/storage-worker.ts"
+import { SqliteClientStore } from "weftdb/client/sqlite";
+import { openWebSqliteExecutor } from "weftdb/client/wasm-sqlite";
+import { serveWeftWorker } from "weftdb/client/worker-host";
+import type { WeftWorkerScope } from "weftdb/client/worker-entry";
+import { schemaHash } from "weftdb/schema";
+import { schema } from "./schema.ts";
+import { sqlite } from "./sqlite.ts";
+
+const executor = await openWebSqliteExecutor(await sqlite(), { path: "weft.sqlite3", name: "weft-app" });
+const store = new SqliteClientStore(executor, schema);
+await store.installSchema();
+
+const host = serveWeftWorker({ executor, store, schemaHash: schemaHash(schema) });
+
+(globalThis as unknown as WeftWorkerScope).onconnect = (event) => {
+  const port = event.ports[0];
+  if (port !== undefined) host.connect(port);
+};
+```
+
+`openWebSqliteExecutor` builds the VFS under `name`, opens `path` against it, and returns a
+`WebSqliteExecutor`: an `AsyncSqlExecutor` with a `close()`. The connection names its VFS, so two
+databases opened in one worker each read the storage their own name points at, however many have
+been registered since. Give the host the same executor the store writes through, or a watched
+statement runs against one file while the rows it selects are saved into another.
+
+`WorkerPortTransport` carries the protocol over a port. `WeftClientMirror` holds the rows the worker
+last said the scope contains, applies every delta the worker pushes, and wakes the subscriptions
+that read them:
 
 ```ts title="src/store.ts"
-import { WeftClientMirror, WorkerPortTransport } from "weftdb/client";
-import { deviceId, scopeId } from "weftdb/core";
+import { SubscriptionEngine, WeftClientMirror, WorkerPortTransport } from "weftdb/client";
 import { todosMutators } from "./generated/bindings.ts";
 
-const worker = new Worker(new URL("./storage-worker.ts", import.meta.url), { type: "module" });
-export const transport = new WorkerPortTransport(worker);
+const shared = new SharedWorker(new URL("./storage-worker.ts", import.meta.url), { type: "module" });
+export const transport = new WorkerPortTransport(shared.port);
 
 export const mirror = new WeftClientMirror({
   transport,
-  scopeId: scopeId("user-1"),
-  deviceId: deviceId("laptop"),
+  scopeId: "user-1",
+  deviceId: "laptop",
+  engine: new SubscriptionEngine(),
   onError: (error) => {
     console.error(error);
   },
@@ -262,24 +278,19 @@ await mirror.hydrate();
 export const todos = todosMutators(mirror);
 ```
 
-What the front door does that this does not: a mirror needs a `SubscriptionEngine` of its own, or
-two of them evict each other's cached rows on every render; a second tab reaches the worker only
-through the arrangement below; and the teardown has an order, because the Web Lock has to be handed
-back after the worker has released the access handle.
+`openWeftDatabase` adds what this leaves out. It mints the device id and keeps it. It compares
+`mirror.schemaHash` against the schema the page was built from. It hands the worker a credential,
+and it builds a new transport and calls `mirror.attach` when the browser stops the worker under
+memory pressure. A mirror also needs a `SubscriptionEngine` of its own, because two mirrors sharing
+one evict each other's cached rows on every render.
 
 `hydrate()` loads the scope's rows out of the worker and resolves once they are on the page. It is
-the one round trip that grows with the data: hydrating 10,000 rows takes 361 ms in Firefox over
-OPFS, during which the page has no rows to render.
+the one round trip that grows with the data, and the page has no rows to render until it settles.
 
-A mutator posts and returns `void`. The worker applies the change, writes it through to SQLite, and
-pushes back the rows that moved, and only then does the mirror hold the new value. Nothing is
-applied on the page first, so nothing on the page can need undoing. A mutation the worker refuses
-rejects a promise the mutator has already returned from, which is what `onError` is for: without it
-a refused edit looks like an edit that had no effect.
-
-Generated code reads and writes through the mirror. It is a `WeftSource` already, so
-`use<Collection>` and `use<Collection>Query` take it unchanged, and `<collection>Mutators` writes
-through it as a `MutationTarget`, the shape both `WeftClient` and `WeftClientMirror` have:
+A mutator posts and hands back the worker's own promise. The worker applies the change, writes it
+through to SQLite, and pushes back the rows that moved, and only then does the mirror hold the new
+value. Nothing is applied on the page first, so nothing on the page can need undoing. A mutation the
+worker refuses rejects that promise, which is why a call site that discards it writes `void`:
 
 ```tsx title="src/todo-list.tsx"
 import { useTodosQuery } from "./generated/bindings.ts";
@@ -291,7 +302,7 @@ export function TodoList() {
     <ul>
       {rows.map((todo) => (
         <li key={todo.id}>
-          <button onClick={() => todos.update(todo.id, { done: !todo.done })}>{todo.title}</button>
+          <button onClick={() => void todos.update(todo.id, { done: !todo.done })}>{todo.title}</button>
         </li>
       ))}
     </ul>
@@ -310,39 +321,54 @@ statement without the hooks means calling `mirror.watch(query)` and `mirror.unwa
 around it; registrations are counted, so one statement read in two places is one statement in the
 worker.
 
+Send `{ type: "disconnect" }` and dispose the mirror from a `pagehide` handler, which is what
+`weft.dispose()` does. A `MessagePort` has no liveness signal the worker can rely on. A tab that
+goes away without saying so leaves each statement it watched registered, and the worker re-runs
+those statements after every mutation any tab makes for the rest of the session.
+
 Per-field hybrid logical clock (HLC) readings, three-way merge ancestors, and the outbox stay in
 the worker. The sync session and retention read those, and neither runs on the page, so the mirror
 carries only what a component renders from.
 
 ## Syncing from the worker
 
-The sync session runs beside the client, in the worker, for the same reason the client is there: it
-drives the sync against a `WeftClient` and reads that client's outbox and quarantine to say what is
-pending. Give `serveWeftWorker` a `session` and it runs one:
+The sync session runs beside the client, in the worker, for the same reason the client is there. It
+drives the sync against a `WeftClient`, and reads that client's outbox and quarantine to say what is
+pending. Give `serveWeftWorker` a `session`:
 
 ```ts title="src/storage-worker.ts"
-serveWeftWorker({
-  port: globalThis as unknown as WorkerHostPortLike,
+import { connectSocketTransport, httpTransport } from "weftdb/client";
+
+const host = serveWeftWorker({
   executor,
   store,
+  schemaHash: schemaHash(schema),
   session: {
-    schemaHash,
-    transport: (token) => httpTransport({ baseUrl: "/api", token }),
-    openSocket: (handlers, token) => connectSocketTransport({ url: "/sync", token, handlers }),
+    schemaHash: schemaHash(schema),
+    transport: (token) => httpTransport({ baseUrl: "/api/db", token }),
+    openSocket: (handlers, token) =>
+      connectSocketTransport({
+        url: "/api/db/sync",
+        token,
+        onWake: () => handlers.onWake(),
+        onBatch: handlers.onBatch,
+        onStatusChange: () => handlers.onStatusChange(),
+        cursor: handlers.cursor,
+      }),
   },
 });
 ```
 
 `transport` is a function of the token rather than a transport, because a transport carries its
-credential: the socket presents one when it connects, and HTTP sends one per request. Signing in as
+credential. The socket presents one when it connects, and HTTP sends one per request. Signing in as
 somebody else is a new transport, so the session is rebuilt around it and the socket reopened.
 
 The page keeps the token, because the page is where a token can be got. A worker has no
 `localStorage` and no redirect to read one out of, so the mirror hands it over:
 
 ```ts
-mirror.setToken(await signIn());
-mirror.setToken(null);
+await mirror.setToken(await signIn());
+await mirror.setToken(null);
 ```
 
 Signing out ends the session and closes the socket. It leaves the outbox exactly as it is: unsent
@@ -352,7 +378,7 @@ has refused.
 
 `sync()` syncs now rather than at the next poll, and resolves when that sync has finished, so a
 pull-to-refresh stops spinning at the right moment. A relay that cannot be reached is an ordinary
-state: it settles into the status rather than throwing.
+state: it settles into the status rather than rejecting.
 
 `status()` is what the session last reported, and `subscribeStatus` wakes when it changes. It reads
 `undefined` before the device has signed in, which is where an application starts rather than a
@@ -365,93 +391,3 @@ const status = useSyncExternalStore(
   () => mirror.status(),
 );
 ```
-
-## Reaching the worker from another tab
-
-`openWeftDatabase` elects the tab, moves the ports, and rebuilds the connection when leadership
-changes, so an application that opens through it writes none of what follows.
-[Multi-tab coordination](/concepts/multi-tab/) covers why one tab holds the database and how the
-other tabs reach it.
-
-Moving a port between tabs needs a `SharedWorker`, so ship one as a module of its own and give
-`openWeftDatabase` its URL:
-
-```ts title="src/broker.ts"
-import "weftdb/client/broker-entry";
-```
-
-```ts title="src/main.ts"
-const weft = await openWeftDatabase({
-  schema,
-  scopeId: "user-1",
-  worker: new URL("./storage-worker.ts", import.meta.url),
-  broker: new URL("./broker.ts", import.meta.url),
-});
-```
-
-The broker touches no storage, and the module above is the whole of it. A browser with no
-`SharedWorker` is refused at the open in every tab, with `reason` `"no-broker"`. A browser with no
-Web Locks is refused the same way, with `reason` `"no-locks"`: nothing else can decide which tab may
-hold the database.
-
-One broker serves every database the origin has open, so `WeftBrokerClient` takes the namespace as
-its third argument and registers under the namespace and the scope together. A port asked for in one
-namespace reaches no other namespace's provider.
-
-Assembling it by hand is two subscriptions:
-
-```ts title="src/owner.ts"
-import { WeftBrokerClient } from "weftdb/client";
-
-const shared = new SharedWorker("/broker.js", { type: "module" });
-const broker = new WeftBrokerClient(shared.port, "user-1");
-const offPort = broker.onPort((port) => {
-  worker.postMessage({ weft: "connect", port }, [port]);
-});
-broker.provide();
-```
-
-```ts title="src/guest.ts"
-import { WeftBrokerClient, WeftClientMirror, WorkerPortTransport } from "weftdb/client";
-import { deviceId, scopeId } from "weftdb/core";
-
-const shared = new SharedWorker("/broker.js", { type: "module" });
-const broker = new WeftBrokerClient(shared.port, "user-1");
-const brokered = broker.requestPort();
-const transport = new WorkerPortTransport(brokered.port);
-const offSuccession = broker.onProvider(() => {
-  // Another tab took the lock and now holds the worker. Reconnect through the broker; leadership
-  // is the lock's to grant, and this message never says that this tab has it.
-});
-
-export const mirror = new WeftClientMirror({
-  transport,
-  scopeId: scopeId("user-1"),
-  deviceId: deviceId("laptop"),
-});
-
-await mirror.hydrate();
-```
-
-The handover is never acknowledged: the broker forwards the port into another document and hears
-nothing back. The `hydrate` above is what proves the port arrived: a reply to it is a document that
-is still there. Its `durability` field is also how a tab handed a port learns what kind of database
-it is reading. `brokered.refused` settles when the broker had no tab to give
-the port to, which is a tab that opened while the winner of the election was still starting its
-worker.
-
-A dedicated worker dies with the document that created it, so when that tab goes, every other tab's
-port breaks. The tab at the head of the lock queue learns of it from the Web Lock, which wakes one
-waiter and tells nobody else; the rest learn of it from the broker, which passes the successor's
-`provide()` on to every other connection as `onProvider`. That message asks a tab to reconnect and
-can do nothing else: leadership is concluded from the lock alone, so a spurious one costs a
-re-hydrate rather than a second worker on the access handle. `WeftClientMirror.attach` points the
-mirror at a new connection, reloads the rows, and registers every statement the page is reading all
-over again. A request in flight at that moment rejects: the tab cannot know whether the write
-landed, and reporting success would be worse than reporting nothing. Nothing is applied
-optimistically on the page and the database is durable, so the re-hydrate shows whatever committed.
-
-Send `{ type: "disconnect" }` and dispose the mirror from a `pagehide` handler. A `MessagePort` has
-no liveness signal the worker can rely on, so a tab that goes away without saying so leaves each
-statement it watched registered, and the worker re-runs those statements after every mutation any
-tab makes for the rest of the session.

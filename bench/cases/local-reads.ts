@@ -3,25 +3,36 @@
 // instant at a given size.
 import { SubscriptionEngine, queryKey, WeftClient, type QueryKey } from "weftdb/client";
 import { TITLE, TODOS, schema, syncedClient, todoId, updateTxn } from "../fixtures.ts";
-import { consume, duration, repeat, type BenchConfig, type BenchGroup, type CaseResult } from "../harness.ts";
+import {
+  consume,
+  duration,
+  repeat,
+  repeatAsync,
+  type BenchConfig,
+  type BenchGroup,
+  type CaseResult,
+} from "../harness.ts";
 
 const GROUP = "Local reads";
 
 export const localReads: BenchGroup = {
   name: GROUP,
-  run: async (config: BenchConfig): Promise<readonly CaseResult[]> =>
-    config.readSizes.flatMap((rows) => {
+  run: async (config: BenchConfig): Promise<readonly CaseResult[]> => {
+    const results: CaseResult[] = [];
+    for (const rows of config.readSizes) {
       const key = queryKey(schema, "todos", { orderBy: "rank" });
       // One dataset for all four cases at this size, so what separates them is the read path
       // rather than which rows they happened to be given.
-      const client = syncedClient(rows);
-      return [
+      const client = await syncedClient(rows);
+      results.push(
         warmQuery(config, rows, key, client),
         coldQuery(config, rows, key, client),
-        queryAfterEdit(config, rows, key, client),
+        await queryAfterEdit(config, rows, key, client),
         listRows(config, rows, client),
-      ];
-    }),
+      );
+    }
+    return results;
+  },
 };
 
 /** The render path: the same query asked again with nothing changed underneath it. */
@@ -67,15 +78,20 @@ function coldQuery(config: BenchConfig, rows: number, key: QueryKey, client: Wef
 }
 
 /** What a list costs to re-read after one row in it changed, which is what an edit triggers. */
-function queryAfterEdit(config: BenchConfig, rows: number, key: QueryKey, client: WeftClient): CaseResult {
+async function queryAfterEdit(
+  config: BenchConfig,
+  rows: number,
+  key: QueryKey,
+  client: WeftClient,
+): Promise<CaseResult> {
   const engine = new SubscriptionEngine();
   const row = todoId(0);
   let counter = 0;
   consume(engine.getSnapshot(key, client.rows.values()).rows.length);
-  const samples = repeat(() => {
+  const samples = await repeatAsync(async () => {
     counter += 1;
     // Editing is setup; the edit itself is measured under Local writes.
-    client.update(TODOS, row, { [TITLE]: `title ${counter}` }, updateTxn(row));
+    await client.update(TODOS, row, { [TITLE]: `title ${counter}` }, updateTxn(row));
     const start = performance.now();
     const snapshot = engine.getSnapshot(key, client.rows.values());
     const elapsed = performance.now() - start;

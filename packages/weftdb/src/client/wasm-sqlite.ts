@@ -1,184 +1,204 @@
-// The `SqlExecutor` port for a browser: SQLite compiled to WebAssembly, so a device's durable
-// state is a real database rather than a JSON string in `localStorage`.
+// The `AsyncSqlExecutor` port for a browser: SQLite compiled to WebAssembly over a VFS the
+// application chooses, so a device's durable state is a real database rather than a JSON string in
+// `localStorage`.
 //
-// Two constraints shape this file.
+// The client module has no SQLite runtime dependency. The caller passes in an initialised wa-sqlite
+// API, the Emscripten module it was built over, and the VFS to store in, so which build ships — or
+// whether one ships at all — stays the application's decision, and this package stays importable by
+// a server that has no use for it.
 //
-// The executor interface is synchronous, and the only browser storage SQLite can reach
-// synchronously is an OPFS sync access handle, which exists only inside a dedicated worker.
-// A persistent executor therefore runs in a worker and the page reaches it through
-// `WorkerPortTransport`; on the main thread only an in-memory database can be opened, which is
-// useful for tests and useless for persistence.
-//
-// And the client module has no SQLite runtime dependency. The caller passes in an initialised sqlite3
-// module, so which build of SQLite ships — or whether one ships at all — stays the
-// application's decision, and this package stays importable by a server that has no use for it.
-import type { SqlExecutor, SqlParameters, SqlRow, SqlStatement, SqlValue } from "weftdb/shared";
+// The VFS is the application's for a second reason. `IDBMirrorVFS` holds every open database in
+// memory and mirrors it to IndexedDB, which is what makes it fast and what bounds how large a
+// database it can serve; `IDBBatchAtomicVFS` is the same author's slower VFS with no such bound.
+// Both are asynchronous, both work in every context, and swapping one for the other is this option
+// and nothing else.
+import {
+  serializeAsyncSql,
+  type AsyncSqlExecutor,
+  type SqlParameters,
+  type SqlRow,
+  type SqlStatement,
+  type SqlValue,
+} from "weftdb/shared";
 
-/** The part of `sqlite3.oo1.Stmt` this uses. */
-export interface WasmStatement {
-  bind(values: readonly SqlValue[]): unknown;
-  step(): boolean;
-  /** Fills and returns the given object with this row, keyed by column name. */
-  get(target: Record<string, unknown>): Record<string, unknown>;
-  finalize(): unknown;
+/** `step` reached a row. SQLite's own constant, named here because wa-sqlite is not imported. */
+const SQLITE_ROW = 100;
+
+/** The character SQLite reads a bound text value up to and no further. See `checked`. */
+const NUL = String.fromCodePoint(0);
+
+/**
+ * Refuses a string this build cannot store whole.
+ *
+ * `wa-sqlite` binds text by pointer with no length, so SQLite reads it up to the first NUL and a
+ * value that carries one is stored truncated — a note whose tail is gone on the next hydrate, with
+ * nothing anywhere reporting it. Refused here, the write rejects and the caller is told.
+ */
+function checked(parameters: SqlParameters): SqlValue[] {
+  for (const value of parameters) {
+    if (typeof value === "string" && value.includes(NUL)) {
+      throw new Error(
+        "a text value carrying a NUL cannot be stored: SQLite would read it up to the NUL and no further",
+      );
+    }
+  }
+  // Copied because `bind_collection` takes a mutable array, and a statement's parameters are
+  // readonly everywhere else in this package.
+  return [...parameters];
 }
 
-/** The part of `sqlite3.oo1.DB` this uses. */
-export interface WasmDatabase {
-  prepare(sql: string): WasmStatement;
-  exec(sql: string): unknown;
-  close(): void;
+/** The Emscripten module a wa-sqlite build is, as far as anything here is concerned. */
+export type WaSqliteModule = object;
+
+/** A registered VFS. Constructed by the application and handed over already open. */
+export interface WaSqliteVfs {
+  close(): unknown;
 }
 
-/** Opened by `installOpfsSAHPoolVfs`, and the only way to a synchronous OPFS database. */
-export interface OpfsSAHPool {
-  readonly OpfsSAHPoolDb: new (path: string) => WasmDatabase;
+/**
+ * The slice of `SQLite.Factory(module)` this uses.
+ *
+ * Declared structurally rather than imported, for the reason the module is: assigning the real
+ * factory's result to this is what checks that the port still describes the library.
+ */
+export interface WaSqliteApi {
+  vfs_register(vfs: WaSqliteVfs, makeDefault?: boolean): number;
+  open_v2(filename: string, flags?: number, zVfs?: string): Promise<number>;
+  close(db: number): Promise<number>;
+  statements(db: number, sql: string): AsyncIterable<number>;
+  bind_collection(statement: number, bindings: SqlValue[]): number;
+  step(statement: number): Promise<number>;
+  row(statement: number): readonly SqlValue[];
+  column_names(statement: number): readonly string[];
 }
 
-/** The part of the initialised `sqlite3` module this uses. */
-export interface Sqlite3Module {
-  readonly oo1: {
-    readonly DB: new (path: string, flags?: string) => WasmDatabase;
-  };
-  /** Present only in a browser that has OPFS, and only inside a worker. */
-  installOpfsSAHPoolVfs?(options: {
-    readonly name?: string;
-    readonly initialCapacity?: number;
-    readonly clearOnInit?: boolean;
-  }): Promise<OpfsSAHPool>;
+/** This application's SQLite build, and how a database opened through it is stored. */
+/**
+ * Adopts the API `wa-sqlite`'s own `Factory` returns.
+ *
+ * Its `row()` is typed to hand back a blob column as `number[]`, which is wider than `SqlValue`.
+ * weftdb never writes a blob — `encodeFieldValue` stores a value as text, a number, or JSON — so
+ * nothing here ever reads one back, and the narrowing is asserted at this one point because this is
+ * where the reason for it lives.
+ */
+export function adoptWaSqlite(api: unknown): WaSqliteApi {
+  return api as WaSqliteApi;
 }
 
-export interface WasmSqliteExecutor extends SqlExecutor, Disposable {
-  close(): void;
+export interface WaSqliteBuild {
+  readonly sqlite3: WaSqliteApi;
+  /** The module `sqlite3` was built over. A VFS is constructed against it rather than against the API. */
+  readonly module: WaSqliteModule;
+  /**
+   * Builds a VFS under the given name, e.g. `(module, name) => IDBMirrorVFS.create(name, module)`.
+   *
+   * `IDBMirrorVFS` takes the name as its IndexedDB database's, so the name is what keeps one
+   * application in an origin out of another's storage. It is also the name SQLite registers the VFS
+   * under and the name the file below is opened against.
+   */
+  readonly vfs: (module: WaSqliteModule, name: string) => Promise<WaSqliteVfs>;
 }
 
 export interface WebSqliteOptions {
-  /** The database's name within the pool. One file per scope, or one for the whole device. */
+  /** The database's name within the VFS. */
   readonly path: string;
+  /** What the VFS this file lives in is called. */
+  readonly name: string;
   /**
-   * Which pool of OPFS files to open in. Two databases in one pool share its capacity; two
-   * pools in one origin are independent, which is what keeps one application's storage out of
-   * another's.
+   * How much of the database SQLite keeps decoded, in kibibytes. 16 MiB by default.
+   *
+   * SQLite's own default is 2 MB, and a 10,000-row `todos` table is around 3.5 MB, so a device of
+   * ordinary size answers a `where` and an `order by` out of storage on every page it touches. It
+   * is also what a journal has to fit inside for a VFS to commit a write in one batch.
    */
-  readonly poolName?: string;
-  /** How many files the pool reserves up front. Growing it later costs an async round trip. */
-  readonly initialCapacity?: number;
+  readonly cacheSizeKib?: number;
 }
 
-export class WasmSqliteUnavailableError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "WasmSqliteUnavailableError";
-  }
-}
+/** What `cache_size` is set to unless an application says otherwise. */
+const DEFAULT_CACHE_KIB = 16_384;
 
-/**
- * Wraps an open database as the executor the stores take. Transactions nest by depth because
- * `SqliteClientStore` wraps its writes in one while a caller may already hold an outer
- * transaction (§5.2).
- */
-export function wasmSqliteExecutor(database: WasmDatabase): WasmSqliteExecutor {
-  let depth = 0;
-  const close = (): void => {
-    database.close();
-  };
-
-  return {
-    all<Decoded>(statement: SqlStatement<Decoded>): readonly Decoded[] {
-      const prepared = database.prepare(statement.sql);
-      try {
-        bind(prepared, statement.parameters);
-        const rows: Decoded[] = [];
-        while (prepared.step()) rows.push(statement.decode(prepared.get({}) as SqlRow));
-        return rows;
-      } finally {
-        // A statement left unfinalised holds its database open, and in the SAH pool VFS that
-        // means holding the file's access handle.
-        prepared.finalize();
-      }
-    },
-    get<Decoded>(statement: SqlStatement<Decoded>): Decoded | undefined {
-      const prepared = database.prepare(statement.sql);
-      try {
-        bind(prepared, statement.parameters);
-        if (!prepared.step()) return undefined;
-        return statement.decode(prepared.get({}) as SqlRow);
-      } finally {
-        prepared.finalize();
-      }
-    },
-    run(statement: { readonly sql: string; readonly parameters: SqlParameters }): void {
-      const prepared = database.prepare(statement.sql);
-      try {
-        bind(prepared, statement.parameters);
-        prepared.step();
-      } finally {
-        prepared.finalize();
-      }
-    },
-    transaction<Result>(body: () => Result): Result {
-      if (depth > 0) {
-        depth += 1;
-        try {
-          return body();
-        } finally {
-          depth -= 1;
-        }
-      }
-      database.exec("BEGIN");
-      depth = 1;
-      try {
-        const result = body();
-        database.exec("COMMIT");
-        return result;
-      } catch (error) {
-        database.exec("ROLLBACK");
-        throw error;
-      } finally {
-        depth = 0;
-      }
-    },
-    close,
-    [Symbol.dispose]: close,
-  };
+export interface WebSqliteExecutor extends AsyncSqlExecutor {
+  close(): Promise<void>;
 }
 
 /**
- * Opens a database that survives the tab. Must be called from a dedicated worker: the VFS it
- * needs takes exclusive sync access handles, which no other context can hold.
+ * Opens one database, and the VFS it lives in.
+ *
+ * The connection names its VFS, so two of them opened in one worker each read the storage their own
+ * name points at however many have been registered since.
  */
 export async function openWebSqliteExecutor(
-  sqlite3: Sqlite3Module,
+  build: WaSqliteBuild,
   options: WebSqliteOptions,
-): Promise<WasmSqliteExecutor> {
-  if (sqlite3.installOpfsSAHPoolVfs === undefined) {
-    throw new WasmSqliteUnavailableError(
-      "this SQLite build has no OPFS sync access handle pool, so it cannot store anything synchronously",
-    );
-  }
-  const pool = await sqlite3.installOpfsSAHPoolVfs({
-    ...(options.poolName === undefined ? {} : { name: options.poolName }),
-    ...(options.initialCapacity === undefined ? {} : { initialCapacity: options.initialCapacity }),
+): Promise<WebSqliteExecutor> {
+  const vfs = await build.vfs(build.module, options.name);
+  build.sqlite3.vfs_register(vfs, false);
+  const database = await build.sqlite3.open_v2(options.path, undefined, options.name);
+  const executor = waSqliteExecutor(build.sqlite3, database);
+  await executor.run({ sql: "PRAGMA foreign_keys = ON", parameters: [] });
+  // Negative is kibibytes; positive would be pages, which depends on `page_size` and would mean a
+  // different amount of memory on a database made under another build.
+  await executor.run({
+    sql: `PRAGMA cache_size = -${String(options.cacheSizeKib ?? DEFAULT_CACHE_KIB)}`,
+    parameters: [],
   });
-  return prepared(new pool.OpfsSAHPoolDb(options.path));
-}
-
-/** A database that lives as long as the page does, for tests and for a device that opts out. */
-export function openMemorySqliteExecutor(sqlite3: Sqlite3Module): WasmSqliteExecutor {
-  return prepared(new sqlite3.oo1.DB(":memory:", "c"));
+  return {
+    ...executor,
+    close: async () => {
+      await build.sqlite3.close(database);
+      vfs.close();
+    },
+  };
 }
 
 /**
- * Journalling is left to the VFS, which is the only party that knows what it can do — the sync
- * access handle pool has no WAL, and an in-memory database has no journal at all.
+ * Wraps an open connection as the executor the client store takes.
+ *
+ * One worker serves every tab of an origin over this one connection, so a mutation in one tab and a
+ * sync applying a batch for another routinely overlap; `serializeAsyncSql` is what makes them take
+ * turns.
  */
-function prepared(database: WasmDatabase): WasmSqliteExecutor {
-  database.exec("PRAGMA foreign_keys = ON");
-  return wasmSqliteExecutor(database);
-}
+function waSqliteExecutor(sqlite3: WaSqliteApi, database: number): AsyncSqlExecutor {
+  const each = async (
+    statement: { readonly sql: string; readonly parameters: SqlParameters },
+    visit: (handle: number, columns: readonly string[]) => void,
+  ): Promise<void> => {
+    for await (const handle of sqlite3.statements(database, statement.sql)) {
+      // Binding nothing to a statement with no placeholders is an error rather than a no-op.
+      if (statement.parameters.length > 0) sqlite3.bind_collection(handle, checked(statement.parameters));
+      const columns = sqlite3.column_names(handle);
+      while ((await sqlite3.step(handle)) === SQLITE_ROW) visit(handle, columns);
+    }
+  };
 
-function bind(statement: WasmStatement, parameters: SqlParameters): void {
-  // Binding nothing to a statement with no placeholders is an error rather than a no-op.
-  if (parameters.length === 0) return;
-  statement.bind(parameters);
+  const keyed = (handle: number, columns: readonly string[]): SqlRow => {
+    const values = sqlite3.row(handle);
+    const row: Record<string, SqlValue> = {};
+    for (const [index, name] of columns.entries()) row[name] = values[index] ?? null;
+    return row;
+  };
+
+  return serializeAsyncSql(
+    {
+      async all<Decoded>(statement: SqlStatement<Decoded>): Promise<readonly Decoded[]> {
+        const rows: Decoded[] = [];
+        await each(statement, (handle, columns) => rows.push(statement.decode(keyed(handle, columns))));
+        return rows;
+      },
+      async get<Decoded>(statement: SqlStatement<Decoded>): Promise<Decoded | undefined> {
+        let decoded: Decoded | undefined;
+        let seen = false;
+        await each(statement, (handle, columns) => {
+          if (seen) return;
+          seen = true;
+          decoded = statement.decode(keyed(handle, columns));
+        });
+        return decoded;
+      },
+      async run(statement: { readonly sql: string; readonly parameters: SqlParameters }): Promise<void> {
+        await each(statement, () => undefined);
+      },
+    },
+    (sql) => each({ sql, parameters: [] }, () => undefined),
+  );
 }

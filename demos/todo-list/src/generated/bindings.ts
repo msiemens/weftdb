@@ -55,16 +55,16 @@ export function decodeTodos(row: MaterializedRow): TodosRow {
 
 export function todosMutators(client: MutationTarget, notify: () => void = () => undefined): TodosMutators {
   return {
-    create(id: string, values: TodosMutation, transaction?: TxnId): void {
-      client.create(todosTable, rowId(id), wire(values), transaction ?? txnId(`create-${id}`));
+    async create(id: string, values: TodosMutation, transaction?: TxnId): Promise<void> {
+      await client.create(todosTable, rowId(id), wire(values), transaction ?? txnId(`create-${id}`));
       notify();
     },
-    update(id: string, values: TodosMutation, transaction?: TxnId): void {
-      client.update(todosTable, rowId(id), wire(values), transaction ?? txnId(`update-${id}-${crypto.randomUUID()}`));
+    async update(id: string, values: TodosMutation, transaction?: TxnId): Promise<void> {
+      await client.update(todosTable, rowId(id), wire(values), transaction ?? txnId(`update-${id}-${crypto.randomUUID()}`));
       notify();
     },
-    delete(id: string, transaction?: TxnId): void {
-      client.delete(todosTable, rowId(id), transaction ?? txnId(`delete-${id}-${crypto.randomUUID()}`));
+    async delete(id: string, transaction?: TxnId): Promise<void> {
+      await client.delete(todosTable, rowId(id), transaction ?? txnId(`delete-${id}-${crypto.randomUUID()}`));
       notify();
     },
   };
@@ -102,13 +102,13 @@ export function nextTodosRank(rows: readonly TodosRow[], device: DeviceId): stri
  * taken from between the two rows it lands between — so nothing below it is renumbered and
  * two devices reordering at once do not undo each other.
  */
-export function moveTodos(
+export async function moveTodos(
   mutators: TodosMutators,
   rows: readonly TodosRow[],
   index: number,
   direction: "up" | "down",
   device: DeviceId,
-): void {
+): Promise<void> {
   const rankOf = (row: TodosRow | undefined) => (row === undefined ? null : rankString(String(row["rank"])));
   const moving = rows[index];
   const neighbour = rows[direction === "up" ? index - 1 : index + 1];
@@ -116,7 +116,7 @@ export function moveTodos(
   // Landing between the neighbour and whatever is on its far side.
   const beyond = rows[direction === "up" ? index - 2 : index + 2];
   const [before, after] = direction === "up" ? [beyond, neighbour] : [neighbour, beyond];
-  mutators.update(String(moving["id"]), { rank: rankBetween(rankOf(before), rankOf(after), device) });
+  await mutators.update(String(moving["id"]), { rank: rankBetween(rankOf(before), rankOf(after), device) });
 }
 // --- todo_events -----------------------------------------------------------
 
@@ -146,8 +146,8 @@ export function decodeTodoEvents(row: MaterializedRow): TodoEventsRow {
 
 export function todoEventsMutators(client: MutationTarget, notify: () => void = () => undefined): TodoEventsMutators {
   return {
-    create(id: string, values: TodoEventsMutation, transaction?: TxnId): void {
-      client.append(todoEventsTable, rowId(id), wire(values), transaction ?? txnId(`create-${id}`));
+    async create(id: string, values: TodoEventsMutation, transaction?: TxnId): Promise<void> {
+      await client.append(todoEventsTable, rowId(id), wire(values), transaction ?? txnId(`create-${id}`));
       notify();
     },
   };

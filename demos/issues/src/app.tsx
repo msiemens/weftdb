@@ -265,7 +265,7 @@ function Rail({
   const add = (): void => {
     const trimmed = name.trim();
     if (trimmed === "") return;
-    store.projects.create(newProjectId(), { name: trimmed, rank: store.nextProjectRank() });
+    void store.projects.create(newProjectId(), { name: trimmed, rank: store.nextProjectRank() });
     setName("");
   };
 
@@ -298,7 +298,7 @@ function Rail({
               aria-label={`Delete project ${project.name}`}
               onClick={() => {
                 if (project.id === selected) onSelect(undefined);
-                store.projects.delete(project.id);
+                void store.projects.delete(project.id);
               }}
             >
               ×
@@ -351,7 +351,7 @@ function IssueComposer({
   const add = (): void => {
     const trimmed = title.trim();
     if (trimmed === "" || projectId === undefined) return;
-    store.issues.create(newIssueId(), {
+    void store.issues.create(newIssueId(), {
       project_id: projectId,
       title: trimmed,
       body: "",
@@ -601,7 +601,7 @@ function CommentComposer({ store, issue }: { readonly store: IssueStore; readonl
     const trimmed = body.trim();
     if (trimmed === "") return;
     // The author is written flat, one column per nested leaf. The mapper reverses it on read.
-    store.comments.create(newCommentId(), {
+    void store.comments.create(newCommentId(), {
       issue_id: issue.id,
       body: trimmed,
       rank: store.nextCommentRank(issue.id),
