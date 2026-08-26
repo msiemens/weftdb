@@ -446,6 +446,101 @@ test("relationship helper names are unambiguous after generation", async () => {
   assert.throws(() => generateRelationshipHelpers(colliding), /generate the same name/u);
 });
 
+test("names SQLite folds together are refused where the schema declares them", async () => {
+  // SQLite compares identifiers with the case of ASCII letters folded away, so each pair below
+  // reaches the database as one name. A column pair is a `duplicate column name`: the
+  // `CREATE TABLE` does not run, and it takes the install script and the device's whole database
+  // with it. A table pair is silent instead, because every table in the file is created
+  // `IF NOT EXISTS` and the second declaration simply does nothing, leaving that collection
+  // reading and writing the first one's columns.
+  assert.throws(
+    () => defineSchema({ todos: S.collection({ iD: S.string() }) }),
+    /todos\.id and todos\.iD are one column to SQLite/u,
+  );
+  assert.throws(
+    () => defineSchema({ todos: S.collection({ Scope_Id: S.string() }) }),
+    /todos\.scope_id and todos\.Scope_Id are one column to SQLite/u,
+  );
+  assert.throws(
+    () => defineSchema({ todos: S.collection({ title: S.string(), Title: S.string() }) }),
+    /todos\.title and todos\.Title are one column to SQLite/u,
+  );
+  // The generator writes a `_weft_hlc_<field>` beside every column it declares, so two fields
+  // that fold together collide in the internals as well as in the columns, and the reserved
+  // prefix has to be recognised folded too.
+  assert.throws(
+    () => defineSchema({ todos: S.collection({ _WEFT_rev: S.number() }) }),
+    /todos\._WEFT_rev uses reserved _weft_ prefix/u,
+  );
+  assert.throws(
+    () => defineSchema({ todos: S.collection({ title: S.string() }), toDos: S.collection({ body: S.string() }) }),
+    /collections "todos" and "toDos" are one table to SQLite/u,
+  );
+  assert.throws(
+    () => defineSchema({ Outbox: S.collection({ title: S.string() }) }),
+    /collection "Outbox" collides with the framework's own outbox table/u,
+  );
+  assert.throws(
+    () => defineSchema({ tombstones: S.collection({ title: S.string() }) }),
+    /collection "tombstones" collides with the framework's own tombstones table/u,
+  );
+
+  // The fold stops where SQLite's does. `Ä` and `ä` are two columns to the database, and a rule
+  // built on `toLowerCase` would have refused a schema it has no trouble holding.
+  const accented = defineSchema({ notes: S.collection({ Ä: S.string(), ä: S.string() }) });
+  using database = new DatabaseSync(":memory:");
+  database.exec(generateClientDdl(accented));
+  const columns = database
+    .prepare("SELECT name FROM pragma_table_info('notes')")
+    .all()
+    .map((row) => String((row as Record<string, unknown>)["name"]));
+  assert.ok(
+    columns.includes("Ä") && columns.includes("ä"),
+    `two columns SQLite tells apart became ${columns.join(", ")}`,
+  );
+});
+
+test("an index name that is already a table is refused before the DDL runs", async () => {
+  // SQLite keeps indexes and tables in one namespace, and the generator names an index after the
+  // collection and the field it covers. Either half may already carry the separator, so these two
+  // declarations arrive as one name and `CREATE INDEX` fails with the install script behind it.
+  assert.throws(
+    () => defineSchema({ a: S.collection({ b: S.string({ index: true }) }), a_b: S.collection({ c: S.string() }) }),
+    /the index on a\.b is named "a_b", which is already the table "a_b"/u,
+  );
+  assert.throws(
+    () => defineSchema({ sync: S.collection({ state: S.string({ index: true }) }) }),
+    /the index on sync\.state is named "sync_state", which is already the table "sync_state"/u,
+  );
+  // Two indexes are quieter — the second `CREATE INDEX IF NOT EXISTS` does nothing — so one of
+  // the two fields the schema asked to index never has one.
+  assert.throws(
+    () =>
+      defineSchema({
+        a: S.collection({ b_c: S.string({ index: true }) }),
+        a_b: S.collection({ c: S.string({ index: true }) }),
+      }),
+    /the indexes on a\.b_c and a_b\.c are both named "a_b_c"/u,
+  );
+});
+
+test("a schema that never passed the DSL is still refused before it reaches a database", async () => {
+  // A `.json` schema loaded by the CLI is cast to a `SchemaDefinition` without passing through
+  // `defineSchema` at all, so generating the DDL is the last point at which the fold is still
+  // catchable.
+  const schema: SchemaDefinition = {
+    schemaVersion: 1,
+    collections: {
+      todos: {
+        kind: "collection",
+        fields: { id: S.string(), scope_id: S.string(), created: S.date(), iD: S.string() },
+        relationships: {},
+      },
+    },
+  };
+  assert.throws(() => generateClientDdl(schema), /todos\.id and todos\.iD are one column to SQLite/u);
+});
+
 test("a relationship is refused unless all three of its names resolve", async () => {
   // A relationship is three names into the rest of the schema, and unchecked they fail quietly:
   // the join matches no row at runtime, and the result type degrades to `unknown` — a typo that

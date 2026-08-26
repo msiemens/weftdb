@@ -412,12 +412,10 @@ export function defineSchema<const Collections extends Record<string, Collection
   for (const [tableName, collection] of Object.entries(collections)) {
     assertUsableName(tableName, tableName);
     for (const fieldName of Object.keys(collection.fields)) {
-      if (fieldName.startsWith("_weft_")) {
-        throw new Error(`${tableName}.${fieldName} uses reserved _weft_ prefix`);
-      }
       assertUsableName(`${tableName}.${fieldName}`, fieldName);
     }
   }
+  assertDistinctSqlNames(collections);
   // A second pass, so a schema that is wrong in both ways is told about its names first: a
   // relationship into a collection whose own name is unusable is the lesser of the two problems.
   for (const [tableName, collection] of Object.entries(collections)) {
@@ -471,6 +469,102 @@ function assertUsableName(path: string, name: string): void {
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/u.test(name)) {
     throw new Error(`${path} contains a control character, which cannot survive as a column name`);
+  }
+}
+
+/**
+ * A name as SQLite compares it. Two identifiers match when they differ only in the case of an
+ * ASCII letter, and SQLite folds nothing beyond that: `Ä` and `ä` are two distinct columns.
+ * `String.prototype.toLowerCase` folds the whole Unicode case table, so a check built on it would
+ * refuse pairs the database has no trouble holding.
+ */
+function sqlIdentity(name: string): string {
+  return name.replaceAll(/[A-Z]/gu, (letter) => letter.toLowerCase());
+}
+
+/** The tables the client DDL creates whatever the schema says, alongside every collection. */
+const FRAMEWORK_TABLES: ReadonlySet<string> = new Set(["outbox", "outbox_quarantine", "tombstones", "sync_state"]);
+
+/**
+ * Every name a schema hands SQLite, held to what SQLite can tell apart.
+ *
+ * Two identifiers that fold together are one identifier. Two columns of one table are a
+ * `duplicate column name`, so the `CREATE TABLE` fails, the install script fails with it, and the
+ * device is left with no database at all. Two tables are quieter and worse: every framework table
+ * and every collection is created `IF NOT EXISTS` in one file, so the second `CREATE TABLE` does
+ * nothing and that collection spends the life of the database reading and writing the first
+ * one's columns — a collection named `outbox` is the outbox.
+ *
+ * Indexes share the table namespace, so `CREATE INDEX "a_b"` against a table named `a_b` is an
+ * outright error. An index name is a collection joined to one of its fields and either half may
+ * already carry the separator, so a collection `a_b` and an indexed `a.b` arrive as one name
+ * without either declaration looking unusual.
+ *
+ * `_weft_` covers the columns the generator adds per field — `_weft_hlc_<field>`,
+ * `_weft_base_<field>` — as well as the four fixed ones, and folding the prefix is what keeps
+ * `_WEFT_rev` out.
+ */
+export function assertDistinctSqlNames(collections: Readonly<Record<string, CollectionDefinition>>): void {
+  const tables = new Map<string, string>();
+  for (const tableName of Object.keys(collections)) {
+    const identity = sqlIdentity(tableName);
+    if (FRAMEWORK_TABLES.has(identity)) {
+      throw new Error(
+        `collection ${JSON.stringify(tableName)} collides with the framework's own ${identity} table, which the ` +
+          "client DDL creates in the same database",
+      );
+    }
+    const claimed = tables.get(identity);
+    if (claimed !== undefined) {
+      throw new Error(
+        `collections ${JSON.stringify(claimed)} and ${JSON.stringify(tableName)} are one table to SQLite, which ` +
+          "ignores the case of an ASCII letter in an identifier",
+      );
+    }
+    tables.set(identity, tableName);
+  }
+
+  for (const [tableName, collection] of Object.entries(collections)) {
+    const columns = new Map<string, string>();
+    for (const fieldName of Object.keys(collection.fields)) {
+      const identity = sqlIdentity(fieldName);
+      if (identity.startsWith("_weft_")) {
+        throw new Error(`${tableName}.${fieldName} uses reserved _weft_ prefix`);
+      }
+      const claimed = columns.get(identity);
+      if (claimed !== undefined) {
+        throw new Error(
+          `${tableName}.${claimed} and ${tableName}.${fieldName} are one column to SQLite, which ignores the case ` +
+            "of an ASCII letter in an identifier",
+        );
+      }
+      columns.set(identity, fieldName);
+    }
+  }
+
+  const indexes = new Map<string, string>();
+  for (const [tableName, collection] of Object.entries(collections)) {
+    for (const [fieldName, definition] of Object.entries(collection.fields)) {
+      if (definition.index !== true) continue;
+      // The name `indexDdl` gives it in the generated DDL.
+      const indexName = `${tableName}_${fieldName}`;
+      const identity = sqlIdentity(indexName);
+      const table = tables.get(identity);
+      if (table !== undefined || FRAMEWORK_TABLES.has(identity)) {
+        throw new Error(
+          `the index on ${tableName}.${fieldName} is named ${JSON.stringify(indexName)}, which is already the table ` +
+            `${JSON.stringify(table ?? identity)}; SQLite keeps indexes and tables in one namespace`,
+        );
+      }
+      const claimed = indexes.get(identity);
+      if (claimed !== undefined) {
+        throw new Error(
+          `the indexes on ${claimed} and ${tableName}.${fieldName} are both named ${JSON.stringify(indexName)}, so ` +
+            "only the first of the two is ever created",
+        );
+      }
+      indexes.set(identity, `${tableName}.${fieldName}`);
+    }
   }
 }
 

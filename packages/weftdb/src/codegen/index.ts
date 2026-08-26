@@ -1,4 +1,4 @@
-import { schemaHash } from "weftdb/schema";
+import { assertDistinctSqlNames, schemaHash } from "weftdb/schema";
 import type { CollectionDefinition, FieldDefinition, JsonTypeReference, SchemaDefinition } from "weftdb/schema";
 import { fieldStorage } from "weftdb/shared";
 
@@ -122,9 +122,10 @@ export function lintAdditiveEvolution(from: SchemaDefinition, to: SchemaDefiniti
 }
 
 export function generateClientDdl(schema: SchemaDefinition): string {
-  // Table names are compared case-insensitively by SQLite, so two collections that differ only
-  // in case or punctuation would quietly become one table holding whichever set of columns was
-  // created first.
+  // `defineSchema` has already refused a schema whose names collide once SQLite folds them, but a
+  // `.json` schema loaded by the CLI is cast to a `SchemaDefinition` without passing through the
+  // DSL at all, and this is the last point before that one reaches a database.
+  assertDistinctSqlNames(schema.collections);
   assertDistinctGeneratedNames(schema);
   const statements: string[] = [
     `CREATE TABLE IF NOT EXISTS outbox (

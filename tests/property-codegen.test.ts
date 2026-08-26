@@ -34,7 +34,9 @@ const identifierArb = fc.constantFrom(
   "order",
   "select",
   "user data",
-  "Items",
+  // Two collections that differ only in the case of an ASCII letter are one table to SQLite, and
+  // `defineSchema` refuses the pair, so no schema this arbitrary builds may contain one.
+  "Tasks",
   "items",
 );
 

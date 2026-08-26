@@ -86,6 +86,24 @@ function tables(database: DatabaseSync): readonly string[] {
     .sort();
 }
 
+/** A name as SQLite compares it: the case of an ASCII letter is folded and nothing else is. */
+function sqlIdentity(name: string): string {
+  return name.replaceAll(/[A-Z]/gu, (letter) => letter.toLowerCase());
+}
+
+/**
+ * Whether the pair of names reaches SQLite as one name. A field that folds onto one of the three
+ * the framework adds to every collection is a second `id` column, and the `CREATE TABLE` does not
+ * run at all; a collection that folds onto a framework table is created `IF NOT EXISTS` over that
+ * table and never exists. Writing one of the three exactly is not this: the framework's own
+ * definition wins and there is one column.
+ */
+function foldsOntoAName(table: string, field: string): boolean {
+  const folded = sqlIdentity(field);
+  if (folded !== field && ["id", "scope_id", "created"].includes(folded)) return true;
+  return frameworkTables().includes(sqlIdentity(table));
+}
+
 /** The tables the client DDL creates whatever the schema says: the outbox, quarantine and so on. */
 function frameworkTables(): readonly string[] {
   const baseline = defineSchema({ baseline_only: S.collection({ value: S.string() }) });
@@ -179,12 +197,19 @@ test("a schema written with hostile names generates DDL that means what it says"
       // The schema is the application's own code rather than anything from outside, so this is
       // a robustness claim rather than a boundary: a name that needs quoting has to survive
       // quoting, and must not silently become two columns or a second statement.
-      fc.pre(table.trim().length > 0 && field.trim().length > 0 && !field.startsWith("_weft_"));
+      fc.pre(table.trim().length > 0 && field.trim().length > 0 && !sqlIdentity(field).startsWith("_weft_"));
       // A name with a control character in it cannot be a column, and the schema says so
       // rather than generating something that quietly means something else.
       // eslint-disable-next-line no-control-regex -- matching control characters is the point
       if (/[\u0000-\u001f\u007f]/u.test(table) || /[\u0000-\u001f\u007f]/u.test(field)) {
         assert.throws(() => defineSchema({ [table]: S.collection({ [field]: S.string() }) }), /control character/u);
+        return;
+      }
+      if (foldsOntoAName(table, field)) {
+        assert.throws(
+          () => defineSchema({ [table]: S.collection({ [field]: S.string() }) }),
+          /one column to SQLite|the framework's own/u,
+        );
         return;
       }
       const schema = defineSchema({ [table]: S.collection({ [field]: S.string() }) });
@@ -214,12 +239,18 @@ test("a name carrying a statement terminator survives the adapter's split", asyn
       // The property above runs the whole script through `exec`, which no adapter can do: a
       // `SqlExecutor` takes one statement per call, so the stores divide the script first and
       // that split is what a hostile name actually reaches. It went unchecked, and a semicolon
-      // is a legal field name — `defineSchema` refuses control characters and nothing else — so
-      // splitting on every semicolon cut `CREATE TABLE` in half inside its own quotes and handed
-      // both halves to SQLite as statements.
-      // A control character cannot be a column at all, and the property above is where the
-      // schema is held to refusing one. This property is about the names that are legal.
-      fc.pre(field.trim().length > 0 && !field.startsWith("_weft_") && !hasControlCharacter(field));
+      // is a legal field name — quoting is the only thing standing between one and the split —
+      // so splitting on every semicolon cut `CREATE TABLE` in half inside its own quotes and
+      // handed both halves to SQLite as statements.
+      // A control character cannot be a column at all, and neither can a name SQLite folds onto
+      // one the framework already holds. The property above is where the schema is held to
+      // refusing both. This property is about the names that are legal.
+      fc.pre(
+        field.trim().length > 0 &&
+          !sqlIdentity(field).startsWith("_weft_") &&
+          !hasControlCharacter(field) &&
+          !foldsOntoAName("tasks", field),
+      );
       // eslint-disable-next-line no-control-regex -- superseded by hasControlCharacter above
       if (/[ -]/u.test(field)) return;
 
