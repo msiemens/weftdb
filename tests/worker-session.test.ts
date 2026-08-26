@@ -77,6 +77,22 @@ test("§8.7 a manual sync pushes this device's work and answers when it has land
   );
 });
 
+test("§8.7 a local write is sent without waiting for the next poll", async () => {
+  // The poll is a minute long here, as it is in a browser whose socket is up: a live connection
+  // says when to sync, and what it says nothing about is what this device has just written.
+  using bridge = await Bridge.open({ pollMs: 60_000 });
+  await bridge.mirror.hydrate();
+  await bridge.mirror.setToken("token-1");
+  await bridge.settle(() => bridge.mirror.status() !== undefined);
+
+  await bridge.mirror.create(TODOS, rowId("todo-1"), { title: "alpha", done: false, rank: 1 }, txnId("txn-1"));
+
+  // Nobody calls `sync`. A page that has just been typed into shows the row as unsent until the
+  // session sends it, and the person watching has no button that would help.
+  await bridge.settle(() => bridge.server.snapshot(SCOPE).fields.some((record) => record.value === "alpha"));
+  assert.equal(bridge.host.client?.outbox.length, 0, "the write was still queued after the relay took it");
+});
+
 test("§8.7 what a sync pulls reaches the page without a local write to carry it", async () => {
   using bridge = await Bridge.open();
   await bridge.mirror.hydrate();
@@ -214,7 +230,13 @@ class Bridge {
   readonly #close: () => void;
   readonly #channel: MessageChannel;
 
-  private constructor(executor: AsyncSqlExecutor, store: SqliteClientStore, close: () => void, withSession: boolean) {
+  private constructor(
+    executor: AsyncSqlExecutor,
+    store: SqliteClientStore,
+    close: () => void,
+    withSession: boolean,
+    pollMs: number,
+  ) {
     this.store = store;
     this.#close = close;
     this.#channel = new MessageChannel();
@@ -228,9 +250,9 @@ class Bridge {
             session: {
               schemaHash: HASH,
               transport: (token: string) => this.#relay(token),
-              // Short, so a test that waits on a poll waits milliseconds rather than seconds.
-              pollWhileBlindMs: 20,
-              pollWhileLiveMs: 20,
+              // Milliseconds by default, so a test that waits on a poll waits milliseconds.
+              pollWhileBlindMs: pollMs,
+              pollWhileLiveMs: pollMs,
               debounceMs: 1,
               // Stopped, so `lastSyncedAt` is not a difference between two otherwise identical
               // statuses. With a real clock every sync moves it and every sync publishes, which
@@ -245,7 +267,8 @@ class Bridge {
     this.mirror = new WeftClientMirror({ transport: this.transport, scopeId: SCOPE, deviceId: DEVICE });
   }
 
-  static async open(options: { readonly withSession?: boolean } = {}): Promise<Bridge> {
+  /** `pollMs` is how long the session waits between polls, in both of its intervals. */
+  static async open(options: { readonly withSession?: boolean; readonly pollMs?: number } = {}): Promise<Bridge> {
     const file = openSqliteExecutor(":memory:");
     const executor = asyncSqlExecutor(file);
     const store = new SqliteClientStore(executor, schema);
@@ -257,6 +280,7 @@ class Bridge {
         file.close();
       },
       options.withSession ?? true,
+      options.pollMs ?? 20,
     );
   }
 

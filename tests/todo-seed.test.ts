@@ -30,6 +30,7 @@ async function titles(browser: DemoBrowser, name: string): Promise<readonly stri
   const store = await TodoStore.open(browser.window(name), browser.overrides());
   const stop = store.start();
   try {
+    await store.seeded();
     await drain(store);
     return store.rows().map((row) => row.title);
   } finally {
@@ -45,6 +46,7 @@ test("a first visit arrives at a list, with a done row and notes to merge", asyn
   t.onTestFinished(() => store.dispose());
   const stop = store.start();
   t.onTestFinished(stop);
+  await store.seeded();
   await drain(store);
 
   const rows = store.rows();
@@ -82,11 +84,54 @@ test("a second tab is a second device on one list, not a second copy of it", asy
   assert.deepEqual(await titles(browser, "one"), list);
 });
 
+test("three tabs opened together seed the list once between them", async (t) => {
+  const browser = openBrowser();
+  t.onTestFinished(() => browser.close());
+  const stores: TodoStore[] = [];
+  // One at a time, because opening a database is where this browser's one wasm module runs its
+  // migration and two of those interleaved are two transactions on one connection.
+  for (const name of ["one", "two", "three"])
+    stores.push(await TodoStore.open(browser.window(name), browser.overrides()));
+  t.onTestFinished(async () => {
+    for (const store of stores) await store.dispose();
+  });
+  // Started in one turn, which is what three tabs opened at once are: every one of them reads the
+  // mark before any of them has written it.
+  const stops = stores.map((store) => store.start());
+  t.onTestFinished(() => {
+    for (const stop of stops) stop();
+  });
+  await Promise.all(stores.map((store) => store.seeded()));
+  // Twice: the first pass sends what each tab wrote, the second is what pulls the others' work.
+  for (const pass of [0, 1]) for (const store of stores) await drain(store, `pass ${pass} never drained`);
+
+  for (const store of stores) {
+    const shown = store.rows().map((row) => row.title);
+    assert.ok(shown.length > 0, "a tab that opened with the others has nothing to look at");
+    assert.deepEqual([...new Set(shown)], shown, "the scope was seeded more than once");
+  }
+});
+
+test("a tab that arrives to a scope with rows in it seeds nothing", async (t) => {
+  const browser = openBrowser();
+  t.onTestFinished(() => browser.close());
+  const list = await titles(browser, "one");
+  assert.ok(list.length > 0);
+
+  // The state of a browser whose demo storage has been cleared while the relay kept the rows: the
+  // list exists, and nothing on this machine remembers writing it.
+  const scope = browser.local.getItem(`weftdb-demo/${DEMO}/scope`);
+  browser.local.removeItem(`weftdb-demo/${DEMO}/seeded/${String(scope)}`);
+
+  assert.deepEqual(await titles(browser, "two"), list);
+});
+
 test("emptying the list empties it, on this tab and the next", async (t) => {
   const browser = openBrowser();
   t.onTestFinished(() => browser.close());
   const store = await TodoStore.open(browser.window("one"), browser.overrides());
   const stop = store.start();
+  await store.seeded();
   await drain(store);
   assert.ok(store.rows().length > 0);
 

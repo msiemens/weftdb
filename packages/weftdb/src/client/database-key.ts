@@ -17,6 +17,17 @@
 export const DEFAULT_NAMESPACE = "weft";
 
 /**
+ * One database, as the pair that names it.
+ *
+ * Application code reading this decides something per database: an endpoint under the namespace, a
+ * credential for the scope, a port one tab transferred in. Each of those wants a half.
+ */
+export interface WeftDatabaseIdentity {
+  readonly namespace: string;
+  readonly scopeId: string;
+}
+
+/**
  * The key for one device database: `<length>:<namespace>:<scopeId>`.
  *
  * Distinct pairs give distinct keys, which is the only property anything asks of it. Reading it back

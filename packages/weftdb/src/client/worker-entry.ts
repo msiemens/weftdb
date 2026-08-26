@@ -18,7 +18,7 @@
 // namespace and a scope together, because `SqliteClientStore.hydrate` filters every read by scope
 // and a client that read the lot would push another scope's rows under this device's id.
 import { schemaHash, type SchemaDefinition } from "weftdb/schema";
-import { weftDatabaseKey } from "./database-key.ts";
+import { weftDatabaseKey, type WeftDatabaseIdentity } from "./database-key.ts";
 import { SqliteClientStore } from "./sqlite.ts";
 import { connectSocketTransport, type SocketTransport } from "./socket-transport.ts";
 import { httpTransport, type AsyncSyncTransport, type FetchLike } from "./transport.ts";
@@ -70,14 +70,19 @@ export interface WeftWorkerRelayUrl extends WeftWorkerRelayTuning {
  * The case it exists for is a relay reachable over a `MessagePort`. No URL describes that, and
  * `fetch` cannot reach it.
  *
+ * Both are told which database they are being built for. One worker serves every database this
+ * origin opens, so an application with an endpoint or a credential per namespace, or a relay it can
+ * only reach through something one tab handed over, has no other way to tell one session's
+ * connection from another's.
+ *
  * `baseUrl` and `transport` are each `never` on the other side, so the two ways of saying where the
  * relay is cannot be given at once and silently have one of them ignored.
  */
 export interface WeftWorkerRelaySupplied extends WeftWorkerRelayTuning {
-  /** Built per credential. Called again whenever the token changes. */
-  readonly transport: (token: string) => AsyncSyncTransport;
+  /** Built per credential, for one database. Called again whenever the token changes. */
+  readonly transport: (token: string, database: WeftDatabaseIdentity) => AsyncSyncTransport;
   /** The live connection, if this relay has one. Left out means the fallback poll alone. */
-  readonly openSocket?: (handlers: SocketHandlers, token: string) => SocketTransport;
+  readonly openSocket?: (handlers: SocketHandlers, token: string, database: WeftDatabaseIdentity) => SocketTransport;
   readonly baseUrl?: never;
   readonly socketUrl?: never;
   readonly fetch?: never;
@@ -118,8 +123,6 @@ export interface ServeWeftStorageWorkerOptions {
   readonly sqlite: () => Promise<WaSqliteBuild>;
   /** Left out for a device that never syncs: the three session verbs are then refused, not ignored. */
   readonly relay?: WeftWorkerRelayOptions;
-  /** The file one namespace's databases are kept in, within that namespace's VFS. */
-  readonly path?: string;
 }
 
 /** Serves every database this origin opens, on every port handed to `connect`. */
@@ -216,7 +219,8 @@ export class WeftStorageWorker {
     namespace: string,
   ): Promise<void> {
     const key = weftDatabaseKey(scopeId, namespace);
-    const client = this.#clients.get(key) ?? { namespace, opening: this.#open(key, namespace), host: undefined };
+    const database = { namespace, scopeId };
+    const client = this.#clients.get(key) ?? { namespace, opening: this.#open(key, database), host: undefined };
     this.#clients.set(key, client);
     const host = await client.opening;
     client.host = host;
@@ -225,14 +229,14 @@ export class WeftStorageWorker {
     host.connect(port, queued);
   }
 
-  async #open(key: string, namespace: string): Promise<WeftWorkerHost> {
-    const database = await this.#database(namespace);
+  async #open(key: string, database: WeftDatabaseIdentity): Promise<WeftWorkerHost> {
+    const open = await this.#database(database.namespace);
     return serveWeftWorker({
-      executor: database.executor,
-      store: database.store,
+      executor: open.executor,
+      store: open.store,
       schemaHash: this.#schemaHash,
-      onIdle: () => void this.#release(key, namespace),
-      ...(this.#options.relay === undefined ? {} : { session: this.#session(this.#options.relay) }),
+      onIdle: () => void this.#release(key, database.namespace),
+      ...(this.#options.relay === undefined ? {} : { session: this.#session(this.#options.relay, database) }),
     });
   }
 
@@ -247,7 +251,7 @@ export class WeftStorageWorker {
   async #openDatabase(namespace: string): Promise<OpenDatabase> {
     const build = await this.#options.sqlite();
     const executor = await openWebSqliteExecutor(build, {
-      path: this.#options.path ?? "weft.sqlite3",
+      path: `${storageNameFor(namespace)}.sqlite3`,
       name: storageNameFor(namespace),
     });
     const store = new SqliteClientStore(executor, this.#options.schema);
@@ -277,10 +281,13 @@ export class WeftStorageWorker {
     await (await database).executor.close();
   }
 
-  #session(relay: WeftWorkerRelayOptions): NonNullable<Parameters<typeof serveWeftWorker>[0]["session"]> {
+  #session(
+    relay: WeftWorkerRelayOptions,
+    database: WeftDatabaseIdentity,
+  ): NonNullable<Parameters<typeof serveWeftWorker>[0]["session"]> {
     return {
       schemaHash: this.#schemaHash,
-      ...reach(relay),
+      ...reach(relay, database),
       ...(relay.pollWhileLiveMs === undefined ? {} : { pollWhileLiveMs: relay.pollWhileLiveMs }),
       ...(relay.pollWhileBlindMs === undefined ? {} : { pollWhileBlindMs: relay.pollWhileBlindMs }),
       ...(relay.debounceMs === undefined ? {} : { debounceMs: relay.debounceMs }),
@@ -290,7 +297,15 @@ export class WeftStorageWorker {
 }
 
 /**
- * What one namespace's storage is called, which is the name of its IndexedDB database.
+ * What one namespace's storage is called: the name of its IndexedDB database, and — with
+ * `.sqlite3` after it — the name of the file inside it.
+ *
+ * The namespace has to be in the file name as well as in the store's, because a browser VFS names
+ * what it shares after the file path alone and what it shares is origin-wide. `IDBMirrorVFS` takes
+ * Web Locks called `<path>@@write` and posts every committed transaction to a `BroadcastChannel`
+ * called `mirror:<path>`, so two namespaces opening a file of one name in one origin contend for a
+ * single lock and deliver each other's transactions into each other's mirrors — which reads as
+ * `database is locked` on one tab and `missing tx` on the next.
  *
  * Encoded because a namespace is a string an application chose and this names storage.
  * `encodeURIComponent` leaves an ordinary name readable and cannot map two namespaces onto one
@@ -301,17 +316,25 @@ function storageNameFor(namespace: string): string {
 }
 
 /**
- * The two members that say how this worker talks to the relay, from whichever half of the union
- * named it. A supplied transport is passed straight through; a URL is turned into the same pair.
+ * The two members that say how this worker talks to the relay about one database, from whichever
+ * half of the union named it. A supplied factory is bound to that database; a URL is turned into
+ * the same pair.
  */
-function reach(relay: WeftWorkerRelayOptions): {
+function reach(
+  relay: WeftWorkerRelayOptions,
+  database: WeftDatabaseIdentity,
+): {
   readonly transport: (token: string) => AsyncSyncTransport;
   readonly openSocket?: (handlers: SocketHandlers, token: string) => SocketTransport;
 } {
   if (relay.transport !== undefined) {
+    const supplied = relay.transport;
+    const openSocket = relay.openSocket;
     return {
-      transport: relay.transport,
-      ...(relay.openSocket === undefined ? {} : { openSocket: relay.openSocket }),
+      transport: (token) => supplied(token, database),
+      ...(openSocket === undefined
+        ? {}
+        : { openSocket: (handlers: SocketHandlers, token: string) => openSocket(handlers, token, database) }),
     };
   }
   const socketUrl = relay.socketUrl;

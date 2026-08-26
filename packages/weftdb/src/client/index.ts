@@ -973,6 +973,7 @@ export { serveWeftWorker, WeftWorkerHost } from "./worker-host.ts";
 export type { WorkerHostPortLike } from "./worker-host.ts";
 export { WeftClientMirror } from "./worker-mirror.ts";
 export { weftDatabaseKey } from "./database-key.ts";
+export type { WeftDatabaseIdentity } from "./database-key.ts";
 export { Diff3EditorBuffer } from "./editor.ts";
 export type { BufferedRemoteEdit } from "./editor.ts";
 export { deviceIdForScope, openWeftDatabase, WeftOpenError } from "./open.ts";

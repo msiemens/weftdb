@@ -120,9 +120,16 @@ without the DOM library. A worker with something of its own to say to each arriv
 on that port before passing it to `connect`.
 
 `sqlite` is called once for each namespace this worker opens a database in, and the module it
-returns is a WebAssembly instance and its heap. `path` names the file within the VFS and defaults to
-`weft.sqlite3`. The VFS is named from the `namespace` the connecting page opened under, so two
-applications in one origin hold two IndexedDB databases rather than contending for one.
+returns is a WebAssembly instance and its heap. The VFS and the file inside it are both named from
+the `namespace` the connecting page opened under: `weft-<namespace>` and `weft-<namespace>.sqlite3`.
+Two applications in one origin therefore hold two IndexedDB databases rather than contending for
+one.
+
+The file name carries the namespace because a browser VFS names what it shares between contexts
+after the file path, and those names are origin-wide. `IDBMirrorVFS` takes a Web Lock called
+`<path>@@write` and posts each committed transaction to a `BroadcastChannel` called `mirror:<path>`.
+Two namespaces opening a file of one name therefore contend for a single lock and deliver each
+other's transactions into each other's mirrors.
 
 The returned `WeftStorageWorker` has `connect(port)`, which serves one arriving port once that port
 has said which database it wants, and `stop()`, which stops every client and closes every file.
@@ -145,17 +152,21 @@ const worker = serveWeftStorageWorker({
   schema,
   sqlite,
   relay: {
-    transport: (token) => portTransport(token),
-    openSocket: (handlers, token) => portSocket(handlers, token),
+    transport: (token, database) => portTransport(token, database.namespace),
+    openSocket: (handlers, token, database) => portSocket(handlers, token, database.namespace),
   },
 });
 ```
 
 An application that outgrows the URL shorthand keeps everything else this entry point does.
-`transport` is a function of the credential because a transport carries its token. The two forms
-cannot be mixed: each is `never` on the other side, so a `baseUrl` beside a `transport` does not
-compile. The demos use the supplied form. Their relay is a `WeftServer` in a second `SharedWorker`
-of the same browser, reachable over a `MessagePort` that no URL describes and `fetch` cannot reach.
+`transport` is a function of the credential because a transport carries its token. Both factories
+also take the database they are being built for, as a `WeftDatabaseIdentity` of `namespace` and
+`scopeId`. One worker holds a client per pair, so an application with an endpoint, a credential, or
+a transferred port per namespace reads which one it is from there. The two forms cannot be mixed:
+each is `never` on the other side, so a `baseUrl` beside a `transport` does not compile. The demos
+use the supplied form. Their relay is a `WeftServer` in a second `SharedWorker` of the same browser,
+reachable over a `MessagePort` that no URL describes and `fetch` cannot reach, and each tab hands
+over a port of its own.
 
 ## Opening a database
 
@@ -234,7 +245,7 @@ import { schemaHash } from "weftdb/schema";
 import { schema } from "./schema.ts";
 import { sqlite } from "./sqlite.ts";
 
-const executor = await openWebSqliteExecutor(await sqlite(), { path: "weft.sqlite3", name: "weft-app" });
+const executor = await openWebSqliteExecutor(await sqlite(), { path: "weft-app.sqlite3", name: "weft-app" });
 const store = new SqliteClientStore(executor, schema);
 await store.installSchema();
 
@@ -249,8 +260,9 @@ const host = serveWeftWorker({ executor, store, schemaHash: schemaHash(schema) }
 `openWebSqliteExecutor` builds the VFS under `name`, opens `path` against it, and returns a
 `WebSqliteExecutor`: an `AsyncSqlExecutor` with a `close()`. The connection names its VFS, so two
 databases opened in one worker each read the storage their own name points at, however many have
-been registered since. Give the host the same executor the store writes through, or a watched
-statement runs against one file while the rows it selects are saved into another.
+been registered since. Give each of them a `path` of its own as well, for the reason above. Give the
+host the same executor the store writes through, or a watched statement runs against one file while
+the rows it selects are saved into another.
 
 `WorkerPortTransport` carries the protocol over a port. `WeftClientMirror` holds the rows the worker
 last said the scope contains, applies every delta the worker pushes, and wakes the subscriptions

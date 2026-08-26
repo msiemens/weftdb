@@ -15,7 +15,13 @@ import {
   type TableName,
 } from "weftdb/core";
 import type { SessionStatus, StorageLike, WeftClientMirror } from "weftdb/client";
-import { openDemoDatabase, DemoSync, type DemoDatabase, type DemoOpenOverrides } from "weftdb-demo-shared/open";
+import {
+  openDemoDatabase,
+  seedScopeOnce,
+  DemoSync,
+  type DemoDatabase,
+  type DemoOpenOverrides,
+} from "weftdb-demo-shared/open";
 import { tabIdentity, type TabIdentity } from "weftdb-demo-shared/identity";
 import { schema } from "./schema.ts";
 import { DEMO } from "./scope.ts";
@@ -173,26 +179,18 @@ export class IssueStore {
     return store;
   }
 
-  /**
-   * Writes the starting rows, once per visitor.
-   *
-   * The guard is a local-storage key beside the scope's own, which is what makes this once per
-   * visitor rather than once per tab: a second tab of the same browser reads the same key, and a
-   * visitor who deletes the seeded rows does not get them back.
-   *
-   * A device that hydrates empty is not evidence of a fresh scope, because every new tab is a new
-   * device and hydrates empty until it has synced. The key is what decides; the row count only
-   * keeps a cleared key from seeding a scope that already has rows.
-   */
+  /** Writes the starting rows, once per visitor scope. */
   async seed(local: StorageLike): Promise<void> {
-    const key = `weftdb-demo/${DEMO}/${this.identity.scopeId}/seeded`;
-    if (local.getItem(key) !== null) return;
-    // Written before the rows, so two tabs opened at the same instant on a first visit have the
-    // smallest window in which both can decide to seed. Ids are random, so if both do, the result
-    // is duplicate rows rather than a rejected transaction.
-    local.setItem(key, new Date().toISOString());
-    if (this.projectRows().length > 0) return;
+    await seedScopeOnce({
+      storage: local,
+      key: `weftdb-demo/${DEMO}/${this.identity.scopeId}/seeded`,
+      database: this.database,
+      count: () => this.projectRows().length + this.issueRows().length,
+      write: () => this.#writeSeed(),
+    });
+  }
 
+  async #writeSeed(): Promise<void> {
     let projectRank: string | null = null;
     // Rank orders the whole `issues` collection, not one project's slice of it, so the chain runs
     // across the seed rather than restarting per project. Restarting it gives every project's

@@ -61,6 +61,21 @@ test("a first visit is seeded, and only the first", async (t) => {
   assert.equal(first.projectRows().length, 2, "the scope was seeded twice");
 });
 
+test("two tabs opened together seed the tracker once between them", async (t) => {
+  const world = browser();
+  t.onTestFinished(() => world.close());
+  const first = new IssueStore(await world.tab("one"));
+  const second = new IssueStore(await world.tab("two"));
+
+  // Both seeds asked for in one turn, which is what two tabs opened at once are: each reads the
+  // mark before the other has written it.
+  await Promise.all([first.seed(world.local), second.seed(world.local)]);
+  for (const pass of [0, 1]) for (const store of [first, second]) await drain(store, `pass ${pass} never drained`);
+
+  assert.equal(first.projectRows().length, 2, "the scope was seeded more than once");
+  assert.equal(second.projectRows().length, 2, "the scope was seeded more than once");
+});
+
 test("emptying the scope does not bring the seed back", async (t) => {
   const world = browser();
   t.onTestFinished(() => world.close());
@@ -126,6 +141,13 @@ let page: () => Promise<void>;
 
 beforeAll(async () => {
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: "https://weft.test" });
+  // jsdom implements no Web Locks and every browser these demos run in does, which is what one
+  // tab's seed holds the other tabs out of. The runtime's own is the same interface over one
+  // process, which is the reach an origin's locks have in a browser.
+  Object.defineProperty(dom.window.navigator, "locks", {
+    value: (globalThis.navigator as unknown as { locks: unknown }).locks,
+    configurable: true,
+  });
   for (const [name, value] of [
     ["window", dom.window],
     ["document", dom.window.document],

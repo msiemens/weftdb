@@ -85,23 +85,35 @@ export class DemoBrowser {
   /** One relay `SharedWorker`, which is what stands in for a deployment. */
   readonly relay: WeftDemoRelay = serveDemoRelay();
   /** One storage `SharedWorker`, holding a client per `(namespace, scope)` any tab has asked for. */
-  readonly storage: DemoStorageWorker;
+  storage: DemoStorageWorker;
   readonly #schema: SchemaDefinition;
   readonly #demo: string;
   readonly #sessions = new Map<string, StorageLike>();
+  /** The files, kept across a restart of the worker that serves them, as a browser's storage is. */
+  readonly #sqlite = memorySqlite();
   readonly #ports: MessagePort[] = [];
+  /** The worker's own end of each tab connection, which a restart takes with it. */
+  readonly #served: MessagePort[] = [];
 
   constructor(options: DemoBrowserOptions) {
     this.#schema = options.schema;
     this.#demo = options.demo;
-    this.storage = serveDemoStorageWorker({
-      schema: options.schema,
-      sqlite: memorySqlite(),
-      // Long, because every test here syncs when it means to. A device whose line has been cut is
-      // blind, and a poll that retried every few milliseconds would publish a status twice a poll
-      // for the whole of a test that is counting renders.
-      pollWhileBlindMs: 5_000,
-    });
+    this.storage = this.#serveStorage();
+  }
+
+  /**
+   * The browser stopping this origin's storage worker and starting it again over the same files.
+   *
+   * Stopping the worker is not what a page hears; a closed port is. So the worker's end of every
+   * tab connection is closed here, which is the notice `openWeftDatabase` reconnects on, and the
+   * connection it makes is served by the new worker — one that has none of the relay ports the
+   * tabs handed to the old one.
+   */
+  async restartStorage(): Promise<void> {
+    await this.storage.stop();
+    for (const port of this.#served) port.close();
+    this.#served.length = 0;
+    this.storage = this.#serveStorage();
   }
 
   /**
@@ -145,7 +157,7 @@ export class DemoBrowser {
     return {
       deviceStorage: this.local,
       connect: () => this.#connect(),
-      relayPort: options.relay === false ? null : this.#relayPort(),
+      relayPort: options.relay === false ? null : () => this.#relayPort(),
     };
   }
 
@@ -179,7 +191,19 @@ export class DemoBrowser {
   #connect(): WorkerLike {
     const channel = new MessageChannel();
     this.#ports.push(channel.port1, channel.port2);
+    this.#served.push(channel.port2);
     this.storage.connect(new PortEndpoint(channel.port2));
     return new PortEndpoint(channel.port1) as unknown as WorkerLike;
+  }
+
+  #serveStorage(): DemoStorageWorker {
+    return serveDemoStorageWorker({
+      schema: this.#schema,
+      sqlite: this.#sqlite,
+      // Long, because every test here syncs when it means to. A device whose line has been cut is
+      // blind, and a poll that retried every few milliseconds would publish a status twice a poll
+      // for the whole of a test that is counting renders.
+      pollWhileBlindMs: 5_000,
+    });
   }
 }

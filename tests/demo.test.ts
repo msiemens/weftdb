@@ -48,6 +48,13 @@ interface World {
 
 beforeAll(async () => {
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: "https://weft.test" });
+  // jsdom implements no Web Locks and every browser these demos run in does, which is what one
+  // tab's seed holds the other tabs out of. The runtime's own is the same interface over one
+  // process, which is the reach an origin's locks have in a browser.
+  Object.defineProperty(dom.window.navigator, "locks", {
+    value: (globalThis.navigator as unknown as { locks: unknown }).locks,
+    configurable: true,
+  });
   for (const [name, value] of [
     ["window", dom.window],
     ["document", dom.window.document],

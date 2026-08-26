@@ -6,7 +6,13 @@
 // and the list a first visit arrives at.
 import { deviceId as toDeviceId, hasConflictMarkers, rowId, type DeviceId, type RowId } from "weftdb/core";
 import type { SessionStatus, StorageLike, WeftClientMirror } from "weftdb/client";
-import { openDemoDatabase, DemoSync, type DemoDatabase, type DemoOpenOverrides } from "weftdb-demo-shared/open";
+import {
+  openDemoDatabase,
+  seedScopeOnce,
+  DemoSync,
+  type DemoDatabase,
+  type DemoOpenOverrides,
+} from "weftdb-demo-shared/open";
 import { tabIdentity, type TabIdentity } from "weftdb-demo-shared/identity";
 import { schema } from "./schema.ts";
 import { DEMO } from "./scope.ts";
@@ -108,6 +114,7 @@ export class TodoStore {
   /** The status pills, the online toggle, and the two verbs the header's buttons call. */
   readonly connection: DemoSync;
   readonly #seedStorage: StorageLike | undefined;
+  #seeding: Promise<void> = Promise.resolve();
 
   constructor(options: TodoStoreOptions) {
     this.identity = options.identity;
@@ -144,31 +151,40 @@ export class TodoStore {
   }
 
   start(): () => void {
-    void this.#seed();
+    this.#seeding = this.#seed();
+    void this.#seeding;
     return () => undefined;
   }
 
   /**
-   * Gives a visitor a list to look at on their first visit, written through the same mutators the
-   * page's own composer uses, so the rows sync and merge like anything typed in.
-   *
-   * The mark is what decides, not the row count: it lives in local storage beside the scope it
-   * names, which every tab of one browser shares, so a second tab finds the list already seeded
-   * and so does a reload. Deleting the rows leaves them deleted, and emptying the list is a state
-   * the visitor asked for rather than one to fill back in.
+   * Settles once this tab has decided whether its scope needed seeding, and written the rows if it
+   * did. For a test to await: the decision waits on a sync, so a list read before it has settled is
+   * a list read before there is one.
+   */
+  seeded(): Promise<void> {
+    return this.#seeding;
+  }
+
+  async #seed(): Promise<void> {
+    const storage = this.#seedStorage;
+    if (storage === undefined) return;
+    await seedScopeOnce({
+      storage,
+      key: `${SEED_MARK}/${this.identity.scopeId}`,
+      database: this.database,
+      count: () => this.rows().length,
+      write: () => this.#writeSeed(),
+    });
+  }
+
+  /**
+   * Writes the list a visitor arrives to, through the same mutators the page's own composer uses,
+   * so the rows sync and merge like anything typed in.
    *
    * Each write is awaited, so the next row's rank is taken from a list that already holds the one
    * before it.
    */
-  async #seed(): Promise<void> {
-    const storage = this.#seedStorage;
-    if (storage === undefined) return;
-    const key = `${SEED_MARK}/${this.identity.scopeId}`;
-    if (storage.getItem(key) !== null) return;
-    storage.setItem(key, "1");
-    // A scope holding rows already has a list, whether they were typed here or hydrated from
-    // storage this mark has outlived.
-    if (this.rows().length > 0) return;
+  async #writeSeed(): Promise<void> {
     for (const seed of SEED) {
       const id = newTodoId();
       await this.todos.create(id, {

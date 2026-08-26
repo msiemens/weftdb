@@ -499,6 +499,11 @@ export class WeftWorkerHost {
     } finally {
       if (this.#stale) await this.#reload();
       await this.#push();
+      // The session polls on a long interval while its socket is up, because a socket that is up
+      // says when to sync. That covers what arrives and says nothing about what this device has
+      // just written, so a write nobody told the session about sits in the outbox for a whole
+      // interval — a minute of "unsent" on screen over a live connection.
+      this.#session?.changed();
     }
     return null;
   }

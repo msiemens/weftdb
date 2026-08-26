@@ -1,5 +1,5 @@
-// The page half of a demo's database: `openWeftDatabase`, plus the two things these demos need
-// that no deployed application does.
+// The page half of a demo's database: `openWeftDatabase`, the rows a first visit arrives to, and
+// the two things these demos need that no deployed application does.
 //
 // The first is that **each tab is a device**. A browser normally wants the opposite — one database
 // per person, whichever tabs are open, which is what one `SharedWorker` per origin gives — and a
@@ -41,8 +41,11 @@ export interface DemoOpenOverrides {
   /** Stands in for the browser's `SharedWorker`, so a test can drive the whole assembly under Node. */
   readonly connect?: (url: URL | string) => WorkerLike;
   readonly deviceStorage?: StorageLike;
-  /** The relay, as a port. Omitted means "construct the `SharedWorker`"; `null` means no relay. */
-  readonly relayPort?: RelayPortLike | null;
+  /**
+   * Opens one port to the relay, and is called once per connection to the storage worker. Omitted
+   * means "construct the `SharedWorker`"; `null` means no relay.
+   */
+  readonly relayPort?: (() => RelayPortLike) | null;
 }
 
 export interface DemoDatabaseOptions {
@@ -72,8 +75,7 @@ export interface DemoDatabase {
 /** Opens this tab's database and gives the storage worker a line to the relay. */
 export async function openDemoDatabase(options: DemoDatabaseOptions): Promise<DemoDatabase> {
   const overrides = options.overrides ?? {};
-  const relayPort =
-    overrides.relayPort === undefined ? connectRelay(options.relayWorker) : (overrides.relayPort ?? undefined);
+  const openRelayPort = relayOpener(options.relayWorker, overrides.relayPort);
   // Kept so the online switch has something to post to. Replaced whenever this tab reconnects,
   // because a worker the browser stopped took the previous one with it.
   let port: WorkerLike | undefined;
@@ -82,10 +84,10 @@ export async function openDemoDatabase(options: DemoDatabaseOptions): Promise<De
   const connect = (url: URL | string): WorkerLike => {
     const opened = (overrides.connect ?? defaultConnect)(url);
     // Before anything else is said on it: the storage worker reads this off the port and every
-    // session it builds afterwards runs over the line it names. A port can only be transferred
-    // once, so a second connection says so by sending `undefined` and the worker keeps the line it
-    // already has.
-    const handing = port === undefined ? relayPort : undefined;
+    // session it builds afterwards runs over the line it names. A port is transferred, so a worker
+    // the browser restarted holds none of the ports the tabs it lost handed in, and every
+    // connection carries a new one for whichever worker answers it.
+    const handing = openRelayPort?.();
     post(opened, { weft: DEMO_RELAY_MESSAGE, port: handing }, handing === undefined ? [] : [handing]);
     post(opened, { weft: DEMO_ONLINE_MESSAGE, online });
     port = opened;
@@ -102,12 +104,12 @@ export async function openDemoDatabase(options: DemoDatabaseOptions): Promise<De
     ...(options.onError === undefined ? {} : { onError: options.onError }),
     // A worker that was given no relay port was given no session either, and asking it to
     // authenticate is refused rather than ignored.
-    ...(relayPort === undefined ? {} : { relay: { token: () => DEMO_TOKEN } }),
+    ...(openRelayPort === undefined ? {} : { relay: { token: () => DEMO_TOKEN } }),
   });
 
   return {
     weft,
-    syncing: relayPort !== undefined,
+    syncing: openRelayPort !== undefined,
     get online() {
       return online;
     },
@@ -118,10 +120,79 @@ export async function openDemoDatabase(options: DemoDatabaseOptions): Promise<De
       // the unsent count drains while you are looking at it. A relay that cannot be reached is an
       // ordinary state and settles into the status; what is caught here is the tab going away with
       // this sync still crossing the port, which has nobody left to tell.
-      if (next && relayPort !== undefined) void weft.source.sync().catch(() => undefined);
+      if (next && openRelayPort !== undefined) void weft.source.sync().catch(() => undefined);
     },
     dispose: () => weft.dispose(),
   };
+}
+
+export interface SeedScopeOptions {
+  /** Where the mark that this scope has been seeded is kept. Local storage: every tab reads it. */
+  readonly storage: StorageLike;
+  /** The mark's key, under `weftdb-demo/<demo>/` with the rest of this visitor's state. */
+  readonly key: string;
+  /** This tab's database, for the line to the relay that says what the scope already holds. */
+  readonly database: DemoDatabase;
+  /** How many rows the scope holds, as this device sees it. */
+  readonly count: () => number;
+  readonly write: () => Promise<void>;
+}
+
+/**
+ * Writes a demo's starting rows, once per visitor scope.
+ *
+ * Local storage has no compare-and-set, so three tabs opened together read the same unset mark
+ * before any of them has written it. A Web Lock is the mutual exclusion an origin has across its
+ * contexts, and it is held until the promise its body returns has settled — so the rows are written
+ * inside it, and the tabs waiting behind it find the mark set.
+ *
+ * A new tab is a new device, and a device hydrates with nothing in it and stays empty until it has
+ * pulled, so a row count read before then reports a fresh scope for every tab there will ever be.
+ *
+ * The mark is what decides. The count keeps a scope that already has rows from being seeded again
+ * where the mark has been cleared, so a visitor who empties the list keeps it empty.
+ */
+export async function seedScopeOnce(options: SeedScopeOptions): Promise<void> {
+  const { storage, key } = options;
+  if (storage.getItem(key) !== null) return;
+  await withTabLock(key, async () => {
+    if (storage.getItem(key) !== null) return;
+    await catchUp(options.database);
+    storage.setItem(key, new Date().toISOString());
+    if (options.count() > 0) return;
+    await options.write();
+  });
+}
+
+/** How long a first visit waits to hear what its scope holds before it decides the scope is empty. */
+const SEED_CATCH_UP_MS = 2_000;
+
+/**
+ * Waits for one sync of this device to finish, which is when what it holds is what the scope holds.
+ *
+ * `sync()` returns at once while a sync is already in flight and remembers that another was asked
+ * for, so the wait is on `lastSyncedAt` moving. A relay that cannot be reached never moves it, and
+ * the deadline is what a first visit costs when the demo is opened with nothing to sync to.
+ */
+async function catchUp(database: DemoDatabase): Promise<void> {
+  if (!database.syncing) return;
+  const before = database.weft.status()?.lastSyncedAt;
+  const deadline = Date.now() + SEED_CATCH_UP_MS;
+  while (database.weft.status()?.lastSyncedAt === before) {
+    if (Date.now() > deadline) return;
+    await database.weft.source.sync().catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+interface LockManagerLike {
+  request<T>(name: string, body: () => Promise<T>): Promise<T>;
+}
+
+async function withTabLock<T>(name: string, body: () => Promise<T>): Promise<T> {
+  const locks = (globalThis as { navigator?: { locks?: LockManagerLike } }).navigator?.locks;
+  if (locks === undefined) return body();
+  return locks.request(name, body);
 }
 
 /**
@@ -214,21 +285,26 @@ export class DemoSync {
 }
 
 /**
- * This browser's one relay, or nothing where it has no `SharedWorker`.
+ * How this tab opens a line to this browser's one relay, or nothing where it has no `SharedWorker`.
  *
  * A `SharedWorker` is identified by its script URL, which is the whole reason the relay can be one
- * server for every tab rather than one per tab. A browser without one is not refused here: the demo
- * opens, the database works, and only the syncing is gone — which `openWeftDatabase` would refuse
- * anyway a moment later, for the storage worker rather than for this.
+ * server for every tab rather than one per tab, and why constructing it again yields another port
+ * onto the same server. A browser without one is not refused here: the demo opens, the database
+ * works, and only the syncing is gone — which `openWeftDatabase` would refuse anyway a moment
+ * later, for the storage worker rather than for this.
  */
-function connectRelay(url: URL | string): RelayPortLike | undefined {
+function relayOpener(
+  url: URL | string,
+  override: (() => RelayPortLike) | null | undefined,
+): (() => RelayPortLike) | undefined {
+  if (override !== undefined) return override ?? undefined;
   const constructor = (
     globalThis as {
       SharedWorker?: new (url: URL | string, options?: { type: "module" }) => { readonly port: RelayPortLike };
     }
   ).SharedWorker;
   if (constructor === undefined) return undefined;
-  return new constructor(url, { type: "module" }).port;
+  return () => new constructor(url, { type: "module" }).port;
 }
 
 function defaultConnect(url: URL | string): WorkerLike {
