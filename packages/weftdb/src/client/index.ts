@@ -629,6 +629,20 @@ export class WeftClient {
     // was folded in here, the clock only learned of its own writes when it pulled them back,
     // which is after the correction has already been made (§5.5).
     for (const op of drained) this.clock.acknowledge(op.hlc);
+    // What the relay took is what it will compare the next push against, so an accepted diff3 write
+    // is that field's ancestor from here on. A pull records the same thing, and `flushWith` sends
+    // without one, so this is where a device that pushes and does not read learns it.
+    //
+    // Above the supersededBy loop, which re-records the winner through `applyField`: a write that
+    // lost the stamp comparison is acknowledged like any other, and what is recorded here is the
+    // value the relay refused. A diff3 write carrying a base hash fast-forwards whatever its stamp
+    // says (§5.4), so the two meet only for a `set` on a diff3 field that reached the relay with no
+    // base hash to certify it.
+    for (const op of drained) {
+      if (op.kind !== "set") continue;
+      if (this.schema.collections[op.tableName]?.fields[op.field]?.merge !== "diff3") continue;
+      this.rows.get(localKey(op.tableName, op.rowId))?.internals.diff3Base.set(op.field, op.value);
+    }
     for (const ack of acks) {
       for (const rowAck of ack.firstSeenAtByRow) {
         const row = this.rows.get(localKey(rowAck.tableName, rowAck.rowId));
@@ -647,6 +661,13 @@ export class WeftClient {
     const rejectedOp = rejection.op;
     const row = this.rows.get(localKey(rejectedOp.tableName, rejectedOp.rowId));
     if (!row) return false;
+    // An absent ancestor and an empty one are different claims. A note that was empty when the
+    // relay last took it merges three ways like any other value. A field this device has never been
+    // told the relay's copy of has no ancestor at all, and `diff3("", local, remote)` finds no
+    // common line between two versions that may share every one of them, so it marks up prose that
+    // was never contended and writes that over what the person typed. The relay holds a value it
+    // refused this write against, and a device that cannot say what the two have in common is a
+    // device with a divergence to surface (§5.5).
     const base = wireText(row.internals.diff3Base.get(rejectedOp.field) ?? "");
     const local = wireText(rejectedOp.value);
     const remote = wireText(rejection.serverValue ?? "");

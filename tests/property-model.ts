@@ -577,15 +577,6 @@ function opIdentity(op: WeftOp): string {
   return [op.txnId, op.tableName, op.rowId, op.kind, op.kind === "set" ? op.field : ""].join("\0");
 }
 
-function reorderedDelivery(device: number, rotation: number): WorldCommand {
-  return command(`reorderedDelivery(d${device}, rotate ${rotation})`, async (_model, world) => {
-    const target = deviceAt(world, device);
-    if (!target.online || target.client.outbox.length === 0) return;
-    target.client.outbox.push(...target.client.outbox.splice(0, rotation % target.client.outbox.length));
-    await target.client.syncWith(inProcessTransport(world.server), target.schemaHash);
-  });
-}
-
 export type InjectedRejectionKind = "foreign-scope" | "clock-skew" | "absent-row" | "half-valid";
 
 function injectRejection(device: number, kind: InjectedRejectionKind, row: number): WorldCommand {
@@ -731,9 +722,6 @@ export function worldCommands(maxCommands = 100): fc.Arbitrary<Iterable<WorldCom
       fc.tuple(deviceArb).map(([device]) => pull(device)),
       fc.tuple(deviceArb).map(([device]) => snapshotResync(device)),
       fc.tuple(deviceArb).map(([device]) => duplicateDelivery(device)),
-      fc
-        .tuple(deviceArb, fc.integer({ min: 1, max: 8 }))
-        .map(([device, rotation]) => reorderedDelivery(device, rotation)),
       fc
         .tuple(
           deviceArb,

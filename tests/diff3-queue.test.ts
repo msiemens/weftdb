@@ -67,6 +67,27 @@ test("keystrokes queued into a diff3 field before a sync all push", async () => 
   assert.equal(client.getRow(TODOS, ROW)?.fields.get(NOTES), "hello", "the local value was rewritten backwards");
 });
 
+test("a flush with no pull behind it still learns what the relay took", async () => {
+  // `flushWith` sends and stops. Until the acknowledgement recorded it, the ancestor for a field
+  // came back only on a pull, so a device that pushed and did not read had none for a row it had
+  // made itself.
+  const server = new WeftServer();
+  const client = new WeftClient(SCOPE, deviceId("tab-1"), schema);
+  await client.create(
+    TODOS,
+    ROW,
+    values({ title: "plan", notes: "first", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
+    txnId("create"),
+  );
+  await client.flushWith(inProcessTransport(server));
+
+  assert.equal(
+    client.rows.get(`${TODOS}\0${ROW}`)?.internals.diff3Base.get(NOTES),
+    "first",
+    "the ancestor was never recorded",
+  );
+});
+
 test("one device's edits to a diff3 field converge on what it last typed", async () => {
   await fc.assert(
     fc.asyncProperty(
