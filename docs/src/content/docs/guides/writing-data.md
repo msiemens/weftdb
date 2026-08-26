@@ -124,35 +124,3 @@ await todoEvents.create(`event-${crypto.randomUUID()}`, {
 Each call writes a new row rather than editing an existing one, so two devices logging an event at
 the same moment produce two rows rather than a write racing another, and there is nothing for
 either device to merge.
-
-## Writing a collection named at runtime
-
-A generated mutator names its collection when `weft generate` runs, which is what gives it a
-mutation input of its own and lets it leave out a field marked `merge: "immutable"`. Where the
-collection is picked while the code runs, there is nothing for the generator to name.
-`createWeftDb` takes a client and a schema and offers `create`, `update`, `delete`, `get`, and
-`list` over any collection the schema declares:
-
-```ts
-import { createWeftDb } from "weftdb/client";
-import { schema } from "./schema.ts";
-
-const db = createWeftDb(client, schema);
-const counts = new Map<string, number>();
-
-for (const table of ["todos", "todo_events"] as const) {
-  counts.set(table, db.collection(table).list().length);
-}
-```
-
-Values are typed from the schema, so a field the collection does not declare does not compile, and
-a field declared `S.json({ as })` carries the type it declares. `create`, `update`, and `delete`
-return promises on the same terms as a generated mutator and take the same optional `txnId`, and
-`create` appends where the collection is an event log. `get` and `list` answer directly. The name
-has to be one the schema declares, so a name read back out of `Object.keys(schema.collections)` as
-a `string` does not compile.
-
-It accepts a field marked `merge: "immutable"`, which the generated mutation input leaves out and
-the relay applies like any other write. It takes no `notify` callback, so a component subscribed
-through the engine has to be woken some other way. Use the generated mutators wherever the
-collection name is known when the code is written.

@@ -83,8 +83,6 @@ export function artifactFiles(schema: import("weftdb/schema").SchemaDefinition):
     ["client.sql", `${banner}${artifacts.clientDdl}`],
     ["server.sql", `${banner}${generateServerDdl()}`],
     ["database.d.ts", artifacts.databaseDts],
-    ["internal-database.d.ts", artifacts.internalDatabaseDts],
-    ["kysely.d.ts", artifacts.kyselyDatabaseDts],
     ["mutators.ts", artifacts.mutatorsTs],
     ["bindings.ts", artifacts.bindingsTs],
     ["relationships.ts", artifacts.relationshipsTs],

@@ -9,8 +9,7 @@ CREATE TABLE IF NOT EXISTS outbox (
   hlc TEXT NOT NULL,
   base_hash TEXT,
   txn_id TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('create','set','delete','restore','append')),
-  attempts INTEGER NOT NULL DEFAULT 0
+  kind TEXT NOT NULL CHECK (kind IN ('create','set','delete','restore','append'))
 );
 
 CREATE TABLE IF NOT EXISTS outbox_quarantine (
@@ -24,7 +23,6 @@ CREATE TABLE IF NOT EXISTS outbox_quarantine (
   base_hash TEXT,
   txn_id TEXT NOT NULL,
   kind TEXT NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0,
   rejected_at INTEGER NOT NULL,
   reason TEXT NOT NULL,
   server_value TEXT
@@ -42,9 +40,6 @@ CREATE TABLE IF NOT EXISTS tombstones (
 CREATE TABLE IF NOT EXISTS sync_state (
   scope_id TEXT PRIMARY KEY,
   last_server_seq INTEGER NOT NULL DEFAULT 0,
-  schema_hash TEXT NOT NULL,
-  schema_version INTEGER NOT NULL,
-  device_id TEXT NOT NULL,
   hlc_last TEXT,
   resync_required INTEGER NOT NULL DEFAULT 0
 );

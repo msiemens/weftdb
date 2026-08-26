@@ -61,7 +61,6 @@ export interface SerializedRowRecord {
  */
 export interface SnapshotEnvelope {
   readonly digest: string;
-  readonly mediaType: "application/x-ndjson";
   readonly body: string;
 }
 
@@ -218,7 +217,6 @@ export function contentAddressSnapshot(snapshot: Snapshot): ContentAddressedSnap
   const body = snapshotToNdjson(snapshot);
   return {
     digest: sha256Hex(body),
-    mediaType: "application/x-ndjson",
     body,
     snapshot,
   };

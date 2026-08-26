@@ -235,11 +235,11 @@ Per-field annotations:
 **No raw SQL in application code.** Queries are built with **Kysely**, typed from a
 generated `Database` interface.
 
-### 3.1 Two generated interfaces
+### 3.1 The generated interface
 
-`InternalDatabase` exposes every column including `_weft_hlc_*`, `_weft_base_notes`,
-`_weft_rev`, `_weft_dirty`, and is used only by the sync engine. `Database` exposes domain
-columns only and is what application queries see. Internals never appear in autocomplete.
+`Database` exposes domain columns only and is what application queries see. The sync engine's
+own columns — `_weft_hlc_*`, `_weft_base_*`, `_weft_rev`, `_weft_dirty`, `_weft_null_fields` —
+are typed inside the engine, so they never appear in autocomplete for an application's row.
 
 ### 3.2 Worker boundary
 
@@ -796,12 +796,12 @@ query, diffs against the previous result, and ships `{added, removed, changed}` 
 changed row payloads. Main-thread work is proportional to the change, not the result size —
 most of IVM's benefit at a fraction of the complexity.
 
-### 8.1 Dependency tracking
+### 8.1 Invalidation
 
-`sqlite3_set_authorizer` fires per table/column access at prepare time. The accessed set is
-recorded and attached to the query handle. Exact, automatic, no parsing, independent of how
-the SQL was produced. Invalidation is at **table granularity** — one scope per file means
-finer granularity buys nothing.
+A change bumps **one counter** on the subscription engine, and every registered statement is run
+again against it. Two reads in one render pass share that run, which is what keeps
+`useSyncExternalStore` tearing-free; a read in the next pass with no change between them costs
+nothing at all.
 
 ### 8.2 Row identity
 
@@ -949,7 +949,7 @@ random interleaving of snapshot resync and incremental pull, random rejection in
 
 ### Reactivity
 
-38. Authorizer-derived dependencies are a superset of tables the query reads.
+38. A change re-runs every registered statement, and a read with no change between costs no run.
 39. A row whose `_weft_rev` is unchanged yields an identical object reference.
 40. Worker-computed deltas applied to the previous result equal a full re-fetch.
 41. No notification is emitted mid-transaction.
@@ -982,3 +982,6 @@ sync" — not a logout. Long-lived refresh tokens were rejected as merely moving
   client reads.
 - **Real collaboration.** Would reopen §6 (text CRDT), §7 (delete semantics), and scope
   membership. The `scope_id` naming keeps that door open; nothing else here does.
+- **Dependency-tracked invalidation.** `sqlite3_set_authorizer` fires per table/column access at
+  prepare time, so the accessed set could be captured and attached to the query handle — exact,
+  automatic, no parsing — and invalidation narrowed to table granularity. What runs is §8.1.

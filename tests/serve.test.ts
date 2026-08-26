@@ -272,7 +272,7 @@ test("the HTTP relay serves the protocol end to end", async (t) => {
     body: JSON.stringify({ scopeId: "scope-1", schemaHash: "hash", schemaVersion: 1, lastServerSeq: 0 }),
   });
   assert.equal(handshake.status, 200);
-  assert.deepEqual(await handshake.json(), { ok: true, serverSeq: 0 });
+  assert.deepEqual(await handshake.json(), { ok: true });
 
   const push = await fetch(`${relay.url}/push`, {
     method: "POST",

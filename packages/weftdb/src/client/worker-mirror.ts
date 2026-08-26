@@ -209,9 +209,9 @@ export class WeftClientMirror {
   }
 
   /**
-   * One row as `WeftDb` hands it out, read from the last push rather than from the database. The
-   * fields are the ones the worker sent, so a row this mirror has not been told about — one outside
-   * the hydrated scope, or one whose delta is still crossing — reads as missing rather than stale.
+   * One row, read from the last push rather than from the database. The fields are the ones the
+   * worker sent, so a row this mirror has not been told about — one outside the hydrated scope, or
+   * one whose delta is still crossing — reads as missing rather than stale.
    */
   getRow(tableName: TableName, rowId: RowId): MaterializedRow | undefined {
     const row = this.rows.get(localKey(tableName, rowId));
@@ -422,8 +422,8 @@ function toLocalRow(row: WireRow): LocalRow {
 }
 
 /**
- * A row in the shape `WeftDb` returns. Frozen, and over a copy of the field map, so a caller cannot
- * write into the mirror's own row and have the next push silently undo it.
+ * A row as a reader gets it. Frozen, and over a copy of the field map, so a caller cannot write
+ * into the mirror's own row and have the next push silently undo it.
  */
 function materializeRow(row: LocalRow): MaterializedRow {
   return Object.freeze({

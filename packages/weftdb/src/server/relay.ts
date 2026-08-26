@@ -14,11 +14,6 @@ export interface TokenVerifier {
 export interface RelayOptions {
   readonly server: WeftServer;
   readonly verifier: TokenVerifier;
-  /**
-   * Called after a push that moved the scope forward, with the sequence it moved to. This is
-   * what the wake-up socket broadcasts; a relay without one just leaves clients to poll.
-   */
-  readonly onAdvanced?: (scopeId: ScopeId, serverSeq: number) => void;
 }
 
 /** What a device asks for during a session, named — the same four things over either surface. */
@@ -61,15 +56,7 @@ export function syncOperations(options: RelayOptions): SyncOperations {
         schemaVersion: argument.schemaVersion,
         lastServerSeq: argument.lastServerSeq,
       }),
-    push: (auth, argument) => {
-      const before = options.server.scopes.get(auth.scopeId)?.serverSeq ?? 0;
-      const result = options.server.push(auth.scopeId, [...argument.ops]);
-      // A rejected push can still have applied the transactions before the rejected one, so
-      // what decides whether anyone is woken is the sequence, not whether the push succeeded.
-      const after = options.server.scopes.get(auth.scopeId)?.serverSeq ?? 0;
-      if (after > before) options.onAdvanced?.(auth.scopeId, after);
-      return result;
-    },
+    push: (auth, argument) => options.server.push(auth.scopeId, [...argument.ops]),
     pull: (auth, argument) => options.server.pull(auth.scopeId, argument.lastServerSeq),
     snapshot: (auth) => {
       // The envelope only: the records are in the body, and sending them structured as well

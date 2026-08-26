@@ -13,16 +13,14 @@
 import assert from "node:assert/strict";
 import { MessageChannel } from "node:worker_threads";
 import { test } from "vitest";
-import { deviceId, fieldName, rowId, scopeId, txnId } from "weftdb/core";
+import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/core";
 import {
-  createWeftDb,
   serveWeftWorker,
   WeftClient,
   WeftClientMirror,
   WorkerPortTransport,
   type WeftWorkerHost,
   type MutationTarget,
-  type WeftDbTarget,
   type WorkerMessage,
   type WorkerRequest,
 } from "weftdb/client";
@@ -46,15 +44,12 @@ test("§8.7 both a client and a mirror are what a generated mutator asks for", a
   // generated writes and an application on that path has to hand-write every mutation.
   const inThePage: MutationTarget = new WeftClient(SCOPE, DEVICE, schema);
   const inAWorker: MutationTarget = bridge.mirror;
-  const facadeOverAWorker: WeftDbTarget = bridge.mirror;
 
   for (const target of [inThePage, inAWorker]) {
     for (const verb of ["create", "append", "update", "delete"] as const) {
       assert.equal(typeof target[verb], "function", `a mutation target is missing ${verb}`);
     }
   }
-  assert.equal(typeof facadeOverAWorker.getRow, "function");
-  assert.equal(typeof facadeOverAWorker.listRows, "function");
 });
 
 test("§8.7 a generated create through a mirror reaches SQLite and comes back", async () => {
@@ -118,47 +113,40 @@ test("§8.7 an event log's generated create appends rather than opening a mutabl
   assert.equal(queued.filter((op) => op.kind === "create").length, 0);
 });
 
-test("§8.7 the schema facade reads and writes over a mirror", async () => {
+test("§8.7 a mirror answers a direct read from the last push", async () => {
   using bridge = await Bridge.open();
   await bridge.mirror.hydrate();
-  const db = createWeftDb(bridge.mirror, schema);
-  const todos = db.collection("todos");
+  const todos = todosMutators(bridge.mirror);
+  const table = tableName("todos");
 
   await todos.create("todo-1", ALPHA);
   await todos.create("todo-2", { ...ALPHA, title: "beta", rank: "a1" });
-  await bridge.settle(() => todos.list().length === 2);
+  // A second collection, because a read that ignored the collection would answer with its rows too
+  // and a list would render an event where a todo belongs.
+  await todoEventsMutators(bridge.mirror).create("event-1", { todo_id: "todo-1", kind: "created", actor: "laptop" });
+  await bridge.settle(() => bridge.mirror.rows.size === 3);
 
-  // Read back through the facade rather than out of the row map, because `get` and `list` are what
-  // made `WeftDb` refuse a mirror: they are the reads a concrete class would be needed for.
-  assert.equal(todos.get("todo-1")?.fields.get(fieldName("title")), "alpha");
+  assert.equal(bridge.mirror.getRow(table, rowId("todo-1"))?.fields.get(fieldName("title")), "alpha");
   assert.deepEqual(
-    todos
-      .list()
+    bridge.mirror
+      .listRows(table)
       .map((row) => row.id)
       .sort(),
     ["todo-1", "todo-2"],
   );
-  assert.equal(todos.get("todo-9"), undefined, "the facade answered for a row no mirror holds");
-
-  await todos.update("todo-2", { title: "beta prime" });
-  await bridge.settle(() => todos.get("todo-2")?.fields.get(fieldName("title")) === "beta prime");
-  assert.equal((await bridge.stored("todos", "todo-2"))?.["title"], "beta prime");
-
-  // An event log reached through the facade appends, on the same terms as the generated mutator.
-  await db.collection("todo_events").create("event-1", { todo_id: "todo-2", kind: "renamed", actor: "laptop" });
-  await bridge.settle(() => db.collection("todo_events").list().length === 1);
-  assert.equal((await bridge.stored("todo_events", "event-1"))?.["actor"], "laptop");
+  // A row outside the hydrated scope, or one whose delta is still crossing, reads as missing.
+  assert.equal(bridge.mirror.getRow(table, rowId("todo-9")), undefined, "a mirror answered for a row it has not");
 });
 
 test("§8.7 a materialized row from a mirror does not alias the mirror's own row", async () => {
   using bridge = await Bridge.open();
   await bridge.mirror.hydrate();
-  const todos = createWeftDb(bridge.mirror, schema).collection("todos");
+  const table = tableName("todos");
 
-  await todos.create("todo-1", ALPHA);
-  await bridge.settle(() => todos.get("todo-1") !== undefined);
+  await todosMutators(bridge.mirror).create("todo-1", ALPHA);
+  await bridge.settle(() => bridge.mirror.getRow(table, rowId("todo-1")) !== undefined);
 
-  const row = todos.get("todo-1");
+  const row = bridge.mirror.getRow(table, rowId("todo-1"));
   assert.notEqual(row?.fields, bridge.mirror.rows.get("todos\0todo-1")?.fields);
   // Frozen, so a caller cannot write a field onto a row the next push is about to replace and be
   // left wondering where the value went.
@@ -245,8 +233,7 @@ class Bridge {
 test("§8.7 two collections can be written in one transaction through the generated mutators", async () => {
   // The relay applies a transaction as a unit, so a status change and the event that records it
   // have to share one or they are two writes that can be accepted separately — leaving a history
-  // that disagrees with the row it describes. Without a `txnId` parameter the only way to say so
-  // is to drop out of the generated mutators and into the facade.
+  // that disagrees with the row it describes. The `txnId` parameter is what says so.
   const client = new WeftClient(SCOPE, DEVICE, schema, () => 1_000);
   const shared = txnId("status-and-history");
 

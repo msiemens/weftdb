@@ -35,10 +35,10 @@ declare const jsonValue: unique symbol;
  * the declared type, which the generated files get from `JsonTypeReference.as` instead.
  *
  * Both are needed, and neither replaces the other. `as` is a string, and a string cannot become a
- * type, so it is no use to the hand-written types that read a schema — `WeftDb`'s `MutationInput`
- * among them. A type parameter is a type, and it is erased before the generator, which reads the
- * schema as a runtime value, ever sees it. So `S.json<SortConfig>({ as: "SortConfig" })` says the
- * same thing twice because the two halves are read by different things.
+ * type, so it is no use to the hand-written types that read a schema, `FieldValue` among them. A
+ * type parameter is a type, and it is erased before the generator, which reads the schema as a
+ * runtime value, ever sees it. So `S.json<SortConfig>({ as: "SortConfig" })` says the same thing
+ * twice because the two halves are read by different things.
  */
 export interface JsonValued<Value> {
   readonly [jsonValue]: (value: Value) => void;
@@ -123,8 +123,8 @@ export type FieldValue<Field extends FieldDefinition> = Field["nullable"] extend
 
 /**
  * A declared json type first: a field that carries one is worth exactly that type, and everything
- * reading a schema — `WeftDb`'s `MutationInput` as much as the generated row — should say so rather
- * than fall back to `WireValue` and make the caller assert its way out.
+ * reading a schema should say so, because falling back to `WireValue` makes the caller assert its
+ * way out on every read and every write.
  */
 type DeclaredValue<Field extends FieldDefinition> =
   Field extends JsonValued<infer Value>

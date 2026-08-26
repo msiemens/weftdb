@@ -46,8 +46,6 @@ the schema as `schema`, as the default export, or as the only schema-shaped expo
 - `client.sql`
 - `server.sql`
 - `database.d.ts`
-- `internal-database.d.ts`
-- `kysely.d.ts`
 - `mutators.ts`
 - `bindings.ts`
 - `relationships.ts`

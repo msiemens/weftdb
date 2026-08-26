@@ -40,7 +40,6 @@ export interface ScopeAdvanced {
  */
 export interface ScopeBatch {
   readonly type: "batch";
-  readonly scopeId: ScopeId;
   readonly batch: unknown;
 }
 
@@ -91,7 +90,6 @@ export interface SocketChunk {
   readonly data: string;
   /** Set when the pieces reassemble into an unsolicited batch rather than an answer. */
   readonly for?: "batch";
-  readonly scopeId?: ScopeId;
 }
 
 /** Big enough that ordinary answers are never split, small enough to yield often. */
@@ -99,16 +97,10 @@ export const CHUNK_BYTES = 32 * 1024;
 
 export interface SyncSocketOptions {
   readonly verifier: TokenVerifier;
-  /**
-   * The protocol's four calls. Given them, the socket carries whole sync sessions; without them
-   * it is a wake-up channel and clients do their fetching over HTTP.
-   */
-  readonly operations?: SyncOperations;
-  /**
-   * Reads what a scope has beyond a cursor. Given one, a subscribed connection is sent what
-   * changed; without one it is only told that something did.
-   */
-  readonly pull?: (scopeId: ScopeId, lastServerSeq: number) => { readonly serverSeq: number };
+  /** The protocol's four calls, so one connection carries whole sync sessions. */
+  readonly operations: SyncOperations;
+  /** Reads what a scope has beyond a cursor, which is what a subscribed connection is sent. */
+  readonly pull: (scopeId: ScopeId, lastServerSeq: number) => { readonly serverSeq: number };
   /**
    * How often to ping. A connection dropped by an idle middlebox looks exactly like a healthy
    * one until something is written to it, so the server writes something on purpose.
@@ -146,7 +138,7 @@ export class SyncSocketHub {
   readonly #subscribers = new Map<string, Subscriber>();
   readonly #verifier: TokenVerifier;
   readonly #keepaliveMs: number;
-  readonly #operations: SyncOperations | undefined;
+  readonly #operations: SyncOperations;
   readonly #pull: SyncSocketOptions["pull"];
   #keepalive: ReturnType<typeof setInterval> | undefined;
 
@@ -245,7 +237,7 @@ export class SyncSocketHub {
     const announcement = encodeText(JSON.stringify({ type: "advanced", scopeId, serverSeq } satisfies ScopeAdvanced));
     for (const subscriber of this.#subscribers.values()) {
       if (subscriber.auth.scopeId !== scopeId) continue;
-      if (subscriber.cursor === undefined || this.#pull === undefined) {
+      if (subscriber.cursor === undefined) {
         subscriber.socket.write(announcement);
         continue;
       }
@@ -259,13 +251,12 @@ export class SyncSocketHub {
    * takes the record of it with it, and the client re-subscribes from where it really is.
    */
   #sendBatch(subscriber: Subscriber, scopeId: ScopeId, from: number): void {
-    if (this.#pull === undefined) return;
     const batch = this.#pull(scopeId, from);
     // How far the scope has actually reached, not how far the client claimed to be. Keeping the
     // higher of the two would preserve a cursor beyond the end of the scope, and every batch
     // after it would be empty for as long as the connection lasted.
     subscriber.cursor = batch.serverSeq;
-    const message: ScopeBatch = { type: "batch", scopeId, batch };
+    const message: ScopeBatch = { type: "batch", batch };
     const encoded = JSON.stringify(message);
     if (encoded.length <= CHUNK_BYTES) {
       subscriber.socket.write(encodeText(encoded));
@@ -273,7 +264,7 @@ export class SyncSocketHub {
     }
     // A batch big enough to block the connection goes out in pieces like any other answer,
     // under an id nothing is waiting on.
-    void this.#writeChunks(subscriber, `batch-${subscriber.cursor}`, JSON.stringify(batch), scopeId);
+    void this.#writeChunks(subscriber, `batch-${subscriber.cursor}`, JSON.stringify(batch), true);
   }
 
   /** Drops every connection. Called when the relay closes, so no socket outlives its server. */
@@ -410,12 +401,11 @@ export class SyncSocketHub {
       return;
     }
 
-    const operations = this.#operations;
-    if (operations === undefined || typeof message.id !== "string") return;
+    if (typeof message.id !== "string") return;
     const id = message.id;
 
     try {
-      const result = this.#carryOut(operations, subscriber.auth, message);
+      const result = this.#carryOut(this.#operations, subscriber.auth, message);
       const encoded = JSON.stringify(result ?? null);
       if (encoded.length <= CHUNK_BYTES) {
         subscriber.socket.write(encodeText(JSON.stringify({ type: "response", id, op: message.op, result })));
@@ -470,7 +460,7 @@ export class SyncSocketHub {
     }
   }
 
-  async #writeChunks(subscriber: Subscriber, id: string, encoded: string, batchScope?: ScopeId): Promise<void> {
+  async #writeChunks(subscriber: Subscriber, id: string, encoded: string, forBatch = false): Promise<void> {
     const total = Math.ceil(encoded.length / CHUNK_BYTES);
     for (let index = 0; index < total; index += 1) {
       // The subscriber going away mid-answer is ordinary; the rest simply is not sent.
@@ -483,7 +473,7 @@ export class SyncSocketHub {
         data: encoded.slice(index * CHUNK_BYTES, (index + 1) * CHUNK_BYTES),
         // Says what the pieces are for, because nothing is waiting on an id for a batch
         // nobody asked for.
-        ...(batchScope === undefined ? {} : { for: "batch" as const, scopeId: batchScope }),
+        ...(forBatch ? { for: "batch" as const } : {}),
       };
       try {
         subscriber.socket.write(encodeText(JSON.stringify(chunk)));

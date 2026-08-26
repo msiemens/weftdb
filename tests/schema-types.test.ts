@@ -7,7 +7,7 @@ import { defineSchema, S, schemaHash } from "weftdb/schema";
  * What a schema is worth as a type, checked by compiling source that says so.
  *
  * A schema is read twice: `weft generate` reads it as a runtime value and writes the row and
- * mutation types out, while `WeftDb`'s `MutationInput` and `DatabaseOf` read it as a type. The two
+ * mutation types out, while `FieldValue` and `DatabaseOf` read it as a type. The two
  * only agree if the builders carry the field's type and its nullability in what they return, and
  * nothing in a normal test run notices when they stop — `vitest` erases the types before it runs
  * anything. So the assertions here hand source to the compiler and check what it says about it.
@@ -125,17 +125,19 @@ const SCHEMA_SOURCE = [
   'type Cards = (typeof schema)["collections"]["cards"];',
 ].join("\n");
 
+/** The mutation input the generator emits, as a type over the schema the compiler is handed. */
 function mutationSource(body: string): string {
   return [
     PRELUDE,
-    'import type { MutationInput } from "weftdb/client";',
+    'import type { DeclaredFieldNames } from "weftdb/schema";',
     SCHEMA_SOURCE,
-    "export type Input = MutationInput<Cards>;",
+    "type Writable = Exclude<DeclaredFieldNames<Cards>, 'id' | 'scope_id' | 'created'>;",
+    "export type Input = { readonly [Name in Writable]?: FieldValue<Cards['fields'][Name]> | undefined };",
     body,
   ].join("\n");
 }
 
-test("a nullable field accepts null through the facade's mutation input", () => {
+test("a nullable field accepts null through a mutation input", () => {
   // The regression this file exists for. Making `type` literal without also making `nullable`
   // literal stops `ScalarType` collapsing to `WireValue` and never adds the `| null` back, so a
   // nullable field starts refusing the very value it was declared to hold.

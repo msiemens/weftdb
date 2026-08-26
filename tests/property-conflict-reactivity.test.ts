@@ -8,7 +8,6 @@ import {
   fieldName,
   hasConflictMarkers,
   rowId,
-  tableName,
   txnId,
   wireText,
   type FieldName,
@@ -17,9 +16,7 @@ import {
   type WireValue,
 } from "weftdb/core";
 import {
-  AuthorizerDependencyRecorder,
-  compileQuery,
-  invalidatesQuery,
+  reactiveSqlQuery,
   RowIdentityCache,
   SubscriptionEngine,
   WeftClient,
@@ -187,39 +184,34 @@ test("§9.37 removing the markers by hand clears the conflict with no residue", 
   );
 });
 
-test("§9.38 recorded dependencies cover every table the query reads", async () => {
-  const candidates: readonly TableName[] = [
-    TASKS,
-    tableName("invoices"),
-    tableName("line_items"),
-    tableName("task_status_history"),
-  ];
+test("§9.38 a change re-runs every registered statement, whatever it reads", async () => {
+  const query = reactiveSqlQuery({
+    tableName: TASKS,
+    query: { sql: `select id from tasks where scope_id = ?`, parameters: [propertyScope] },
+  });
   await fc.assert(
-    fc.asyncProperty(fc.subarray([...candidates], { minLength: 1 }), async (tables) => {
-      const recorder = new AuthorizerDependencyRecorder();
-      for (const table of tables) {
-        recorder.recordRead(table, TITLE);
-        recorder.recordRead(table);
-      }
-      // The authorizer also fires for tables a join touches without projecting.
-      recorder.recordRead(tableName("task_status_history"));
+    fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 20 }), async (changes) => {
+      const engine = new SubscriptionEngine();
+      let runs = 0;
+      const select = (): readonly RowId[] => {
+        runs += 1;
+        return [];
+      };
 
-      const query = compileQuery(
-        {
-          compile: () => ({
-            sql: `select * from ${tables.join(" join ")} where scope_id = ?`,
-            parameters: [propertyScope],
-          }),
-        },
-        recorder.snapshot(),
-      );
-      const tracked = new Set(query.dependencies.map((entry) => entry.tableName));
+      engine.getSqlSnapshot(query, select, new Map());
+      // Two reads in one render pass answer from the same run, so a component cannot tear.
+      engine.getSqlSnapshot(query, select, new Map());
+      assert.equal(runs, 1, "one render pass ran the statement twice");
 
-      for (const table of tables) {
-        assert.equal(tracked.has(table), true, `${table} was read but not tracked`);
-        assert.equal(invalidatesQuery(new Set([table]), query), true, `${table} does not invalidate the query`);
+      for (const [index, changed] of changes.entries()) {
+        if (changed) engine.notify();
+        engine.getSqlSnapshot(query, select, new Map());
+        assert.equal(
+          runs,
+          1 + changes.slice(0, index + 1).filter(Boolean).length,
+          "a statement was not re-run after a change, or was re-run without one",
+        );
       }
-      assert.equal(tracked.size >= tables.length, true, "dependencies are not a superset of the tables read");
     }),
     { numRuns: PROPERTY_RUNS },
   );

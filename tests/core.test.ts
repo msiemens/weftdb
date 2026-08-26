@@ -146,10 +146,7 @@ test("schema versions only roll forward", async () => {
       schemaVersion: 1,
       lastServerSeq: 0,
     }),
-    {
-      ok: true,
-      serverSeq: 0,
-    },
+    { ok: true },
   );
   assert.deepEqual(
     server.handshake({
@@ -172,10 +169,7 @@ test("schema versions only roll forward", async () => {
       schemaVersion: 2,
       lastServerSeq: 0,
     }),
-    {
-      ok: true,
-      serverSeq: 0,
-    },
+    { ok: true },
   );
 });
 

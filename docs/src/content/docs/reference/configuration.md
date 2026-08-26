@@ -71,22 +71,21 @@ JWT configuration.
 `createRelayHandler` and `syncOperations`, from `weftdb/server/relay`, take a `RelayOptions`
 object.
 
-| Field        | Type                                            | Default        | Meaning                                       |
-| ------------ | ----------------------------------------------- | -------------- | --------------------------------------------- |
-| `server`     | `WeftServer`                                    | none, required | the `WeftServer` instance to read and write   |
-| `verifier`   | `TokenVerifier`                                 | none, required | resolves a bearer token to a scope and device |
-| `onAdvanced` | `(scopeId: ScopeId, serverSeq: number) => void` | unset          | called after a push moves the scope forward   |
+| Field      | Type            | Default        | Meaning                                       |
+| ---------- | --------------- | -------------- | --------------------------------------------- |
+| `server`   | `WeftServer`    | none, required | the `WeftServer` instance to read and write   |
+| `verifier` | `TokenVerifier` | none, required | resolves a bearer token to a scope and device |
 
 ### Sync socket options
 
 `SyncSocketHub`, from `weftdb/server/websocket`, takes a `SyncSocketOptions` object.
 
-| Field         | Type                                                | Default        | Meaning                                                                                             |
-| ------------- | --------------------------------------------------- | -------------- | --------------------------------------------------------------------------------------------------- |
-| `verifier`    | `TokenVerifier`                                     | none, required | resolves a bearer token to a scope and device                                                       |
-| `operations`  | `SyncOperations`                                    | unset          | the protocol's four calls; without them the socket only carries wake-ups                            |
-| `pull`        | `(scopeId, lastServerSeq) => { serverSeq: number }` | unset          | reads what a scope has beyond a cursor; without it a subscriber is only told that something changed |
-| `keepaliveMs` | `number`                                            | 30 seconds     | how often to ping; `0` or less turns the keepalive off                                              |
+| Field         | Type                                                | Default        | Meaning                                                    |
+| ------------- | --------------------------------------------------- | -------------- | ---------------------------------------------------------- |
+| `verifier`    | `TokenVerifier`                                     | none, required | resolves a bearer token to a scope and device              |
+| `operations`  | `SyncOperations`                                    | none, required | the protocol's four calls, which the socket carries        |
+| `pull`        | `(scopeId, lastServerSeq) => { serverSeq: number }` | none, required | reads what a scope has beyond a cursor, for its subscriber |
+| `keepaliveMs` | `number`                                            | 30 seconds     | how often to ping; `0` or less turns the keepalive off     |
 
 ### WeftServer settings
 

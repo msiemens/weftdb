@@ -2,60 +2,37 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { fieldName, rowId, tableName } from "weftdb/core";
 import {
-  AuthorizerDependencyRecorder,
   Diff3EditorBuffer,
   WorkerPortTransport,
   compileOnlyKysely,
-  compileQuery,
-  invalidatesQuery,
   queryCacheKey,
+  reactiveSqlQuery,
   type WorkerRequest,
   type WorkerResponse,
 } from "weftdb/client";
 
-// A stand-in for what `weft generate`'s `kysely.d.ts` artifact would emit for a `tasks`
-// collection (see `generateKyselyDatabaseTypes` in packages/weftdb/src/codegen): the real
-// artifact wraps each column in `ColumnType<Select, Insert, Update>`, which only matters for
-// inserts/updates, so a select-only test collapses it to the plain read shape.
+// The shape `weft generate`'s `database.d.ts` gives a `tasks` collection, written out here so the
+// builder below is typed the way an application's is.
 interface Database {
   tasks: {
     id: string;
+    scope_id: string;
     title: string;
     done: boolean;
   };
 }
 
-test("query compilation produces stable cache keys and dependency invalidation", async () => {
-  const tasks = tableName("tasks");
-  const recorder = new AuthorizerDependencyRecorder();
-  recorder.recordRead(tasks, fieldName("title"));
-  const query = compileQuery(
-    { compile: () => ({ sql: "select * from tasks where id = ?", parameters: ["1"] }) },
-    recorder.snapshot(),
-  );
-  assert.equal(
-    query.key,
-    compileQuery(
-      { compile: () => ({ sql: "select * from tasks where id = ?", parameters: ["1"] }) },
-      recorder.snapshot(),
-    ).key,
-  );
-  assert.equal(invalidatesQuery(new Set([tasks]), query), true);
-});
-
-test("a Kysely query compiles through compileQuery unchanged", async () => {
-  const tasks = tableName("tasks");
-  const recorder = new AuthorizerDependencyRecorder();
-  recorder.recordRead(tasks, fieldName("title"));
+test("a Kysely builder reaches a reactive query as the statement it compiled to", async () => {
   const db = compileOnlyKysely<Database>();
-  const builder = db.selectFrom("tasks").select(["id", "title"]).where("done", "=", false);
-  // `QueryBuilderLike` only asks for `compile()`; a Kysely builder is passed straight in rather
-  // than adapted, which is the point — Kysely is a typed surface over the same seam, not a
-  // second one.
-  const registered = compileQuery(builder, recorder.snapshot());
-  assert.equal(registered.compiled.sql, 'select "id", "title" from "tasks" where "done" = ?');
-  assert.deepEqual(registered.compiled.parameters, [false]);
-  assert.equal(invalidatesQuery(new Set([tasks]), registered), true);
+  // `QueryBuilderLike` asks only for `compile()`, so a Kysely builder is handed straight to
+  // `reactiveSqlQuery`. What the worker runs is what the builder produced, parameters included.
+  const query = reactiveSqlQuery({
+    tableName: tableName("tasks"),
+    query: db.selectFrom("tasks").select("id").where("scope_id", "=", "scope-1").where("done", "=", false),
+  });
+  assert.equal(query.compiled.sql, 'select "id" from "tasks" where "scope_id" = ? and "done" = ?');
+  assert.deepEqual(query.compiled.parameters, ["scope-1", false]);
+  assert.equal(query.cacheKey, queryCacheKey(query.compiled));
 });
 
 test("a Kysely query's cache key is stable across builds and differs for a different query", async () => {

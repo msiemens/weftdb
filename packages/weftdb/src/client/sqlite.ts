@@ -128,21 +128,15 @@ export class SqliteClientStore {
         for (const op of client.outbox) await this.saveOutbox(tx, op);
         for (const op of client.quarantine) await this.saveQuarantine(tx, op);
         await tx.run({
-          sql: `INSERT INTO sync_state (scope_id, last_server_seq, schema_hash, schema_version, device_id, hlc_last, resync_required)
-VALUES (?, ?, ?, ?, ?, ?, ?)
+          sql: `INSERT INTO sync_state (scope_id, last_server_seq, hlc_last, resync_required)
+VALUES (?, ?, ?, ?)
 ON CONFLICT(scope_id) DO UPDATE SET
   last_server_seq = excluded.last_server_seq,
-  schema_hash = excluded.schema_hash,
-  schema_version = excluded.schema_version,
-  device_id = excluded.device_id,
   hlc_last = excluded.hlc_last,
   resync_required = excluded.resync_required`,
           parameters: [
             client.scopeId,
             client.lastServerSeq,
-            "",
-            client.schema.schemaVersion,
-            client.deviceId,
             client.clock.highest(),
             // A required resync is a fact about this device's cursor, not about the session that
             // discovered it. Losing it on restart leaves the client pulling incrementally from a
@@ -280,18 +274,18 @@ VALUES (${entries.map(() => "?").join(", ")})`,
 
   private async saveOutbox(tx: AsyncSqlTransaction, op: WeftOp): Promise<void> {
     await tx.run({
-      sql: `INSERT INTO outbox (scope_id, table_name, row_id, field, value, hlc, base_hash, txn_id, kind, attempts)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      parameters: encodeOutboxParameters(op, 0),
+      sql: `INSERT INTO outbox (scope_id, table_name, row_id, field, value, hlc, base_hash, txn_id, kind)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      parameters: encodeOutboxParameters(op),
     });
   }
 
   private async saveQuarantine(tx: AsyncSqlTransaction, op: QuarantinedOp): Promise<void> {
     await tx.run({
-      sql: `INSERT INTO outbox_quarantine (scope_id, table_name, row_id, field, value, hlc, base_hash, txn_id, kind, attempts, rejected_at, reason, server_value)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      sql: `INSERT INTO outbox_quarantine (scope_id, table_name, row_id, field, value, hlc, base_hash, txn_id, kind, rejected_at, reason, server_value)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       parameters: [
-        ...encodeOutboxParameters(op, 0),
+        ...encodeOutboxParameters(op),
         op.rejectedAt,
         op.reason,
         op.serverValue === undefined ? null : encodeWireValue(op.serverValue),
@@ -445,7 +439,7 @@ function decodeTombstone(row: SqlRow): Tombstone {
   };
 }
 
-function encodeOutboxParameters(op: WeftOp, attempts: number): readonly (string | number | null)[] {
+function encodeOutboxParameters(op: WeftOp): readonly (string | number | null)[] {
   return [
     op.scopeId,
     op.tableName,
@@ -456,7 +450,6 @@ function encodeOutboxParameters(op: WeftOp, attempts: number): readonly (string 
     op.kind === "set" ? (op.baseHash ?? null) : null,
     op.txnId,
     op.kind,
-    attempts,
   ];
 }
 

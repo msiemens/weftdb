@@ -36,21 +36,19 @@ Three of the tables `client.sql` creates support sync rather than any one collec
 - The quarantine holds writes the relay rejected.
 - Tombstones record a deletion.
 
-`sync_state` records a scope's own progress: the last sequence it pulled, and the schema hash and
-version it last synced with. The command above writes:
+`sync_state` records a scope's own progress: the last sequence it pulled, the highest clock reading
+it has written, and whether it needs a snapshot resync. The command above writes:
 
-| Artifact                 | What it holds                                                                                                                                                                                                   |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `client.sql`             | domain columns per collection, `_weft_hlc_<field>` and `_weft_base_<field>` sidecar columns, and the `outbox`, `outbox_quarantine`, `tombstones`, and `sync_state` tables                                       |
-| `server.sql`             | a `fields` table keyed on `scope_id`, `table_name`, `row_id`, and `field`, plus `rows`, `scope_state`, and `devices`, the same regardless of schema                                                             |
-| `database.d.ts`          | the `Database` interface, one row shape per collection, domain columns only                                                                                                                                     |
-| `internal-database.d.ts` | the `InternalDatabase` interface: `Database` plus every `_weft_*` column, used only by the sync engine                                                                                                          |
-| `kysely.d.ts`            | `Database` and `InternalDatabase` typed for Kysely's query builder, with insert and update variance per field                                                                                                   |
-| `mutators.ts`            | a `<Name>Mutation` input interface and a `<Name>Mutators` interface per collection                                                                                                                              |
-| `bindings.ts`            | table name constants, row and field types, query builders, decoders, a `<name>Mutators(client)` factory per collection, a `use<Name>` React hook, and reorder helpers for a collection with a `fracIndex` field |
-| `relationships.ts`       | a `<table>_<relationship>Relation(targets)` accessor, which indexes the target rows and returns a lookup over that index, and a `<Table><Relationship>Result` type, per relationship the schema declares        |
-| `nested-mappers.ts`      | a `map<Name>Row()` function that reassembles `__`-separated columns into a nested object, per collection that has any                                                                                           |
-| `schema-hash.txt`        | the schema hash, as plain text                                                                                                                                                                                  |
+| Artifact            | What it holds                                                                                                                                                                                                   |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `client.sql`        | domain columns per collection, `_weft_hlc_<field>` and `_weft_base_<field>` sidecar columns, and the `outbox`, `outbox_quarantine`, `tombstones`, and `sync_state` tables                                       |
+| `server.sql`        | a `fields` table keyed on `scope_id`, `table_name`, `row_id`, and `field`, plus `rows`, `scope_state`, and `devices`, the same regardless of schema                                                             |
+| `database.d.ts`     | the `Database` interface, one row shape per collection, domain columns only                                                                                                                                     |
+| `mutators.ts`       | a `<Name>Mutation` input interface and a `<Name>Mutators` interface per collection                                                                                                                              |
+| `bindings.ts`       | table name constants, row and field types, query builders, decoders, a `<name>Mutators(client)` factory per collection, a `use<Name>` React hook, and reorder helpers for a collection with a `fracIndex` field |
+| `relationships.ts`  | a `<table>_<relationship>Relation(targets)` accessor, which indexes the target rows and returns a lookup over that index, and a `<Table><Relationship>Result` type, per relationship the schema declares        |
+| `nested-mappers.ts` | a `map<Name>Row()` function that reassembles `__`-separated columns into a nested object, per collection that has any                                                                                           |
+| `schema-hash.txt`   | the schema hash, as plain text                                                                                                                                                                                  |
 
 `client.sql` and `server.sql` both open with a comment naming the schema version and the hash they
 were generated from, so the two files a device and the relay load carry their own provenance.
@@ -93,10 +91,9 @@ console.log(artifacts.clientDdl); // most of what client.sql holds
 console.log(generateServerDdl()); // what server.sql holds; takes no schema argument
 ```
 
-`generateArtifacts` returns `schemaHash`, `clientDdl`, `databaseDts`, `internalDatabaseDts`,
-`kyselyDatabaseDts`, `mutatorsTs`, `bindingsTs`, `relationshipsTs`, and `nestedMappersTs`, one
-string property per artifact in the table above. `generateServerDdl` takes no schema, because the
-table it describes does not depend on one.
+`generateArtifacts` returns `schemaHash`, `clientDdl`, `databaseDts`, `mutatorsTs`, `bindingsTs`,
+`relationshipsTs`, and `nestedMappersTs`, one string property per artifact in the table above.
+`generateServerDdl` takes no schema, because the table it describes does not depend on one.
 
 ## Diffing regenerated output
 

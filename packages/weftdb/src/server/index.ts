@@ -63,14 +63,10 @@ export interface HandshakeRequest {
   lastServerSeq: number;
 }
 
-export type HandshakeResponse =
-  | { ok: true; serverSeq: number }
-  | { ok: false; reason: "schema_mismatch" }
-  | { ok: false; reason: "resync_required"; serverSeq: number };
+export type HandshakeResponse = { ok: true } | { ok: false; reason: "schema_mismatch" | "resync_required" };
 
 export interface PushAck {
   txnId: TxnId;
-  serverSeq: number;
   firstSeenAtByRow: RowFirstSeen[];
 }
 
@@ -184,9 +180,9 @@ export class WeftServer {
       return { ok: false, reason: "schema_mismatch" };
     }
     if (request.lastServerSeq < scope.tombstoneFloorSeq) {
-      return { ok: false, reason: "resync_required", serverSeq: scope.serverSeq };
+      return { ok: false, reason: "resync_required" };
     }
-    return { ok: true, serverSeq: scope.serverSeq };
+    return { ok: true };
   }
 
   push(scopeId: ScopeId, ops: WeftOp[]): PushOutcome {
@@ -353,7 +349,7 @@ export class WeftServer {
         if (op.kind === "restore") this.replayRowFields(op, scopeId);
       }
     }
-    return { txnId, serverSeq: this.scope(scopeId).serverSeq, firstSeenAtByRow };
+    return { txnId, firstSeenAtByRow };
   }
 
   private applyField(op: SetOp): void {

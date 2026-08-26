@@ -1,5 +1,3 @@
-import type { FieldName, TableName } from "weftdb/core";
-
 export interface CompiledQuery {
   readonly sql: string;
   // Not `WireValue`: these are SQL bind parameters, not sync-protocol field values, and a query
@@ -13,51 +11,11 @@ export interface QueryBuilderLike {
   compile(): CompiledQuery;
 }
 
-export interface QueryDependency {
-  readonly tableName: TableName;
-  readonly fieldName?: FieldName;
-}
-
-export interface RegisteredQuery {
-  readonly key: string;
-  readonly compiled: CompiledQuery;
-  readonly dependencies: readonly QueryDependency[];
-}
-
-export class AuthorizerDependencyRecorder {
-  readonly #dependencies = new Map<string, QueryDependency>();
-
-  recordRead(tableName: TableName, fieldName?: FieldName): void {
-    const item = dependency(tableName, fieldName);
-    this.#dependencies.set(`${item.tableName}\0${item.fieldName ?? ""}`, item);
-  }
-
-  snapshot(): readonly QueryDependency[] {
-    return [...this.#dependencies.values()];
-  }
-
-  clear(): void {
-    this.#dependencies.clear();
-  }
-}
-
-export function compileQuery(query: QueryBuilderLike, dependencies: readonly QueryDependency[]): RegisteredQuery {
-  const compiled = query.compile();
-  return {
-    key: queryCacheKey(compiled),
-    compiled,
-    dependencies,
-  };
-}
-
+/**
+ * What a statement is called wherever it has to be recognised again: the worker keys its
+ * registrations on this, and a page asks for one by handing the same key back. Two callers that
+ * compiled the same statement therefore share one registration and one run of it.
+ */
 export function queryCacheKey(query: CompiledQuery): string {
   return JSON.stringify({ sql: query.sql, parameters: query.parameters });
-}
-
-export function dependency(tableName: TableName, fieldName?: FieldName): QueryDependency {
-  return fieldName === undefined ? { tableName } : { tableName, fieldName };
-}
-
-export function invalidatesQuery(changedTables: ReadonlySet<TableName>, query: RegisteredQuery): boolean {
-  return query.dependencies.some((item) => changedTables.has(item.tableName));
 }

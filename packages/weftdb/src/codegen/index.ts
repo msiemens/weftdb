@@ -5,9 +5,7 @@ import { fieldStorage } from "weftdb/shared";
 export interface GeneratedArtifactSet {
   schemaHash: string;
   clientDdl: string;
-  internalDatabaseDts: string;
   databaseDts: string;
-  kyselyDatabaseDts: string;
   mutatorsTs: string;
   bindingsTs: string;
   relationshipsTs: string;
@@ -32,9 +30,7 @@ export function generateArtifacts(schema: SchemaDefinition): GeneratedArtifactSe
   return {
     schemaHash: hash,
     clientDdl,
-    internalDatabaseDts: generateDatabaseTypes(schema, true),
-    databaseDts: generateDatabaseTypes(schema, false),
-    kyselyDatabaseDts: generateKyselyDatabaseTypes(schema),
+    databaseDts: generateDatabaseTypes(schema),
     mutatorsTs: generateMutators(schema),
     bindingsTs: generateBindings(schema),
     relationshipsTs: generateRelationshipHelpers(schema),
@@ -141,8 +137,7 @@ export function generateClientDdl(schema: SchemaDefinition): string {
   hlc TEXT NOT NULL,
   base_hash TEXT,
   txn_id TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('create','set','delete','restore','append')),
-  attempts INTEGER NOT NULL DEFAULT 0
+  kind TEXT NOT NULL CHECK (kind IN ('create','set','delete','restore','append'))
 );`,
     `CREATE TABLE IF NOT EXISTS outbox_quarantine (
   seq INTEGER,
@@ -155,7 +150,6 @@ export function generateClientDdl(schema: SchemaDefinition): string {
   base_hash TEXT,
   txn_id TEXT NOT NULL,
   kind TEXT NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0,
   rejected_at INTEGER NOT NULL,
   reason TEXT NOT NULL,
   server_value TEXT
@@ -171,9 +165,6 @@ export function generateClientDdl(schema: SchemaDefinition): string {
     `CREATE TABLE IF NOT EXISTS sync_state (
   scope_id TEXT PRIMARY KEY,
   last_server_seq INTEGER NOT NULL DEFAULT 0,
-  schema_hash TEXT NOT NULL,
-  schema_version INTEGER NOT NULL,
-  device_id TEXT NOT NULL,
   hlc_last TEXT,
   resync_required INTEGER NOT NULL DEFAULT 0
 );`,
@@ -276,31 +267,13 @@ function indexDdl(tableName: string, fields: readonly (readonly [string, FieldDe
     .join("");
 }
 
-function generateDatabaseTypes(schema: SchemaDefinition, internal: boolean): string {
+function generateDatabaseTypes(schema: SchemaDefinition): string {
   const tables = Object.entries(schema.collections)
-    .map(([tableName, collection]) => `  ${propertyName(tableName)}: {\n${typeFields(collection, internal)}\n  };`)
+    .map(([tableName, collection]) => `  ${propertyName(tableName)}: {\n${typeFields(collection)}\n  };`)
     .join("\n");
   const imports = jsonTypeImports(schema);
   const header = imports.length === 0 ? "" : `${imports.join("\n")}\n\n`;
-  return `${header}export interface ${internal ? "InternalDatabase" : "Database"} {\n${tables}\n}\n`;
-}
-
-export function generateKyselyDatabaseTypes(schema: SchemaDefinition): string {
-  const tables = Object.entries(schema.collections)
-    .map(([tableName, collection]) => `  ${propertyName(tableName)}: {\n${kyselyFields(collection, false)}\n  };`)
-    .join("\n");
-  const internalTables = Object.entries(schema.collections)
-    .map(([tableName, collection]) => `  ${propertyName(tableName)}: {\n${kyselyFields(collection, true)}\n  };`)
-    .join("\n");
-  return [
-    "import type { ColumnType, Generated } from 'kysely';",
-    ...jsonTypeImports(schema),
-    "",
-    `export interface Database {\n${tables}\n}`,
-    "",
-    `export interface InternalDatabase {\n${internalTables}\n}`,
-    "",
-  ].join("\n");
+  return `${header}export interface Database {\n${tables}\n}\n`;
 }
 
 /**
@@ -717,42 +690,10 @@ export function generateNestedMappers(schema: SchemaDefinition): string {
   return `${[...mappers, ASSIGN_NESTED].join("\n\n")}\n`;
 }
 
-function typeFields(collection: CollectionDefinition, internal: boolean): string {
-  const lines: string[] = [];
-  for (const [name, field] of Object.entries(collection.fields)) {
-    lines.push(`    ${propertyName(name)}: ${tsType(field)};`);
-    if (internal) {
-      lines.push(`    ${propertyName(`_weft_hlc_${name}`)}: string | null;`);
-      if (field.merge === "diff3")
-        lines.push(`    ${propertyName(`_weft_base_${name}`)}: ${tsType({ ...field, nullable: true })};`);
-    }
-  }
-  if (internal) {
-    lines.push("    _weft_first_synced_at: number | null;");
-    lines.push("    _weft_rev: number;");
-    lines.push("    _weft_dirty: number;");
-    lines.push("    _weft_null_fields: string | null;");
-  }
-  return lines.join("\n");
-}
-
-function kyselyFields(collection: CollectionDefinition, internal: boolean): string {
-  const lines: string[] = [];
-  for (const [name, field] of Object.entries(collection.fields)) {
-    lines.push(`    ${propertyName(name)}: ColumnType<${tsType(field)}, ${insertType(field)}, ${updateType(field)}>;`);
-    if (internal) {
-      lines.push(`    ${propertyName(`_weft_hlc_${name}`)}: string | null;`);
-      if (field.merge === "diff3")
-        lines.push(`    ${propertyName(`_weft_base_${name}`)}: ${tsType({ ...field, nullable: true })};`);
-    }
-  }
-  if (internal) {
-    lines.push("    _weft_first_synced_at: number | null;");
-    lines.push("    _weft_rev: Generated<number>;");
-    lines.push("    _weft_dirty: Generated<number>;");
-    lines.push("    _weft_null_fields: string | null;");
-  }
-  return lines.join("\n");
+function typeFields(collection: CollectionDefinition): string {
+  return Object.entries(collection.fields)
+    .map(([name, field]) => `    ${propertyName(name)}: ${tsType(field)};`)
+    .join("\n");
 }
 
 // `date` columns hold ISO-8601 text, which is what the client actually writes into `created`
@@ -875,15 +816,6 @@ function jsonTypeGuard(schema: SchemaDefinition): readonly string[] {
     ),
     "",
   ];
-}
-
-function insertType(field: FieldDefinition): string {
-  return field.nullable ? `${tsType(field)} | undefined` : tsType(field);
-}
-
-function updateType(field: FieldDefinition): string {
-  if (field.merge === "immutable") return "never";
-  return field.nullable ? tsType(field) : `${tsType(field)} | undefined`;
 }
 
 function defaultLiteral(field: FieldDefinition): string {

@@ -9,7 +9,6 @@
 // Neither class is told about this file. It is the shape they already had, written down: nothing
 // here was widened to fit, and `WeftClient` in particular satisfies it as it stands.
 import type { FieldName, RowId, TableName, TxnId, WireValue } from "weftdb/core";
-import type { MaterializedRow } from "./index.ts";
 
 /**
  * The verbs a generated mutator calls. `create` and `append` differ in the class the row is opened
@@ -35,14 +34,4 @@ export interface MutationTarget {
   append(tableName: TableName, rowId: RowId, values: Record<FieldName, WireValue>, txnId?: TxnId): Promise<void>;
   update(tableName: TableName, rowId: RowId, values: Record<FieldName, WireValue>, txnId?: TxnId): Promise<void>;
   delete(tableName: TableName, rowId: RowId, txnId?: TxnId): Promise<void>;
-}
-
-/**
- * The same, plus the two reads `WeftDb` answers `get` and `list` from. Split out rather than folded
- * in, so generated mutators keep asking for writes alone: they never read, and a target that could
- * only write would otherwise be refused by them for a capability they do not use.
- */
-export interface WeftDbTarget extends MutationTarget {
-  getRow(tableName: TableName, rowId: RowId): MaterializedRow | undefined;
-  listRows(tableName: TableName): MaterializedRow[];
 }

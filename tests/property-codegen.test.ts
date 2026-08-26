@@ -179,9 +179,7 @@ test("generated TypeScript artifacts parse for any schema the generator accepts"
       const artifacts = generateArtifacts(schema);
 
       for (const [fileName, source] of [
-        ["internal-database.d.ts", artifacts.internalDatabaseDts],
         ["database.d.ts", artifacts.databaseDts],
-        ["kysely.d.ts", artifacts.kyselyDatabaseDts],
         ["mutators.ts", artifacts.mutatorsTs],
         ["bindings.ts", artifacts.bindingsTs],
         ["relationships.ts", artifacts.relationshipsTs],

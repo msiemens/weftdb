@@ -75,7 +75,7 @@ test("a relay that throws rejects the caller rather than answering it wrongly", 
 
   await assert.rejects(transport.pull(SCOPE, 0), /the scope's records could not be read/u);
   // And the port is still serving: one call that failed is not a connection that has gone.
-  assert.deepEqual(await transport.handshake(client("alpha").handshakeRequest(HASH)), { ok: true, serverSeq: 0 });
+  assert.deepEqual(await transport.handshake(client("alpha").handshakeRequest(HASH)), { ok: true });
 });
 
 test("a push the relay refuses is an answer, not a failure", async () => {

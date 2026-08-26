@@ -75,15 +75,12 @@ export interface ReactiveSqlQuery {
   readonly tableName: TableName;
   readonly compiled: CompiledQuery;
   readonly cacheKey: string;
-  readonly dependsOn: ReadonlySet<TableName>;
 }
 
 export interface ReactiveSqlQueryOptions {
   /** The collection the statement selects `id` from, and whose rows the result materializes from. */
   readonly tableName: TableName;
   readonly query: QueryBuilderLike | CompiledQuery;
-  /** The collections whose changes make this answer stale. Defaults to the one it reads. */
-  readonly dependsOn?: Iterable<TableName>;
 }
 
 export function reactiveSqlQuery(options: ReactiveSqlQueryOptions): ReactiveSqlQuery {
@@ -93,7 +90,6 @@ export function reactiveSqlQuery(options: ReactiveSqlQueryOptions): ReactiveSqlQ
     tableName: options.tableName,
     compiled,
     cacheKey: queryCacheKey(compiled),
-    dependsOn: new Set(options.dependsOn ?? [options.tableName]),
   };
 }
 

@@ -365,7 +365,7 @@ test("§9.45 an equal version with a different hash always fails and adopts neit
           schemaVersion: version,
           lastServerSeq: 0,
         }),
-        { ok: true, serverSeq: 0 },
+        { ok: true },
       );
       assert.deepEqual(
         server.handshake({

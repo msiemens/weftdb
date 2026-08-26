@@ -938,11 +938,9 @@ export type {
   RowSelect,
   TypedQueryKey,
 } from "./subscriptions.ts";
-export { AuthorizerDependencyRecorder, compileQuery, invalidatesQuery, queryCacheKey } from "./query.ts";
-export type { CompiledQuery, QueryBuilderLike, QueryDependency, RegisteredQuery } from "./query.ts";
-export type { MutationTarget, WeftDbTarget } from "./mutation-target.ts";
-export { createWeftDb, WeftDb } from "./facade.ts";
-export type { MutationInput } from "./facade.ts";
+export { queryCacheKey } from "./query.ts";
+export type { CompiledQuery, QueryBuilderLike } from "./query.ts";
+export type { MutationTarget } from "./mutation-target.ts";
 export { applyRetentionDeletes, planRetentionDeletes, visibleChildren } from "./retention.ts";
 export type { RetentionCandidate, RetentionPolicy } from "./retention.ts";
 export { compileOnlyKysely } from "./kysely.ts";

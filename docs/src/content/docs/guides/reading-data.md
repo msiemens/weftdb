@@ -1,6 +1,6 @@
 ---
 title: Reading data
-description: Query builders, query keys, generated decoders, the Database and InternalDatabase interfaces, relations, and nested records.
+description: Query builders, query keys, generated decoders, the Database interface, relations, and nested records.
 sidebar:
   order: 3
 ---
@@ -167,11 +167,11 @@ A query key and its decoder are paired by a `TypedQueryKey<Row>`, so passing the
 collection to the decoder for another is a compile error rather than a row that reads back wrong.
 [React](/guides/react/) covers how a component subscribes and re-renders when a result changes.
 
-## The generated interfaces
+## The generated interface
 
-Alongside the decoders, `weft generate` writes `Database` and `InternalDatabase` from the schema.
-`Database` lists only the fields a collection declares. It is the interface a decoded row
-satisfies, and the one a query builder's statement is typed against:
+Alongside the decoders, `weft generate` writes `Database` from the schema. It lists only the fields
+a collection declares. It is the interface a decoded row satisfies, and the one a query builder's
+statement is typed against:
 
 ```ts title="src/generated/database.d.ts"
 export interface Database {
@@ -194,13 +194,9 @@ A declared field is stored in a column of its own, as the type it declares: a nu
 boolean as 1 or 0, a string, date, or enum as itself. That is what lets a statement compiled
 against `Database` match the rows the store wrote.
 
-`InternalDatabase` adds every column the sync engine reads and writes: a clock reading per
-mergeable field (`_weft_hlc_title`), the diff3 ancestor for a field merged that way
-(`_weft_base_notes`), the revision and dirty counters (`_weft_rev`, `_weft_dirty`), and
-`_weft_null_fields`, which records the fields a row holds as null so that a field written as null
-stays distinct from one never written. Application code never sees `InternalDatabase`. A decoded
-row is typed against `Database` alone, so none of those columns can appear in an editor's
-autocomplete for it.
+The device's table carries further columns the sync engine reads and writes, listed in
+[Architecture](/concepts/architecture/). A decoded row is typed against `Database` alone, so none of
+them can appear in an editor's autocomplete for it.
 
 ## Relations
 

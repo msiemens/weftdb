@@ -24,7 +24,6 @@ test("snapshot content address is stable for unchanged snapshot", async () => {
   assert.equal(snapshotDigest(snapshot), snapshotDigest(snapshot));
   const addressed = contentAddressSnapshot(snapshot);
   assert.equal(addressed.digest, snapshotDigest(snapshot));
-  assert.equal(addressed.mediaType, "application/x-ndjson");
   assert.match(addressed.body, /"type":"header"/u);
 });
 

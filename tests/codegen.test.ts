@@ -206,7 +206,6 @@ test("artifact set includes mutators, Kysely types, relationships, and nested ma
   });
 
   const artifacts = generateArtifacts(schema);
-  assert.match(artifacts.kyselyDatabaseDts, /ColumnType/u);
   assert.match(artifacts.mutatorsTs, /InvoicesMutation/u);
   assert.match(artifacts.relationshipsTs, /invoices_line_itemsRelation/u);
   assert.match(artifacts.nestedMappersTs, /mapInvoicesRow/u);
@@ -644,7 +643,6 @@ test("a json field is worth the type the schema declares for it", async () => {
   assert.match(artifacts.databaseDts, /label: Label;/u);
   assert.match(artifacts.databaseDts, /sketch: readonly string\[\] \| null;/u);
   assert.match(artifacts.mutatorsTs, /readonly label\?: Label;/u);
-  assert.match(artifacts.kyselyDatabaseDts, /label: ColumnType<Label, Label, Label \| undefined>;/u);
 
   // Declaring nothing is still `unknown`: a field whose shape the schema does not fix has no
   // more honest type, and every schema written before this option existed depends on it.
