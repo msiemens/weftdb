@@ -31,6 +31,49 @@ function skewedPair(): { readonly server: WeftServer; readonly client: WeftClien
   return { server, client, skew: () => void (state.skewed = true) };
 }
 
+test("a write that loses the comparison leaves the device holding what the scope holds", async () => {
+  // Losing is not rejection: the write was valid and it arrived, so the transaction is
+  // acknowledged and the device drops it from its outbox. What it must not do is keep the value
+  // it wrote. The record that beat it kept the sequence it already had, which is below this
+  // device's cursor, so nothing it pulls afterwards carries the winner.
+  //
+  // The cursor gets past the winner because of the device's own queued write: a pull skips a
+  // field the outbox is holding, so the sequence advances while the value does not.
+  const now = Date.parse("2026-03-01T09:00:00.000Z");
+  const server = new WeftServer(() => now);
+  const transport = inProcessTransport(server);
+  // Ahead of the other device, and well inside the skew threshold, so its stamps simply win.
+  const ahead = new WeftClient(SCOPE, deviceId("ahead"), schema, () => now + 60_000);
+  const behind = new WeftClient(SCOPE, deviceId("behind"), schema, () => now);
+
+  await ahead.create(
+    TODOS,
+    ROW,
+    values({ title: "first", notes: "n", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
+    txnId("create"),
+  );
+  await ahead.syncWith(transport, HASH);
+  await behind.syncWith(transport, HASH);
+
+  await behind.update(TODOS, ROW, values({ title: "behind" }), txnId("behind-edit"));
+  await ahead.update(TODOS, ROW, values({ title: "ahead" }), txnId("ahead-edit"));
+  await ahead.syncWith(transport, HASH);
+
+  // Pulled before the push, which is the order that strands the device: the winner arrives while
+  // the outbox is still holding a write for that field, so the value is skipped and the cursor
+  // moves past it regardless.
+  await behind.applyPull(server.pull(SCOPE, behind.lastServerSeq));
+  await behind.syncWith(transport, HASH);
+
+  assert.deepEqual(behind.outbox, [], "the losing write was not acknowledged");
+  assert.deepEqual(behind.listQuarantine(), [], "a write that lost was quarantined rather than settled");
+  assert.equal(
+    behind.getRow(TODOS, ROW)?.fields.get(fieldName("title")),
+    "ahead",
+    "the device kept the value it wrote after the scope had already decided against it",
+  );
+});
+
 test("a push that half succeeds acknowledges the half that landed", async () => {
   const { server, client, skew } = skewedPair();
   await client.create(

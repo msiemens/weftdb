@@ -68,6 +68,17 @@ export type HandshakeResponse = { ok: true } | { ok: false; reason: "schema_mism
 export interface PushAck {
   txnId: TxnId;
   firstSeenAtByRow: RowFirstSeen[];
+  /**
+   * The records that beat a `set` in this transaction, for the device that sent it.
+   *
+   * A write losing the stamp comparison is still acknowledged, because it was valid and it
+   * arrived. The device drops an acknowledged op from its outbox and keeps what it wrote, and the
+   * record that beat it kept the sequence it already had — below that device's cursor, where no
+   * incremental pull will reach it again. Carrying the winner back on the acknowledgement is what
+   * closes that, and it survives redelivery because a second push of the same op loses to the same
+   * record and is answered with the same value.
+   */
+  supersededBy: FieldRecord[];
 }
 
 export interface RowFirstSeen {
@@ -322,6 +333,7 @@ export class WeftServer {
 
   private applyTxn(scopeId: ScopeId, txnId: TxnId, ops: WeftOp[]): PushAck {
     const firstSeenAtByRow: RowFirstSeen[] = [];
+    const supersededBy: FieldRecord[] = [];
     // Row ops settle existence and class before any field lands, so a batch reordered in
     // transit applies identically to one delivered in emission order.
     for (const op of [...ops.filter((op) => op.kind !== "set"), ...ops.filter((op) => op.kind === "set")]) {
@@ -335,7 +347,10 @@ export class WeftServer {
       if (!firstSeenAtByRow.some((ack) => ack.tableName === op.tableName && ack.rowId === op.rowId)) {
         firstSeenAtByRow.push({ tableName: op.tableName, rowId: op.rowId, firstSeenAt: row.firstSeenAt });
       }
-      if (op.kind === "set") this.applyField(op);
+      if (op.kind === "set") {
+        const winner = this.applyField(op);
+        if (winner) supersededBy.push(winner);
+      }
       if ((op.kind === "delete" || op.kind === "restore") && compareHlc(op.hlc, row.registerHlc) > 0) {
         // Delete and restore are one LWW register on a separate axis from field merge, so
         // the highest HLC decides regardless of the order the two arrive in. Neither op
@@ -349,10 +364,11 @@ export class WeftServer {
         if (op.kind === "restore") this.replayRowFields(op, scopeId);
       }
     }
-    return { txnId, firstSeenAtByRow };
+    return { txnId, firstSeenAtByRow, supersededBy };
   }
 
-  private applyField(op: SetOp): void {
+  /** The record that beat this write, where it lost. */
+  private applyField(op: SetOp): FieldRecord | undefined {
     const key = fieldKey(op);
     const current = this.fields.get(key);
     // A write carrying a base hash has already been compared against the value it claims to
@@ -379,7 +395,9 @@ export class WeftServer {
         txnId: op.txnId,
         serverSeq: this.nextSeq(op.scopeId),
       });
+      return undefined;
     }
+    return current;
   }
 
   private replayRowFields(op: WeftOp, scopeId: ScopeId): void {

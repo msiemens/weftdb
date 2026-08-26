@@ -568,6 +568,10 @@ export class WeftClient {
         const row = this.rows.get(localKey(rowAck.tableName, rowAck.rowId));
         if (row) row.internals._weft_first_synced_at = rowAck.firstSeenAt;
       }
+      // A write of this device's that lost is acknowledged like any other, and the record that
+      // beat it kept a sequence below this device's cursor, so a pull will not bring it. Applied
+      // here, this device holds what the scope holds instead of the value it wrote.
+      for (const superseding of ack.supersededBy) this.applyField(superseding);
     }
     for (const op of drained) this.recomputeDirty(op.tableName, op.rowId);
   }
