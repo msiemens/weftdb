@@ -13,10 +13,20 @@ semilattice converges only once every replica has seen the winning value, and a 
 acknowledged and never told performs no join at all. The arithmetic of the join is left to the
 lattice; whether the loser hears about it is a protocol question, and it is asked here.
 
+A sequence number is also carried with the run of history it was counted in. A server keeping its
+records in memory loses them when it restarts, and a deployed one loses them when it is restored
+from a backup; either way the scope starts again from zero and a number a device already holds now
+names a record that was never written. Nothing on the wire distinguishes that from a server with
+nothing new, so the scope carries an epoch, and a device counting in another one is told to resync.
+
 **Safety, rows**: a device that has caught up agrees with the server about which rows are
 live, except for rows it holds unsent or quarantined work for — divergence the protocol
 deliberately surfaces rather than overwrites (§5.5, §5.7) — and except while it is waiting to
 resync after discarding quarantined work.
+
+"Caught up" means the device has read this history and is not behind it. A device between a loss and
+its next read is excused: it is holding a stale world and nothing reached it, which no protocol can
+prevent. What it is owed is that its next read tells it.
 
 **Safety, fields**: a device that has caught up holds no field value the scope has moved past
 (`FieldConsistent`). There is no exemption for local work here. Unsent and quarantined work
@@ -45,21 +55,30 @@ it ran before believing the specification and the implementation still agree.
 
 ```sh
 tlc -config spec/WeftSync.cfg spec/WeftSync.tla                  # safety, full model
+tlc -config spec/WeftSyncEpoch.cfg spec/WeftSync.tla             # a lost history, smaller bounds
 tlc -config spec/WeftSyncLiveness.cfg spec/WeftSync.tla          # liveness, smaller bounds
 tlc -config spec/WeftSyncBuggy.cfg spec/WeftSync.tla             # expected to fail
 tlc -config spec/WeftSyncRacyPrune.cfg spec/WeftSync.tla         # expected to fail
 tlc -config spec/WeftSyncSilentLoss.cfg spec/WeftSync.tla        # expected to fail
+tlc -config spec/WeftSyncEpochLoss.cfg spec/WeftSync.tla         # expected to fail
 tlc -config spec/WeftSyncLivenessBuggy.cfg spec/WeftSync.tla     # expected to fail
 ```
 
 | Configuration | Result |
 |---|---|
-| `WeftSync.cfg` (2 devices, 2 rows, MaxSeq 3) | 4,970,117 distinct states, no violation, ~5m |
-| `WeftSyncLiveness.cfg` (2 devices, 1 row, MaxSeq 3) | 52,863 states, temporal property holds |
+| `WeftSync.cfg` (2 devices, 2 rows, MaxSeq 3, MaxEpoch 1) | 4,992,171 distinct states, no violation, 5m43s, depth 28 |
+| `WeftSyncEpoch.cfg` (2 devices, 1 row, MaxSeq 3, MaxEpoch 2) | 89,365 distinct states, no violation, depth 30 |
+| `WeftSyncLiveness.cfg` (2 devices, 1 row, MaxSeq 3) | 54,391 states, temporal property holds |
 | `WeftSyncBuggy.cfg` | `Consistent` violated, as expected |
 | `WeftSyncRacyPrune.cfg` | `Consistent` violated, as expected |
-| `WeftSyncSilentLoss.cfg` (2 devices, 1 row, MaxSeq 3) | `FieldConsistent` violated at depth 8, as expected |
+| `WeftSyncSilentLoss.cfg` (2 devices, 1 row, MaxSeq 3) | `FieldConsistent` violated, as expected |
+| `WeftSyncEpochLoss.cfg` (2 devices, 1 row, MaxSeq 3) | `Consistent` violated at depth 5, as expected |
 | `WeftSyncLivenessBuggy.cfg` | temporal property violated, as expected |
+
+The full model runs at `MaxEpoch = 1`, so the server keeps what it is given. A lost history sends the
+search back over the whole space against a fresh server, which took that configuration past 7.5
+million distinct states with its queue still growing. `WeftSyncEpoch.cfg` checks that half at bounds
+it finishes at, which is the arrangement liveness already uses and for the same reason.
 
 Modelling field delivery costs about 28% on the full safety configuration — it was 3,870,301
 distinct states before `fieldSeq` and `superseded` — and about 31% on liveness, where it was
@@ -105,6 +124,15 @@ this models is the one `applyField` is placed to make: it holds the record that 
 write, so the ack carries that record back and the client applies it at the moment it is told
 the push succeeded.
 
+**`HandshakeChecksEpoch = FALSE`** — the handshake before it compared epochs, and before it
+refused a cursor above the head. TLC finds it in five steps: a device creates a row and pushes it,
+the server loses what it was keeping and starts the scope again from zero, and the device pulls.
+The pull is incremental, carries nothing, and leaves the cursor where it was, because `applyPull`
+only ever raises it. The device goes on showing a row the scope does not have while believing it is
+current, and its next pull will do the same, for ever. Only a write that carries the server past the
+device's old cursor makes it visible again — and everything the server recorded below that number is
+then gone from that device with nothing left to ask for it.
+
 `WeftSyncLivenessBuggy.cfg` does the same job for the temporal property: it asserts only
 `TypeOK`, so the liveness property is what fails rather than safety failing first.
 
@@ -141,7 +169,9 @@ configurations, which explore it directly.
 It also does not yet record `fieldSeq` or `superseded`. Its generated module names the
 specification's constants and variables explicitly, so those two and `AckReportsSupersession`
 have to be declared there before the INSTANCE resolves at all, and until the recorder emits
-them the implementation's field-delivery behaviour is unchecked against this model.
+them the implementation's field-delivery behaviour is unchecked against this model. `epoch` and
+`deviceEpoch` are declared there for the same reason and pinned at one epoch: the recorder drives a
+server that keeps everything it is given, so no recorded trace reaches a lost history.
 
 ### What the field half leaves out
 

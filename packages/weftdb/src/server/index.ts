@@ -47,6 +47,12 @@ export interface ScopeState {
   tombstoneFloorSeq: number;
   schemaHash?: SchemaHash;
   schemaVersion?: number;
+  /**
+   * Which run of this scope's history a sequence number belongs to, minted when the scope is
+   * first seen here. A device compares it against the one it holds and takes a snapshot when they
+   * differ, because a sequence number means nothing across a server that lost what it had.
+   */
+  epoch: string;
 }
 
 export interface DeviceRecord {
@@ -61,9 +67,12 @@ export interface HandshakeRequest {
   schemaHash: SchemaHash;
   schemaVersion: number;
   lastServerSeq: number;
+  /** The epoch the cursor was counted in, absent on a device that has never synced. */
+  epoch?: string;
 }
 
-export type HandshakeResponse = { ok: true } | { ok: false; reason: "schema_mismatch" | "resync_required" };
+export type HandshakeResponse =
+  { ok: true; epoch: string } | { ok: false; reason: "schema_mismatch" | "resync_required"; epoch: string };
 
 export interface PushAck {
   txnId: TxnId;
@@ -89,6 +98,8 @@ export interface RowFirstSeen {
 
 export interface PullBatch {
   serverSeq: number;
+  /** Which run of the scope's history `serverSeq` counts in. See `ScopeState.epoch`. */
+  epoch: string;
   /**
    * The scope's floor at the moment of the read. A client whose cursor is below it cannot be
    * brought up to date incrementally: what it missed has been hard-purged (§5.9).
@@ -140,10 +151,17 @@ export class WeftServer {
   protected readonly touchedDevices = new Set<string>();
   readonly #watchers = new Set<ScopeWatcher>();
   private readonly now: () => number;
+  /** Injectable so a test can name the epochs it is asserting about. */
+  private readonly newEpoch: () => string;
 
-  constructor(now: () => number = Date.now, skewThresholdMs = DEFAULT_SKEW_THRESHOLD_MS) {
+  constructor(
+    now: () => number = Date.now,
+    skewThresholdMs = DEFAULT_SKEW_THRESHOLD_MS,
+    newEpoch: () => string = () => crypto.randomUUID(),
+  ) {
     this.now = now;
     this.skewThresholdMs = skewThresholdMs;
+    this.newEpoch = newEpoch;
   }
 
   /**
@@ -188,12 +206,22 @@ export class WeftServer {
       scope.schemaHash = request.schemaHash;
       scope.schemaVersion = request.schemaVersion;
     } else if (request.schemaVersion < scope.schemaVersion || request.schemaHash !== scope.schemaHash) {
-      return { ok: false, reason: "schema_mismatch" };
+      return { ok: false, reason: "schema_mismatch", epoch: scope.epoch };
     }
     if (request.lastServerSeq < scope.tombstoneFloorSeq) {
-      return { ok: false, reason: "resync_required" };
+      return { ok: false, reason: "resync_required", epoch: scope.epoch };
     }
-    return { ok: true };
+    // A cursor counted in another epoch names a record this scope never wrote, and one above the
+    // head names a record it has not written yet. Both mean the device is holding a history this
+    // server does not have, which an incremental pull cannot reconcile: it answers with what comes
+    // after the cursor, and after the cursor is nothing.
+    if (request.epoch !== undefined && request.epoch !== scope.epoch) {
+      return { ok: false, reason: "resync_required", epoch: scope.epoch };
+    }
+    if (request.lastServerSeq > scope.serverSeq) {
+      return { ok: false, reason: "resync_required", epoch: scope.epoch };
+    }
+    return { ok: true, epoch: scope.epoch };
   }
 
   push(scopeId: ScopeId, ops: WeftOp[]): PushOutcome {
@@ -221,6 +249,7 @@ export class WeftServer {
     const scope = this.scope(scopeId);
     return {
       serverSeq: scope.serverSeq,
+      epoch: scope.epoch,
       tombstoneFloorSeq: scope.tombstoneFloorSeq,
       fields: [...this.fields.values()].filter((row) => row.scopeId === scopeId && row.serverSeq > lastServerSeq),
       rows: [...this.rows.values()].filter((row) => row.scopeId === scopeId && row.serverSeq > lastServerSeq),
@@ -231,6 +260,7 @@ export class WeftServer {
     const scope = this.scope(scopeId);
     const snapshot: Snapshot = {
       serverSeq: scope.serverSeq,
+      epoch: scope.epoch,
       tombstoneFloorSeq: scope.tombstoneFloorSeq,
       fields: [...this.fields.values()].filter((row) => row.scopeId === scopeId),
       rows: [...this.rows.values()].filter((row) => row.scopeId === scopeId),
@@ -431,7 +461,7 @@ export class WeftServer {
   private scope(scopeId: ScopeId): ScopeState {
     let scope = this.scopes.get(scopeId);
     if (!scope) {
-      scope = { serverSeq: 0, tombstoneFloorSeq: 0 };
+      scope = { serverSeq: 0, tombstoneFloorSeq: 0, epoch: this.newEpoch() };
       this.scopes.set(scopeId, scope);
     }
     return scope;

@@ -47,18 +47,22 @@ CONSTANTS
     Devices,          \* symmetric set of device identifiers
     Rows,             \* symmetric set of row identifiers
     MaxSeq,           \* bound on the server sequence counter, to keep the space finite
+    MaxEpoch,         \* how many times the server may lose its history, to keep the space finite
     PullChecksFloor,  \* TRUE models the shipped pull path
     FloorRisesFirst,  \* TRUE models the shipped prune order
-    AckReportsSupersession  \* TRUE models an ack that names the record a losing write lost to
+    AckReportsSupersession, \* TRUE models an ack that names the record a losing write lost to
+    HandshakeChecksEpoch    \* TRUE models a handshake that refuses a cursor from another history
 
 VARIABLES
     serverState,      \* Rows -> {"absent", "live", "deleted"}
     serverRowSeq,     \* Rows -> the sequence number of that row's latest record
     serverSeq,        \* the scope's monotonic counter
+    epoch,            \* which run of the scope's history serverSeq counts in
     fieldSeq,         \* Rows -> the sequence number of that row's stored field record, 0 for none
     floor,            \* tombstone_floor_seq
     purging,          \* rows whose records have been removed but whose floor has not risen
     cursor,           \* Devices -> last_server_seq
+    deviceEpoch,      \* Devices -> the epoch that device's cursor was counted in, 0 before its first sync
     view,             \* Devices -> Rows -> what that device believes
     superseded,       \* Devices -> Rows -> holding a field value the scope has moved past
     outbox,           \* Devices -> Rows -> the unsent local op, if any
@@ -66,8 +70,8 @@ VARIABLES
     resyncing,        \* Devices -> discarded local work, waiting for a snapshot to re-derive
     purgeSeq          \* Rows -> the record a purge was started against
 
-vars == <<serverState, serverRowSeq, serverSeq, fieldSeq, floor, purging, purgeSeq, cursor, view,
-          superseded, outbox, quarantined, resyncing>>
+vars == <<serverState, serverRowSeq, serverSeq, epoch, fieldSeq, floor, purging, purgeSeq, cursor,
+          deviceEpoch, view, superseded, outbox, quarantined, resyncing>>
 
 RowStates == {"absent", "live", "deleted"}
 Ops == {"none", "create", "write", "delete", "restore"}
@@ -76,6 +80,8 @@ TypeOK ==
     /\ serverState \in [Rows -> RowStates]
     /\ serverRowSeq \in [Rows -> 0..MaxSeq]
     /\ serverSeq \in 0..MaxSeq
+    /\ epoch \in 1..MaxEpoch
+    /\ deviceEpoch \in [Devices -> 0..MaxEpoch]
     /\ fieldSeq \in [Rows -> 0..MaxSeq]
     /\ floor \in 0..MaxSeq
     /\ purging \subseteq Rows
@@ -91,6 +97,8 @@ Init ==
     /\ serverState = [r \in Rows |-> "absent"]
     /\ serverRowSeq = [r \in Rows |-> 0]
     /\ serverSeq = 0
+    /\ epoch = 1
+    /\ deviceEpoch = [d \in Devices |-> 0]
     /\ fieldSeq = [r \in Rows |-> 0]
     /\ floor = 0
     /\ purging = {}
@@ -103,6 +111,23 @@ Init ==
     /\ resyncing = [d \in Devices |-> FALSE]
 
 Max(a, b) == IF a > b THEN a ELSE b
+
+(***************************************************************************)
+(* Whether this device's cursor was counted somewhere this server has never *)
+(* been. A device that has never synced holds no epoch and no cursor to     *)
+(* doubt. One whose epoch differs is counting in a history this server      *)
+(* never had. One whose cursor is above the head is ahead of everything the *)
+(* server holds, which an incremental pull cannot reconcile: it answers     *)
+(* with what comes after the cursor, and after the cursor is nothing.       *)
+(*                                                                          *)
+(* Every call `syncWith` makes has a handshake in front of it, so this      *)
+(* gates the push as well as the read: a device told to resync takes its    *)
+(* snapshot before it flushes.                                              *)
+(***************************************************************************)
+FromAnotherHistory(d) ==
+    /\ HandshakeChecksEpoch
+    /\ deviceEpoch[d] # 0
+    /\ (deviceEpoch[d] # epoch \/ cursor[d] > serverSeq)
 
 (***************************************************************************)
 (* Local work. A device edits its own copy and queues the op; nothing       *)
@@ -126,31 +151,31 @@ LocalCreate(d, r) ==
     /\ view[d][r] = "absent"        \* the client refuses to create over a local tombstone
     /\ view' = [view EXCEPT ![d][r] = "live"]
     /\ outbox' = [outbox EXCEPT ![d][r] = "create"]
-    /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, fieldSeq, floor, purging, cursor,
-                   superseded, quarantined, purgeSeq, resyncing>>
+    /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, epoch, fieldSeq, floor, purging, cursor,
+                   deviceEpoch, superseded, quarantined, purgeSeq, resyncing>>
 
 LocalWrite(d, r) ==
     /\ Idle(d, r)
     /\ view[d][r] = "live"
     /\ outbox' = [outbox EXCEPT ![d][r] = "write"]
-    /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, fieldSeq, floor, purging, cursor, view,
-                   superseded, quarantined, purgeSeq, resyncing>>
+    /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, epoch, fieldSeq, floor, purging, cursor,
+                   deviceEpoch, view, superseded, quarantined, purgeSeq, resyncing>>
 
 LocalDelete(d, r) ==
     /\ Idle(d, r)
     /\ view[d][r] = "live"
     /\ view' = [view EXCEPT ![d][r] = "deleted"]
     /\ outbox' = [outbox EXCEPT ![d][r] = "delete"]
-    /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, fieldSeq, floor, purging, cursor,
-                   superseded, quarantined, purgeSeq, resyncing>>
+    /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, epoch, fieldSeq, floor, purging, cursor,
+                   deviceEpoch, superseded, quarantined, purgeSeq, resyncing>>
 
 LocalRestore(d, r) ==
     /\ Idle(d, r)
     /\ view[d][r] = "deleted"
     /\ view' = [view EXCEPT ![d][r] = "live"]
     /\ outbox' = [outbox EXCEPT ![d][r] = "restore"]
-    /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, fieldSeq, floor, purging, cursor,
-                   superseded, quarantined, purgeSeq, resyncing>>
+    /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, epoch, fieldSeq, floor, purging, cursor,
+                   deviceEpoch, superseded, quarantined, purgeSeq, resyncing>>
 
 (***************************************************************************)
 (* Push. Accepting drains the outbox entry; rejecting moves it to           *)
@@ -228,12 +253,18 @@ Quarantines(d, r) ==
 Push(d, r) ==
     /\ outbox[d][r] # "none"
     /\ serverSeq < MaxSeq
+    \* The handshake in front of the flush refused it, and the snapshot it was told to take
+    \* comes first. `Pull` is what performs that.
+    /\ ~FromAnotherHistory(d)
+    \* And a handshake that did not refuse it answered with the epoch, so a device that has
+    \* pushed has been told which history it is writing into even if it has never read.
+    /\ deviceEpoch' = [deviceEpoch EXCEPT ![d] = epoch]
     /\ IF ~Accepts(r, outbox[d][r])
        THEN Quarantines(d, r)
        ELSE IF outbox[d][r] = "write"
             THEN WriteWins(d, r) \/ WriteLoses(d, r)
             ELSE RegisterMoves(d, r)
-    /\ UNCHANGED <<floor, purging, cursor, view, purgeSeq, resyncing>>
+    /\ UNCHANGED <<epoch, floor, purging, cursor, view, purgeSeq, resyncing>>
 
 (***************************************************************************)
 (* Repair. The user discards the quarantined work. The client cannot        *)
@@ -246,8 +277,8 @@ Repair(d, r) ==
     /\ quarantined[d][r]
     /\ quarantined' = [quarantined EXCEPT ![d][r] = FALSE]
     /\ resyncing' = [resyncing EXCEPT ![d] = TRUE]
-    /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, fieldSeq, floor, purging, cursor, view,
-                   superseded, outbox, purgeSeq>>
+    /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, epoch, fieldSeq, floor, purging, cursor,
+                   deviceEpoch, view, superseded, outbox, purgeSeq>>
 
 (***************************************************************************)
 (* Pruning, in two steps so the window between them is reachable. With      *)
@@ -274,7 +305,7 @@ PruneStart(r) ==
             /\ UNCHANGED <<serverState, serverRowSeq, fieldSeq, superseded>>
        ELSE /\ Purge(r)
             /\ UNCHANGED floor
-    /\ UNCHANGED <<serverSeq, cursor, view, outbox, quarantined, resyncing>>
+    /\ UNCHANGED <<serverSeq, epoch, cursor, deviceEpoch, view, outbox, quarantined, resyncing>>
 
 (***************************************************************************)
 (* Finishing a purge re-checks that nothing moved underneath it: the row is *)
@@ -297,7 +328,7 @@ PruneFinish(r) ==
                  /\ UNCHANGED floor
             ELSE /\ floor' = Max(floor, serverRowSeq[r])
                  /\ UNCHANGED <<serverState, serverRowSeq, fieldSeq, superseded>>
-    /\ UNCHANGED <<serverSeq, cursor, view, outbox, quarantined, resyncing>>
+    /\ UNCHANGED <<serverSeq, epoch, cursor, deviceEpoch, view, outbox, quarantined, resyncing>>
 
 (***************************************************************************)
 (* Reading. An incremental pull carries the records above the cursor; a     *)
@@ -344,9 +375,14 @@ IncrementalPull(d) ==
                          ELSE view[d][r]]]
     /\ superseded' = [superseded EXCEPT ![d] =
          [r \in Rows |-> IF fieldSeq[r] > cursor[d] THEN FALSE ELSE superseded[d][r]]]
-    /\ cursor' = [cursor EXCEPT ![d] = serverSeq]
+    \* The cursor only ever rises, which is what `applyPull` does with `Max`. In an unbroken
+    \* history it is always at or below the head and this is just the head; after the server has
+    \* lost what it had it is what keeps the device asking for records beyond the end of the world.
+    /\ cursor' = [cursor EXCEPT ![d] = Max(cursor[d], serverSeq)]
+    /\ deviceEpoch' = [deviceEpoch EXCEPT ![d] = epoch]
     /\ Surfacing(d, PulledOver(d))
-    /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, fieldSeq, floor, purging, purgeSeq, resyncing>>
+    /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, epoch, fieldSeq, floor, purging, purgeSeq,
+                   resyncing>>
 
 \* A snapshot carries every field record the scope has, whatever its number, so it repairs
 \* every superseded value at once. This is the only thing that repairs the defect today, and
@@ -355,17 +391,59 @@ Resync(d) ==
     /\ view' = [view EXCEPT ![d] = [r \in Rows |-> IF Holds(d, r) THEN view[d][r] ELSE serverState[r]]]
     /\ superseded' = [superseded EXCEPT ![d] = [r \in Rows |-> FALSE]]
     /\ cursor' = [cursor EXCEPT ![d] = serverSeq]
+    \* Adopted outright. A cursor above the snapshot's head belongs to a history this server no
+    \* longer has, and keeping the higher of the two leaves the device asking for records after a
+    \* point that will never be reached again.
+    /\ deviceEpoch' = [deviceEpoch EXCEPT ![d] = epoch]
     /\ resyncing' = [resyncing EXCEPT ![d] = FALSE]
     /\ Surfacing(d, SnapshotOver(d))
-    /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, fieldSeq, floor, purging, purgeSeq>>
+    /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, epoch, fieldSeq, floor, purging, purgeSeq>>
+
+(***************************************************************************)
+(* The server loses the history it was keeping and starts the scope again.  *)
+(* A relay holding its records in memory does this whenever it is           *)
+(* restarted; a deployed one does it when it is restored from a backup.     *)
+(* Sequence numbers begin again from zero, so a number a device already     *)
+(* holds now names a record that was never written, and every device's      *)
+(* cursor is a measurement of a history that has gone. The epoch is what    *)
+(* makes the two distinguishable: it is minted with the scope and stored    *)
+(* beside the records, so a server that came back with its records comes    *)
+(* back with its epoch.                                                     *)
+(*                                                                          *)
+(* Devices are untouched. Nothing reaches them at the moment this happens,  *)
+(* which is the whole difficulty: the loss is invisible from where they     *)
+(* stand and they carry on believing what they last pulled.                 *)
+(***************************************************************************)
+ServerLoses ==
+    /\ epoch < MaxEpoch
+    /\ epoch' = epoch + 1
+    /\ serverState' = [r \in Rows |-> "absent"]
+    /\ serverRowSeq' = [r \in Rows |-> 0]
+    /\ serverSeq' = 0
+    /\ fieldSeq' = [r \in Rows |-> 0]
+    /\ floor' = 0
+    /\ purging' = {}
+    /\ purgeSeq' = [r \in Rows |-> 0]
+    \* No stored record is left for anything to have moved past, exactly as after a purge.
+    /\ superseded' = [e \in Devices |-> [q \in Rows |-> FALSE]]
+    /\ UNCHANGED <<cursor, deviceEpoch, view, outbox, quarantined, resyncing>>
 
 (***************************************************************************)
 (* A read is a snapshot when the incremental stream cannot serve: below the *)
-(* floor, or with discarded work waiting to be re-derived. Otherwise it is  *)
-(* the incremental path. This is what the client's `sync` does.             *)
+(* floor, from a history this server does not have, or with discarded work  *)
+(* waiting to be re-derived. Otherwise it is the incremental path. This is  *)
+(* what the client's `sync` does.                                          *)
+(*                                                                          *)
+(* A device that has never synced holds no epoch and no cursor to doubt.    *)
+(* One whose epoch differs is counting in a history this server never had.  *)
+(* One whose cursor is above the head is ahead of everything the server     *)
+(* holds, which an incremental pull cannot reconcile: it answers with what  *)
+(* comes after the cursor, and after the cursor is nothing.                 *)
 (***************************************************************************)
 Pull(d) ==
-    IF (PullChecksFloor /\ floor > cursor[d]) \/ resyncing[d] THEN Resync(d) ELSE IncrementalPull(d)
+    IF (PullChecksFloor /\ floor > cursor[d]) \/ resyncing[d] \/ FromAnotherHistory(d)
+    THEN Resync(d)
+    ELSE IncrementalPull(d)
 
 Next ==
     \/ \E d \in Devices, r \in Rows : LocalCreate(d, r)
@@ -376,6 +454,7 @@ Next ==
     \/ \E d \in Devices, r \in Rows : Repair(d, r)
     \/ \E r \in Rows : PruneStart(r)
     \/ \E r \in Rows : PruneFinish(r)
+    \/ ServerLoses
     \/ \E d \in Devices : Pull(d)
     \* A client may take a snapshot whenever it likes — on cold open, say — not only when
     \* the incremental path cannot serve. Fairness is stated per device on Pull, so an
@@ -402,7 +481,21 @@ Spec == Init /\ [][Next]_vars /\ Fairness
 (* (§5.7, §5.5). "Deleted" and "absent" are both simply not live: a device  *)
 (* may remember a tombstone the server has already purged.                  *)
 (***************************************************************************)
-CaughtUp(d) == cursor[d] = serverSeq /\ ~resyncing[d]
+(***************************************************************************)
+(* A device is caught up when it has read this history and is not behind    *)
+(* it. Both halves are needed once the server can lose what it had.         *)
+(*                                                                          *)
+(* `deviceEpoch[d] = epoch` excuses a device between the loss and its next  *)
+(* read. It is holding a stale world at that moment and no protocol can     *)
+(* prevent that: nothing reached it. What it is owed is that its next read  *)
+(* tells it, which is what the invariant then demands.                      *)
+(*                                                                          *)
+(* `>=` rather than `=` because a cursor above the head is not a device     *)
+(* that is behind. It is one asking for records after a point the server    *)
+(* will never reach, which is the same silence as being level and exactly   *)
+(* as final.                                                                *)
+(***************************************************************************)
+CaughtUp(d) == deviceEpoch[d] = epoch /\ cursor[d] >= serverSeq /\ ~resyncing[d]
 
 Settled(d, r) == ~Holds(d, r)
 

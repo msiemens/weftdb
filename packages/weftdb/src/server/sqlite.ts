@@ -202,19 +202,24 @@ ON CONFLICT(scope_id, device_id) DO UPDATE SET last_seen = excluded.last_seen`,
       const scope = this.scopes.get(scopeIdValue);
       if (scope) {
         this.executor.run({
-          sql: `INSERT INTO scope_state (scope_id, server_seq, tombstone_floor_seq, schema_hash, schema_version)
-VALUES (?, ?, ?, ?, ?)
+          sql: `INSERT INTO scope_state (scope_id, server_seq, tombstone_floor_seq, schema_hash, schema_version, epoch)
+VALUES (?, ?, ?, ?, ?, ?)
 ON CONFLICT(scope_id) DO UPDATE SET
   server_seq = excluded.server_seq,
   tombstone_floor_seq = excluded.tombstone_floor_seq,
   schema_hash = excluded.schema_hash,
-  schema_version = excluded.schema_version`,
+  schema_version = excluded.schema_version,
+  epoch = excluded.epoch`,
           parameters: [
             scopeIdValue,
             scope.serverSeq,
             scope.tombstoneFloorSeq,
             scope.schemaHash ?? null,
             scope.schemaVersion ?? null,
+            // Stored, so a server that comes back with its records comes back with the epoch they
+            // were counted in. Minting a new one here would tell every device to resync after an
+            // ordinary restart, and the epoch would stop meaning what it is read as meaning.
+            scope.epoch,
           ],
         });
       }
@@ -224,7 +229,7 @@ ON CONFLICT(scope_id) DO UPDATE SET
 
 function scopeStatement() {
   return {
-    sql: "SELECT scope_id, server_seq, tombstone_floor_seq, schema_hash, schema_version FROM scope_state",
+    sql: "SELECT scope_id, server_seq, tombstone_floor_seq, schema_hash, schema_version, epoch FROM scope_state",
     parameters: [],
     decode: decodeScope,
   };
@@ -260,6 +265,7 @@ function decodeScope(row: SqlRow): ScopeState & { readonly scopeId: ScopeId } {
     scopeId: scopeId(requiredString(column(row, "scope_id"))),
     serverSeq: requiredNumber(column(row, "server_seq")),
     tombstoneFloorSeq: requiredNumber(column(row, "tombstone_floor_seq")),
+    epoch: requiredString(column(row, "epoch")),
     ...(hash === null ? {} : { schemaHash: schemaHashValue(hash) }),
     ...(column(row, "schema_version") === null ? {} : { schemaVersion: requiredNumber(column(row, "schema_version")) }),
   };

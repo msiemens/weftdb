@@ -137,7 +137,12 @@ test("field writes do not resurrect tombstoned rows", async () => {
 });
 
 test("schema versions only roll forward", async () => {
-  const server = new WeftServer(() => 1_000);
+  // A named epoch, so the handshake's whole answer stays assertable.
+  const server = new WeftServer(
+    () => 1_000,
+    undefined,
+    () => "epoch-1",
+  );
   assert.deepEqual(
     server.handshake({
       scopeId: scope,
@@ -146,7 +151,7 @@ test("schema versions only roll forward", async () => {
       schemaVersion: 1,
       lastServerSeq: 0,
     }),
-    { ok: true },
+    { ok: true, epoch: "epoch-1" },
   );
   assert.deepEqual(
     server.handshake({
@@ -159,6 +164,7 @@ test("schema versions only roll forward", async () => {
     {
       ok: false,
       reason: "schema_mismatch",
+      epoch: "epoch-1",
     },
   );
   assert.deepEqual(
@@ -169,7 +175,7 @@ test("schema versions only roll forward", async () => {
       schemaVersion: 2,
       lastServerSeq: 0,
     }),
-    { ok: true },
+    { ok: true, epoch: "epoch-1" },
   );
 });
 

@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS scope_state (
   server_seq INTEGER NOT NULL,
   tombstone_floor_seq INTEGER NOT NULL,
   schema_hash TEXT,
-  schema_version INTEGER
+  schema_version INTEGER,
+  epoch TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS devices (

@@ -93,6 +93,7 @@ export class SqliteClientStore {
     if (syncState !== undefined) {
       client.lastServerSeq = syncState.lastServerSeq;
       client.resyncRequired = syncState.resyncRequired;
+      client.serverEpoch = syncState.serverEpoch;
       // The clock has to come back above everything this device has already written, or the
       // first edit after a reload carries a stamp below work that is still in the outbox and
       // loses the comparison against it — an edit the person made and the field never took.
@@ -128,12 +129,13 @@ export class SqliteClientStore {
         for (const op of client.outbox) await this.saveOutbox(tx, op);
         for (const op of client.quarantine) await this.saveQuarantine(tx, op);
         await tx.run({
-          sql: `INSERT INTO sync_state (scope_id, last_server_seq, hlc_last, resync_required)
-VALUES (?, ?, ?, ?)
+          sql: `INSERT INTO sync_state (scope_id, last_server_seq, hlc_last, resync_required, server_epoch)
+VALUES (?, ?, ?, ?, ?)
 ON CONFLICT(scope_id) DO UPDATE SET
   last_server_seq = excluded.last_server_seq,
   hlc_last = excluded.hlc_last,
-  resync_required = excluded.resync_required`,
+  resync_required = excluded.resync_required,
+  server_epoch = excluded.server_epoch`,
           parameters: [
             client.scopeId,
             client.lastServerSeq,
@@ -142,6 +144,10 @@ ON CONFLICT(scope_id) DO UPDATE SET
             // discovered it. Losing it on restart leaves the client pulling incrementally from a
             // point the relay has already purged, which is the state the flag exists to leave.
             client.resyncRequired ? 1 : 0,
+            // Kept beside the cursor it qualifies. A cursor that comes back without its epoch is a
+            // number this device cannot say the meaning of, and the first pull after a restart
+            // would take it as counted in whatever history the server holds now.
+            client.serverEpoch ?? null,
           ],
         });
       });
@@ -329,18 +335,21 @@ interface SyncStateRow {
   readonly lastServerSeq: number;
   readonly hlcLast: HlcString | null;
   readonly resyncRequired: boolean;
+  readonly serverEpoch: string | undefined;
 }
 
 function syncStateStatement(scopeIdValue: ScopeId) {
   return {
-    sql: "SELECT last_server_seq, hlc_last, resync_required FROM sync_state WHERE scope_id = ?",
+    sql: "SELECT last_server_seq, hlc_last, resync_required, server_epoch FROM sync_state WHERE scope_id = ?",
     parameters: [scopeIdValue],
     decode: (row: SqlRow): SyncStateRow => {
       const hlcLast = column(row, "hlc_last");
+      const serverEpoch = column(row, "server_epoch");
       return {
         lastServerSeq: requiredNumber(column(row, "last_server_seq")),
         hlcLast: typeof hlcLast === "string" && isHlcString(hlcLast) ? hlcLast : null,
         resyncRequired: requiredNumber(column(row, "resync_required")) !== 0,
+        serverEpoch: typeof serverEpoch === "string" ? serverEpoch : undefined,
       };
     },
   };

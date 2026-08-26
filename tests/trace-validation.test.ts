@@ -381,11 +381,11 @@ EXTENDS Naturals, Sequences, TLC
 
 \\* The individual model values are constants so the trace can name them; the sets below are
 \\* what the specification is instantiated with.
-CONSTANTS Devices, Rows, MaxSeq, PullChecksFloor, FloorRisesFirst, AckReportsSupersession,
-          d1, d2, r1, r2
+CONSTANTS Devices, Rows, MaxSeq, MaxEpoch, PullChecksFloor, FloorRisesFirst,
+          AckReportsSupersession, HandshakeChecksEpoch, d1, d2, r1, r2
 
-VARIABLES serverState, serverRowSeq, serverSeq, floor, purging, purgeSeq,
-          cursor, view, outbox, quarantined, resyncing, fieldSeq, superseded, index
+VARIABLES serverState, serverRowSeq, serverSeq, epoch, floor, purging, purgeSeq,
+          cursor, deviceEpoch, view, outbox, quarantined, resyncing, fieldSeq, superseded, index
 
 Sync == INSTANCE WeftSync
 
@@ -429,6 +429,11 @@ TraceInit ==
     \\* field half of the specification is checked against a real trace for nothing extra.
     /\\ fieldSeq = [r \\in Rows |-> 0]
     /\\ superseded = [d \\in Devices |-> [r \\in Rows |-> FALSE]]
+    \\* The recorder drives one server that keeps everything it is given, so the trace never
+    \\* reaches a lost history. Both are pinned rather than recorded: MaxEpoch is 1, so the
+    \\* epoch cannot move, and a device adopts it on its first push or pull.
+    /\\ epoch = 1
+    /\\ deviceEpoch = [d \\in Devices |-> 0]
     /\\ Matches(Trace[1])
 
 TraceNext ==
@@ -437,8 +442,9 @@ TraceNext ==
     /\\ MatchesNext(Trace[index + 1])
     /\\ Sync!Next
 
-TraceSpec == TraceInit /\\ [][TraceNext]_<<serverState, serverRowSeq, serverSeq, floor,
-    purging, purgeSeq, cursor, view, outbox, quarantined, resyncing, fieldSeq, superseded, index>>
+TraceSpec == TraceInit /\\ [][TraceNext]_<<serverState, serverRowSeq, serverSeq, epoch, floor,
+    purging, purgeSeq, cursor, deviceEpoch, view, outbox, quarantined, resyncing, fieldSeq,
+    superseded, index>>
 
 \\* Every recorded state must satisfy the specification's own invariants.
 TraceTypeOK == Sync!TypeOK
@@ -460,9 +466,11 @@ CONSTANTS
     Devices = {d1, d2}
     Rows = {r1, r2}
     MaxSeq = 60
+    MaxEpoch = 1
     PullChecksFloor = TRUE
     FloorRisesFirst = TRUE
     AckReportsSupersession = TRUE
+    HandshakeChecksEpoch = TRUE
 
 INVARIANT TraceTypeOK
 INVARIANT TraceConsistent

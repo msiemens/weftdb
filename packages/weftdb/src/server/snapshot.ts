@@ -19,6 +19,7 @@ export type SnapshotLine =
   | {
       readonly type: "header";
       readonly serverSeq: number;
+      readonly epoch: string;
       readonly tombstoneFloorSeq: number;
       readonly schemaHash: string | null;
     }
@@ -121,6 +122,7 @@ export function snapshotFromNdjson(body: string): Snapshot {
   if (header === undefined) throw new Error("a snapshot arrived with no header line");
   return {
     serverSeq: header.serverSeq,
+    epoch: header.epoch,
     tombstoneFloorSeq: header.tombstoneFloorSeq,
     ...(typeof header.schemaHash === "string" ? { schemaHash: schemaHashValue(header.schemaHash) } : {}),
     fields,
@@ -132,9 +134,15 @@ function readHeader(entry: { readonly [key: string]: unknown }): Extract<Snapsho
   const schemaHash = entry["schemaHash"];
   if (schemaHash !== null && typeof schemaHash !== "string")
     throw new Error("a snapshot header has an invalid schemaHash");
+  const epoch = entry["epoch"];
+  // Checked here with everything else the header carries. A snapshot replaces the device's whole
+  // dataset, and an epoch that arrived as anything but a string would be stored beside the cursor
+  // it qualifies and compared against the next one, so a bad value silently disables the check.
+  if (typeof epoch !== "string" || epoch.length === 0) throw new Error("a snapshot header has an invalid epoch");
   return {
     type: "header",
     serverSeq: snapshotSeq(entry["serverSeq"], "serverSeq"),
+    epoch,
     tombstoneFloorSeq: snapshotSeq(entry["tombstoneFloorSeq"], "tombstoneFloorSeq"),
     schemaHash,
   };
@@ -234,6 +242,7 @@ export function snapshotLines(snapshot: Snapshot): SnapshotLine[] {
     {
       type: "header",
       serverSeq: snapshot.serverSeq,
+      epoch: snapshot.epoch,
       tombstoneFloorSeq: snapshot.tombstoneFloorSeq,
       schemaHash: snapshot.schemaHash ?? null,
     },

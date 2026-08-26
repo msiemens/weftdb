@@ -384,6 +384,8 @@ class Bridge {
     const hlc = encodeHlc({ wallMs: 1_000, counter: 0, deviceId: deviceId("device-elsewhere") });
     await client.applyPull({
       serverSeq: 1,
+      // The client has never handshaked here, so it holds no epoch to compare this against.
+      epoch: "epoch-elsewhere",
       tombstoneFloorSeq: 0,
       rows: [
         {

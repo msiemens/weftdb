@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS sync_state (
   scope_id TEXT PRIMARY KEY,
   last_server_seq INTEGER NOT NULL DEFAULT 0,
   hlc_last TEXT,
-  resync_required INTEGER NOT NULL DEFAULT 0
+  resync_required INTEGER NOT NULL DEFAULT 0,
+  server_epoch TEXT
 );
 
 CREATE TABLE IF NOT EXISTS "projects" (

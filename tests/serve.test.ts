@@ -272,7 +272,11 @@ test("the HTTP relay serves the protocol end to end", async (t) => {
     body: JSON.stringify({ scopeId: "scope-1", schemaHash: "hash", schemaVersion: 1, lastServerSeq: 0 }),
   });
   assert.equal(handshake.status, 200);
-  assert.deepEqual(await handshake.json(), { ok: true });
+  // The epoch is minted per scope, so what this asserts is that the surface carries one and that
+  // the handshake was accepted.
+  const accepted = (await handshake.json()) as { ok: boolean; epoch: string };
+  assert.equal(accepted.ok, true);
+  assert.equal(typeof accepted.epoch, "string");
 
   const push = await fetch(`${relay.url}/push`, {
     method: "POST",

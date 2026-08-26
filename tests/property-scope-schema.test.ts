@@ -354,7 +354,11 @@ test("§9.45 an equal version with a different hash always fails and adopts neit
     fc.asyncProperty(fc.integer({ min: 1, max: 6 }), labelArb, labelArb, async (version, established, divergent) => {
       fc.pre(established !== divergent);
       const scope = scopeId("hashes");
-      const server = new WeftServer(() => BASE_TIME);
+      const server = new WeftServer(
+        () => BASE_TIME,
+        undefined,
+        () => "epoch-1",
+      );
       const establishedHash = schemaHashValue(established);
 
       assert.deepEqual(
@@ -365,7 +369,7 @@ test("§9.45 an equal version with a different hash always fails and adopts neit
           schemaVersion: version,
           lastServerSeq: 0,
         }),
-        { ok: true },
+        { ok: true, epoch: "epoch-1" },
       );
       assert.deepEqual(
         server.handshake({
@@ -375,7 +379,7 @@ test("§9.45 an equal version with a different hash always fails and adopts neit
           schemaVersion: version,
           lastServerSeq: 0,
         }),
-        { ok: false, reason: "schema_mismatch" },
+        { ok: false, reason: "schema_mismatch", epoch: "epoch-1" },
       );
       assert.equal(server.scopes.get(scope)?.schemaHash, establishedHash, "the scope adopted a divergent hash");
       assert.equal(server.scopes.get(scope)?.schemaVersion, version);

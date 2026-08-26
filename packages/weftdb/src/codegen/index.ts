@@ -167,7 +167,8 @@ export function generateClientDdl(schema: SchemaDefinition): string {
   scope_id TEXT PRIMARY KEY,
   last_server_seq INTEGER NOT NULL DEFAULT 0,
   hlc_last TEXT,
-  resync_required INTEGER NOT NULL DEFAULT 0
+  resync_required INTEGER NOT NULL DEFAULT 0,
+  server_epoch TEXT
 );`,
   ];
 
@@ -209,7 +210,8 @@ CREATE TABLE IF NOT EXISTS scope_state (
   server_seq INTEGER NOT NULL,
   tombstone_floor_seq INTEGER NOT NULL,
   schema_hash TEXT,
-  schema_version INTEGER
+  schema_version INTEGER,
+  epoch TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS devices (

@@ -77,6 +77,11 @@ export class WeftClient {
   readonly outboxAttempts = new Map<string, number>();
   readonly quarantine: QuarantinedOp[] = [];
   lastServerSeq = 0;
+  /**
+   * Which run of the scope's history `lastServerSeq` was counted in, as the server named it.
+   * Undefined until the first handshake answers.
+   */
+  serverEpoch: string | undefined;
   /** Set when an incremental pull could not cover the gap; cleared by a snapshot. */
   resyncRequired = false;
   /** Attached by a store; every state change is written through to it. */
@@ -342,11 +347,15 @@ export class WeftClient {
       schemaHash,
       schemaVersion: this.schema.schemaVersion,
       lastServerSeq: this.lastServerSeq,
+      ...(this.serverEpoch === undefined ? {} : { epoch: this.serverEpoch }),
     };
   }
 
   private handshakeOutcome(response: HandshakeResponse): "abort" | "resync" | "continue" {
-    if (response.ok) return "continue";
+    if (response.ok) {
+      this.serverEpoch = response.epoch;
+      return "continue";
+    }
     // A schema the server will not accept is not something syncing harder can fix; pushing
     // anyway would only collect rejections.
     if (response.reason === "schema_mismatch") return "abort";
@@ -393,6 +402,15 @@ export class WeftClient {
   }
 
   async applyPull(batch: PullBatch): Promise<void> {
+    // A batch counted in another epoch describes a history this device has never held, and its
+    // sequence numbers name records that have nothing to do with the ones behind this cursor.
+    // The socket delivers batches without a handshake in front of them, so this is where that is
+    // caught on the path the handshake does not cover.
+    if (this.serverEpoch !== undefined && batch.epoch !== this.serverEpoch) {
+      this.resyncRequired = true;
+      await this.persist();
+      return;
+    }
     if (batch.tombstoneFloorSeq > this.lastServerSeq) {
       // Whatever this client missed below the floor has been hard-purged, so no incremental
       // batch can describe it. Advancing the cursor here would strand purged rows locally
@@ -418,6 +436,12 @@ export class WeftClient {
       }
     }
     this.applyBatch(snapshot);
+    // The cursor is adopted outright. A snapshot describes the whole scope as the server holds it
+    // now, so a cursor above the snapshot's head belongs to a history this server no longer has,
+    // and keeping the higher of the two would leave the device asking for records after a point
+    // that will never be reached again.
+    this.lastServerSeq = snapshot.serverSeq;
+    this.serverEpoch = snapshot.epoch;
     this.resyncRequired = false;
     await this.persist();
   }
