@@ -567,9 +567,18 @@ function assertDistinctRelationshipNames(schema: SchemaDefinition): void {
   }
 }
 
+/**
+ * The joiner each declared relationship implies: a function that indexes the target rows once and
+ * returns a lookup over that index.
+ *
+ * The rows are the caller's. The client already holds them, so nothing here queries and nothing
+ * here reaches for a source. Indexing on the way in is what the descriptor alone could not give:
+ * a list that filters the targets once per parent row is O(n*m), and every application that wrote
+ * its own joiner had to know that before it wrote it.
+ */
 export function generateRelationshipHelpers(schema: SchemaDefinition): string {
   assertDistinctRelationshipNames(schema);
-  let namesDatabase = false;
+  let joinsMany = false;
   const helpers = Object.entries(schema.collections)
     .flatMap(([tableName, collection]) =>
       Object.entries(collection.relationships).map(([relationshipName, relationship]) => {
@@ -579,30 +588,103 @@ export function generateRelationshipHelpers(schema: SchemaDefinition): string {
         // warns about and generation tolerates; `Database["absent"]` would be an error rather
         // than a warning, so that one stays `unknown`.
         const target = schema.collections[relationship.table];
-        if (target !== undefined) namesDatabase = true;
         const row = target === undefined ? "unknown" : `Database[${JSON.stringify(relationship.table)}]`;
-        // `readonly` is a type modifier for arrays and tuples only; a nullable single result is
-        // just a union, and writing `readonly unknown | null` does not compile.
-        const result = relationship.many ? `readonly ${row}[]` : `${row} | null`;
+        const helper = `${tableName}_${relationshipName}Relation`;
+        const result = typeName(`${tableName}_${relationshipName}`, "Result");
+        // Bound rather than fixed, so a caller may hold a row of its own that carries the joined
+        // field and get that row back. An application decorates what a hook returned — a dirty
+        // flag, a nested author — and a parameter fixed to the generated row would either refuse
+        // the decorated row or hand back the bare one.
+        const targetBound = joinedFieldType(schema, relationship.table, relationship.foreignField);
+        const sourceBound = joinedFieldType(schema, tableName, relationship.localField);
+        const foreign = JSON.stringify(relationship.foreignField);
+        const local = JSON.stringify(relationship.localField);
+        const signature = [
+          `export function ${helper}<Target extends ${targetBound}>(`,
+          "  targets: readonly Target[],",
+          `): (source: ${sourceBound}) => ${result}<Target> {`,
+        ];
+        if (!relationship.many) {
+          return [
+            `/** The \`${relationship.table}\` row \`${tableName}.${relationshipName}\` joins to, or none this device holds. */`,
+            `export type ${result}<Target = ${row}> = Target | undefined;`,
+            "",
+            `/**`,
+            ` * \`${tableName}.${relationshipName}\`, over rows the caller already holds.`,
+            ` *`,
+            ` * The targets are indexed on \`${relationship.foreignField}\` here, once; the function this returns`,
+            ` * answers a source row from that index, so a list costs one pass over the targets rather than one`,
+            ` * pass per row. A row may point at a target this device has not synced, which is what \`undefined\` is.`,
+            ` */`,
+            ...signature,
+            "  const index = new Map<string, Target>();",
+            "  for (const target of targets) {",
+            `    const key = String(target[${foreign}]);`,
+            // First wins, so a duplicate on the far side of a `hasOne` reads the same way twice.
+            "    if (!index.has(key)) index.set(key, target);",
+            "  }",
+            `  return (source) => index.get(String(source[${local}]));`,
+            "}",
+          ].join("\n");
+        }
+        joinsMany = true;
         return [
-          `export function ${tableName}_${relationshipName}Relation() {`,
-          "  return {",
-          `    sourceTable: ${JSON.stringify(tableName)},`,
-          `    targetTable: ${JSON.stringify(relationship.table)},`,
-          `    localField: ${JSON.stringify(relationship.localField)},`,
-          `    foreignField: ${JSON.stringify(relationship.foreignField)},`,
-          `    many: ${relationship.many},`,
-          `  } satisfies { readonly sourceTable: string; readonly targetTable: string; readonly localField: string; readonly foreignField: string; readonly many: boolean };`,
+          `/** The \`${relationship.table}\` rows \`${tableName}.${relationshipName}\` joins to, in the order given. */`,
+          `export type ${result}<Target = ${row}> = readonly Target[];`,
+          "",
+          `/**`,
+          ` * \`${tableName}.${relationshipName}\`, over rows the caller already holds.`,
+          ` *`,
+          ` * The targets are indexed on \`${relationship.foreignField}\` here, once; the function this returns`,
+          ` * answers a source row from that index, so a list costs one pass over the targets rather than one`,
+          ` * pass per row. A source row with nothing on the far side gets the same empty list every time.`,
+          ` */`,
+          ...signature,
+          "  const index = new Map<string, Target[]>();",
+          "  for (const target of targets) {",
+          `    const key = String(target[${foreign}]);`,
+          "    const bucket = index.get(key);",
+          "    if (bucket === undefined) index.set(key, [target]);",
+          "    else bucket.push(target);",
+          "  }",
+          `  return (source) => index.get(String(source[${local}])) ?? weftNoRows;`,
           "}",
-          `export type ${typeName(`${tableName}_${relationshipName}`, "Result")} = ${result};`,
         ].join("\n");
       }),
     )
     .join("\n\n");
   if (helpers.length === 0) return "export {};\n";
+  const header: string[] = [];
   // The same `Database` the bindings import, and from the same place: `weft generate` writes both
-  // files into one directory.
-  return namesDatabase ? `import type { Database } from "./database.d.ts";\n\n${helpers}\n` : `${helpers}\n`;
+  // files into one directory. Whether it is named at all is read off what was emitted, because
+  // each relationship can reach for it from the result type and from either side of the join.
+  if (helpers.includes("Database[")) header.push('import type { Database } from "./database.d.ts";', "");
+  if (joinsMany) {
+    header.push(
+      "// One array for every miss in the file. A fresh `[]` per lookup is a new identity per render,",
+      "// which is what a memoised child compares against.",
+      "const weftNoRows: readonly never[] = [];",
+      "",
+    );
+  }
+  return `${header.join("\n")}${header.length === 0 ? "" : "\n"}${helpers}\n`;
+}
+
+/**
+ * What one side of a join has to carry for the accessor to read its key: the generated row type,
+ * narrowed to the single field the relationship names.
+ *
+ * A field the collection does not declare has no such type — reachable only through a
+ * `SchemaDefinition` that never passed `defineSchema`, the same way an unresolvable target table
+ * is — and `Pick` of a name that is not a key would be an error rather than the warning
+ * `weft doctor` gives it.
+ */
+function joinedFieldType(schema: SchemaDefinition, table: string, field: string): string {
+  const collection = schema.collections[table];
+  if (collection === undefined || !Object.hasOwn(collection.fields, field)) {
+    return "Readonly<Record<string, unknown>>";
+  }
+  return `Pick<Database[${JSON.stringify(table)}], ${JSON.stringify(field)}>`;
 }
 
 export function generateNestedMappers(schema: SchemaDefinition): string {

@@ -1,45 +1,93 @@
 import type { Database } from "./database.d.ts";
 
-export function projects_issuesRelation() {
-  return {
-    sourceTable: "projects",
-    targetTable: "issues",
-    localField: "id",
-    foreignField: "project_id",
-    many: true,
-  } satisfies { readonly sourceTable: string; readonly targetTable: string; readonly localField: string; readonly foreignField: string; readonly many: boolean };
-}
-export type ProjectsIssuesResult = readonly Database["issues"][];
+// One array for every miss in the file. A fresh `[]` per lookup is a new identity per render,
+// which is what a memoised child compares against.
+const weftNoRows: readonly never[] = [];
 
-export function issues_projectRelation() {
-  return {
-    sourceTable: "issues",
-    targetTable: "projects",
-    localField: "project_id",
-    foreignField: "id",
-    many: false,
-  } satisfies { readonly sourceTable: string; readonly targetTable: string; readonly localField: string; readonly foreignField: string; readonly many: boolean };
-}
-export type IssuesProjectResult = Database["projects"] | null;
+/** The `issues` rows `projects.issues` joins to, in the order given. */
+export type ProjectsIssuesResult<Target = Database["issues"]> = readonly Target[];
 
-export function issues_commentsRelation() {
-  return {
-    sourceTable: "issues",
-    targetTable: "comments",
-    localField: "id",
-    foreignField: "issue_id",
-    many: true,
-  } satisfies { readonly sourceTable: string; readonly targetTable: string; readonly localField: string; readonly foreignField: string; readonly many: boolean };
+/**
+ * `projects.issues`, over rows the caller already holds.
+ *
+ * The targets are indexed on `project_id` here, once; the function this returns
+ * answers a source row from that index, so a list costs one pass over the targets rather than one
+ * pass per row. A source row with nothing on the far side gets the same empty list every time.
+ */
+export function projects_issuesRelation<Target extends Pick<Database["issues"], "project_id">>(
+  targets: readonly Target[],
+): (source: Pick<Database["projects"], "id">) => ProjectsIssuesResult<Target> {
+  const index = new Map<string, Target[]>();
+  for (const target of targets) {
+    const key = String(target["project_id"]);
+    const bucket = index.get(key);
+    if (bucket === undefined) index.set(key, [target]);
+    else bucket.push(target);
+  }
+  return (source) => index.get(String(source["id"])) ?? weftNoRows;
 }
-export type IssuesCommentsResult = readonly Database["comments"][];
 
-export function comments_issueRelation() {
-  return {
-    sourceTable: "comments",
-    targetTable: "issues",
-    localField: "issue_id",
-    foreignField: "id",
-    many: false,
-  } satisfies { readonly sourceTable: string; readonly targetTable: string; readonly localField: string; readonly foreignField: string; readonly many: boolean };
+/** The `projects` row `issues.project` joins to, or none this device holds. */
+export type IssuesProjectResult<Target = Database["projects"]> = Target | undefined;
+
+/**
+ * `issues.project`, over rows the caller already holds.
+ *
+ * The targets are indexed on `id` here, once; the function this returns
+ * answers a source row from that index, so a list costs one pass over the targets rather than one
+ * pass per row. A row may point at a target this device has not synced, which is what `undefined` is.
+ */
+export function issues_projectRelation<Target extends Pick<Database["projects"], "id">>(
+  targets: readonly Target[],
+): (source: Pick<Database["issues"], "project_id">) => IssuesProjectResult<Target> {
+  const index = new Map<string, Target>();
+  for (const target of targets) {
+    const key = String(target["id"]);
+    if (!index.has(key)) index.set(key, target);
+  }
+  return (source) => index.get(String(source["project_id"]));
 }
-export type CommentsIssueResult = Database["issues"] | null;
+
+/** The `comments` rows `issues.comments` joins to, in the order given. */
+export type IssuesCommentsResult<Target = Database["comments"]> = readonly Target[];
+
+/**
+ * `issues.comments`, over rows the caller already holds.
+ *
+ * The targets are indexed on `issue_id` here, once; the function this returns
+ * answers a source row from that index, so a list costs one pass over the targets rather than one
+ * pass per row. A source row with nothing on the far side gets the same empty list every time.
+ */
+export function issues_commentsRelation<Target extends Pick<Database["comments"], "issue_id">>(
+  targets: readonly Target[],
+): (source: Pick<Database["issues"], "id">) => IssuesCommentsResult<Target> {
+  const index = new Map<string, Target[]>();
+  for (const target of targets) {
+    const key = String(target["issue_id"]);
+    const bucket = index.get(key);
+    if (bucket === undefined) index.set(key, [target]);
+    else bucket.push(target);
+  }
+  return (source) => index.get(String(source["id"])) ?? weftNoRows;
+}
+
+/** The `issues` row `comments.issue` joins to, or none this device holds. */
+export type CommentsIssueResult<Target = Database["issues"]> = Target | undefined;
+
+/**
+ * `comments.issue`, over rows the caller already holds.
+ *
+ * The targets are indexed on `id` here, once; the function this returns
+ * answers a source row from that index, so a list costs one pass over the targets rather than one
+ * pass per row. A row may point at a target this device has not synced, which is what `undefined` is.
+ */
+export function comments_issueRelation<Target extends Pick<Database["issues"], "id">>(
+  targets: readonly Target[],
+): (source: Pick<Database["comments"], "issue_id">) => CommentsIssueResult<Target> {
+  const index = new Map<string, Target>();
+  for (const target of targets) {
+    const key = String(target["id"]);
+    if (!index.has(key)) index.set(key, target);
+  }
+  return (source) => index.get(String(source["issue_id"]));
+}

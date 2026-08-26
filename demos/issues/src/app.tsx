@@ -25,7 +25,6 @@ import {
   newProjectId,
   nextStatus,
   projects_issuesRelation,
-  Related,
   useComments,
   useIssues,
   useProjects,
@@ -36,15 +35,34 @@ import {
   type StoreStatus,
 } from "./store.ts";
 
-/** Every join the page makes, resolved once per render from the rows the hooks return. */
-interface Joins {
+/**
+ * Every join the page makes, built once per render from the rows the hooks return.
+ *
+ * Each accessor comes from `weft generate`: it indexes the rows it is given and hands back a
+ * lookup, so the rail's counts and the list's project tags are a lookup per row rather than a
+ * scan per row. The generated signatures carry the target row type through, which is why
+ * `issuesOfProject` yields `IssueView` and not the bare `IssuesRow` the schema describes.
+ */
+function joinsOver(
+  projects: readonly ProjectView[],
+  issues: readonly IssueView[],
+  comments: readonly CommentView[],
+): {
   /** `issues.project`, a `hasOne`. */
-  readonly projectOfIssue: Related<ProjectView>;
+  readonly projectOfIssue: (issue: IssueView) => ProjectView | undefined;
   /** `issues.comments`, a `hasMany`. */
-  readonly commentsOfIssue: Related<CommentView>;
+  readonly commentsOfIssue: (issue: IssueView) => readonly CommentView[];
   /** `projects.issues`, a `hasMany`. */
-  readonly issuesOfProject: Related<IssueView>;
+  readonly issuesOfProject: (project: ProjectView) => readonly IssueView[];
+} {
+  return {
+    projectOfIssue: issues_projectRelation(projects),
+    commentsOfIssue: issues_commentsRelation(comments),
+    issuesOfProject: projects_issuesRelation(issues),
+  };
 }
+
+type Joins = ReturnType<typeof joinsOver>;
 
 export function App({ store }: { readonly store: IssueStore }): ReactNode {
   useEffect(() => store.start(), [store]);
@@ -56,19 +74,15 @@ export function App({ store }: { readonly store: IssueStore }): ReactNode {
   const comments = useComments(store.source, "rank").map((row) => store.commentView(row));
   const status = useStatus(store);
 
-  // The descriptors carry both sides of each join, so nothing below names a foreign key.
-  const joins: Joins = {
-    projectOfIssue: new Related(issues_projectRelation(), projects),
-    commentsOfIssue: new Related(issues_commentsRelation(), comments),
-    issuesOfProject: new Related(projects_issuesRelation(), issues),
-  };
+  // The accessors carry both sides of each join, so nothing below names a foreign key.
+  const joins = joinsOver(projects, issues, comments);
 
   const [filter, setFilter] = useState<string | undefined>(undefined);
   const [openIssue, setOpenIssue] = useState<string | undefined>(undefined);
   // A project or an issue can be deleted from another tab while it is on screen here, so both
   // selections are checked against the rows that actually arrived rather than trusted.
   const project = projects.find((row) => row.id === filter);
-  const shown = project === undefined ? issues : joins.issuesOfProject.all(project);
+  const shown = project === undefined ? issues : joins.issuesOfProject(project);
   const issue = shown.find((row) => row.id === openIssue);
 
   return (
@@ -246,7 +260,7 @@ function Rail({
               onClick={() => onSelect(project.id)}
             >
               <span className="project-name">{project.name}</span>
-              <span className="count">{joins.issuesOfProject.all(project).length}</span>
+              <span className="count">{joins.issuesOfProject(project).length}</span>
             </button>
             <button
               type="button"
@@ -359,8 +373,8 @@ function IssueRow({
 }): ReactNode {
   // The `hasOne` back to the project, and the `hasMany` forward to the comments. A row can point
   // at a project this device has not synced yet, which is why the name has a fallback.
-  const owner = joins.projectOfIssue.one(issue);
-  const count = joins.commentsOfIssue.all(issue).length;
+  const owner = joins.projectOfIssue(issue);
+  const count = joins.commentsOfIssue(issue).length;
 
   return (
     <li className={open ? "issue open" : "issue"}>
@@ -461,8 +475,8 @@ function Detail({
   const dialog = useRef<HTMLDialogElement>(null);
   const modal = useModal(dialog, onClose);
   const heading = useId();
-  const owner = joins.projectOfIssue.one(issue);
-  const thread = joins.commentsOfIssue.all(issue);
+  const owner = joins.projectOfIssue(issue);
+  const thread = joins.commentsOfIssue(issue);
 
   // It exists only while it is open: the row's control is what decides that, so it opens on mount.
   const { open } = modal;

@@ -22,11 +22,11 @@ The schema declares four relationships:
 | `issues.comments` | `hasMany` | the comment count on each issue row, and the thread in the detail view |
 | `comments.issue`  | `hasOne`  | declared for the reverse lookup; the page does not read it             |
 
-`weft generate` writes one descriptor per relationship into `src/generated/relationships.ts`. A
-descriptor names the table on each side, the field on each side, and whether the far side holds many
-rows. `Related` in `src/store.ts` takes a descriptor and the rows a hook returned, indexes them by
-the field the descriptor names, and answers `all(source)` and `one(source)`. No foreign key is
-written down anywhere in `src/app.tsx`.
+`weft generate` writes one accessor per relationship into `src/generated/relationships.ts`.
+`projects_issuesRelation(issues)` indexes the rows a hook returned by the field the join names and
+returns a lookup, which `src/app.tsx` builds once per render in `joinsOver` and calls per row. No
+foreign key is written down anywhere on the page, and the accessor carries the row type through, so
+a lookup against `IssueView[]` yields `IssueView[]` rather than the bare generated row.
 
 Counts are resolved from rows rather than stored on the row they describe. A comment arriving from
 another device changes the count on the issue row without anything writing to the issue.
@@ -77,8 +77,8 @@ separator marks a nested path. `weft generate` writes `mapCommentsRow` into
 ```
 src/schema.ts      collections, relationships, and merge annotations
 src/generated/     weft generate output: row types, queries, decoders, mutators, hooks,
-                   relationship descriptors, nested mappers
-src/store.ts       what codegen cannot know: sync, connectivity, status, and join resolution
+                   relationship accessors, nested mappers
+src/store.ts       what codegen cannot know: sync, connectivity, and status
 src/app.tsx        the page
 dev.ts             the relay and the page in one process
 ```

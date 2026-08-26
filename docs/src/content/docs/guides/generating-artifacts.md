@@ -48,7 +48,7 @@ version it last synced with. The command above writes:
 | `kysely.d.ts`            | `Database` and `InternalDatabase` typed for Kysely's query builder, with insert and update variance per field                                                                                                   |
 | `mutators.ts`            | a `<Name>Mutation` input interface and a `<Name>Mutators` interface per collection                                                                                                                              |
 | `bindings.ts`            | table name constants, row and field types, query builders, decoders, a `<name>Mutators(client)` factory per collection, a `use<Name>` React hook, and reorder helpers for a collection with a `fracIndex` field |
-| `relationships.ts`       | a `<table>_<relationship>Relation()` function and a `<Table><Relationship>Result` type per relationship the schema declares                                                                                     |
+| `relationships.ts`       | a `<table>_<relationship>Relation(targets)` accessor, which indexes the target rows and returns a lookup over that index, and a `<Table><Relationship>Result` type, per relationship the schema declares        |
 | `nested-mappers.ts`      | a `map<Name>Row()` function that reassembles `__`-separated columns into a nested object, per collection that has any                                                                                           |
 | `schema-hash.txt`        | the schema hash, as plain text                                                                                                                                                                                  |
 

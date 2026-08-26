@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import vm from "node:vm";
 import { test } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import ts from "typescript";
@@ -213,10 +214,161 @@ test("a relationship result is the row type of the collection it names", () => {
   // The schema already says which collection is on the far side, so `unknown` was a fact the
   // generator held and declined to write down — and every application reading a relation result
   // had to assert it back.
-  assert.match(relationships, /export type UsersTasksResult = readonly Database\["tasks"\]\[\];/u);
-  assert.match(relationships, /export type TasksOwnerResult = Database\["users"\] \| null;/u);
+  assert.match(relationships, /export type UsersTasksResult<Target = Database\["tasks"\]> = readonly Target\[\];/u);
+  assert.match(relationships, /export type TasksOwnerResult<Target = Database\["users"\]> = Target \| undefined;/u);
   assert.match(relationships, /^import type \{ Database \} from "\.\/database\.d\.ts";/u);
   assert.deepEqual(typeDiagnostics("relationships.ts", relationships, relationshipSiblings(schema)), []);
+});
+
+/** A parent and a child joined both ways: the smallest schema with a `hasMany` and a `hasOne`. */
+const JOINED = defineSchema({
+  projects: S.collection({ name: S.string() }, { issues: S.hasMany("issues", "id", "project_id") }),
+  issues: S.collection(
+    { project_id: S.string(), title: S.string() },
+    { project: S.hasOne("projects", "project_id", "id") },
+  ),
+});
+
+interface ProjectRow {
+  readonly id: string;
+  readonly name: string;
+}
+
+interface IssueRow {
+  readonly id: string;
+  readonly project_id: string;
+  readonly title: string;
+}
+
+type IssuesOfProject = (targets: readonly IssueRow[]) => (source: { readonly id: string }) => readonly IssueRow[];
+type ProjectOfIssue = (
+  targets: readonly ProjectRow[],
+) => (source: { readonly project_id: string }) => ProjectRow | undefined;
+
+const PROJECTS: readonly ProjectRow[] = [
+  { id: "p1", name: "Loom firmware" },
+  { id: "p2", name: "Weaving room" },
+];
+
+const ISSUES: readonly IssueRow[] = [
+  { id: "i1", project_id: "p1", title: "Shuttle stalls" },
+  { id: "i2", project_id: "p1", title: "Tension drifts" },
+  { id: "i3", project_id: "p2", title: "Re-thread the beam" },
+];
+
+/**
+ * The generated relationship module, run rather than read.
+ *
+ * `import type` is erased by transpilation, so what is left has no imports and the whole file is
+ * a module body, which the wrapper turns into a function of its own `exports`. The rest of this
+ * suite checks generated text against a compiler; an index that is built once and reused is
+ * behaviour, and text is all a diagnostic can see. Compiled in this context rather than a new
+ * one, so the arrays the module builds have the same `Array.prototype` as the ones asserted
+ * against them.
+ */
+function relationshipModule(schema: SchemaDefinition): Readonly<Record<string, unknown>> {
+  const transpiled = ts.transpileModule(generateRelationshipHelpers(schema), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const body = vm.runInThisContext(`(function (exports) {\n${transpiled}\n})`) as (
+    exports: Record<string, unknown>,
+  ) => void;
+  const exported: Record<string, unknown> = {};
+  body(exported);
+  return exported;
+}
+
+test("a generated accessor relates a parent to its children and a child back to its parent", () => {
+  const generated = relationshipModule(JOINED);
+  const issuesOf = (generated["projects_issuesRelation"] as IssuesOfProject)(ISSUES);
+  const projectOf = (generated["issues_projectRelation"] as ProjectOfIssue)(PROJECTS);
+
+  // Both directions come out of the same declaration, and neither call site names a foreign key:
+  // the join fields are in the generated code, which is the point of declaring the relationship.
+  assert.deepEqual(
+    issuesOf({ id: "p1" }).map((issue) => issue.id),
+    ["i1", "i2"],
+  );
+  assert.deepEqual(
+    issuesOf({ id: "p2" }).map((issue) => issue.id),
+    ["i3"],
+  );
+  assert.equal(projectOf({ project_id: "p1" })?.name, "Loom firmware");
+  assert.equal(projectOf({ project_id: "p2" })?.name, "Weaving room");
+});
+
+test("a parent with no children resolves empty, and a child whose parent is absent resolves to nothing", () => {
+  const generated = relationshipModule(JOINED);
+  const issuesOf = (generated["projects_issuesRelation"] as IssuesOfProject)(ISSUES);
+  const projectOf = (generated["issues_projectRelation"] as ProjectOfIssue)(PROJECTS);
+
+  assert.deepEqual(issuesOf({ id: "p3" }), []);
+  // A row pointing at a target this device has not synced is an ordinary state in a syncing
+  // database, not an error, so the caller decides what to show for it.
+  assert.equal(projectOf({ project_id: "p9" }), undefined);
+  // And the same empty list every time: a fresh `[]` per miss is a new identity per render,
+  // which is what a memoised child compares against.
+  assert.equal(issuesOf({ id: "p3" }), issuesOf({ id: "p4" }));
+});
+
+test("a generated accessor indexes its targets once and answers every lookup from that index", () => {
+  const generated = relationshipModule(JOINED);
+
+  // Each row counts the reads of the field the join is keyed on. Indexing reads it once per row;
+  // filtering the targets per source row reads it once per row per lookup, which turns a list
+  // render from O(n+m) into O(n*m) and is the whole reason the accessor is built separately from
+  // the lookups it answers.
+  let reads = 0;
+  const issues = ISSUES.map((issue) => ({
+    id: issue.id,
+    title: issue.title,
+    get project_id(): string {
+      reads += 1;
+      return issue.project_id;
+    },
+  }));
+
+  const issuesOf = (generated["projects_issuesRelation"] as IssuesOfProject)(issues);
+  assert.equal(reads, issues.length, "the targets were not read once each on the way in");
+
+  for (let round = 0; round < 4; round += 1) {
+    assert.equal(issuesOf({ id: "p1" }).length, 2);
+    assert.equal(issuesOf({ id: "p2" }).length, 1);
+    assert.equal(issuesOf({ id: "p3" }).length, 0);
+  }
+
+  assert.equal(reads, issues.length, "a lookup read the target rows again, so the index is rebuilt per call");
+});
+
+test("an accessor's result is the target row type, so a call site needs no cast", () => {
+  const artifacts = generateArtifacts(JOINED);
+  const siblings = { "relationships.ts": artifacts.relationshipsTs, "database.d.ts": artifacts.databaseDts };
+  const application = (field: string): string =>
+    [
+      'import { issues_projectRelation, projects_issuesRelation } from "./relationships.ts";',
+      'import type { Database } from "./database.d.ts";',
+      "export function titles(project: Database['projects'], issues: readonly Database['issues'][]): readonly string[] {",
+      `  return projects_issuesRelation(issues)(project).map((issue) => issue.${field});`,
+      "}",
+      "export function owner(issue: Database['issues'], projects: readonly Database['projects'][]): string {",
+      "  return issues_projectRelation(projects)(issue)?.name ?? 'none';",
+      "}",
+      // What an application actually holds: the generated row with what only the client knows
+      // added to it. The accessor carries that row through rather than flattening it back.
+      "type IssueView = Database['issues'] & { readonly dirty: boolean };",
+      "export function unsent(project: Database['projects'], issues: readonly IssueView[]): boolean {",
+      "  return projects_issuesRelation(issues)(project).some((issue) => issue.dirty);",
+      "}",
+    ].join("\n");
+
+  assert.deepEqual(typeDiagnostics("application.ts", application("title"), siblings), []);
+  // Not `any` either, which would have swallowed the point: a field the target row does not
+  // declare is still an error at the call site.
+  assert.notDeepEqual(
+    typeDiagnostics("application.ts", application("ttile"), siblings),
+    [],
+    "the accessor's result accepts a field the target row does not have",
+  );
 });
 
 test("a relationship naming a collection the schema does not define stays unknown", () => {
@@ -233,9 +385,13 @@ test("a relationship naming a collection the schema does not define stays unknow
   };
   const relationships = generateRelationshipHelpers(schema);
 
-  assert.match(relationships, /export type TasksOwnerResult = unknown \| null;/u);
-  assert.doesNotMatch(relationships, /import type \{ Database \}/u, "an import nothing uses was emitted");
-  assert.deepEqual(typeDiagnostics("relationships.ts", relationships), []);
+  // The far side has no row type to name, so the accessor is bound by what it actually reads —
+  // a row carrying the joined field — and hands back whatever the caller gave it.
+  assert.match(relationships, /export type TasksOwnerResult<Target = unknown> = Target \| undefined;/u);
+  assert.match(relationships, /<Target extends Readonly<Record<string, unknown>>>/u);
+  // The near side is still this schema's own collection, so the source is typed against it.
+  assert.match(relationships, /source: Pick<Database\["tasks"\], "owner_id">/u);
+  assert.deepEqual(typeDiagnostics("relationships.ts", relationships, relationshipSiblings(schema)), []);
 });
 
 test("relationship helper names are unambiguous after generation", () => {

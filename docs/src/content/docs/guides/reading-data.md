@@ -209,11 +209,32 @@ export const schema = defineSchema({
 });
 ```
 
-`weft generate` writes one helper per declared relationship, named
-`<collection>_<relationship>Relation`, returning the source table, the target table, both fields,
-and whether the relationship is one row or many. The helper returns that description and performs
-no read. Resolve a relationship by reading the target collection with a statement that matches
-`foreignField` against the ids the source rows carry.
+`weft generate` writes one accessor per declared relationship, named
+`<collection>_<relationship>Relation`. It takes the target rows and indexes them on the joining
+field, then returns a function that answers one source row from that index:
+
+```ts title="src/reports.ts"
+import type { Database } from "./generated/database.d.ts";
+import { todos_eventsRelation } from "./generated/relationships.ts";
+
+export function eventCounts(
+  todos: readonly Database["todos"][],
+  events: readonly Database["todo_events"][],
+): readonly number[] {
+  const eventsOfTodo = todos_eventsRelation(events);
+  return todos.map((todo) => eventsOfTodo(todo).length);
+}
+```
+
+The accessor performs no read. Its rows are the caller's, which for a rendered list means the rows
+a hook or a query has already returned. Building it once and calling it per row keeps a list at one
+pass over the targets; filtering the targets inside the loop instead costs a pass per row.
+
+A `hasMany` yields the matching target rows in the order they were given, and the same empty list
+every time nothing matches. A `hasOne` yields the target row, or `undefined` when this device does
+not hold it, which happens whenever a row points at a row that has yet to sync. Both keep the row
+type they were given, so target rows an application has added its own fields to come back with
+those fields intact.
 
 ## Nested records
 

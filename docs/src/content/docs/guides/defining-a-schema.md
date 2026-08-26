@@ -113,9 +113,11 @@ A collection's second argument declares its relationships, built with
 `S.hasMany(table, localField, foreignField)` and `S.hasOne(table, localField, foreignField)`.
 Above, `tasks` declares `events` as `S.hasMany("task_events", "id", "task_id")`, naming the
 related table and the field on each side that joins them. `weft generate` turns that declaration
-into a `tasks_eventsRelation()` helper carrying the target table, the join fields, and whether the
-relation returns one row or many, for the query layer to consume. Reach for a relationship when
-generated queries need to fetch related rows together rather than as separate subscriptions.
+into a `tasks_eventsRelation()` accessor, which indexes the `task_events` rows an application
+already holds and answers one task's events from that index; see
+[Reading data](/guides/reading-data/) for how a view calls it. Declare a relationship wherever a
+view renders rows of one collection against rows of another, so that the join fields are written
+down once, in the schema, rather than at each place that resolves them.
 
 ## Base fields and reserved names
 

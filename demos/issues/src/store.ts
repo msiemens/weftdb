@@ -1,9 +1,8 @@
 // What is left of an application's data layer once the library and codegen have taken their
-// halves. Rows, decoding, mutators, hooks and reordering come from `src/generated`, which
-// `weft generate` writes from the schema; syncing, connectivity and status come from
-// `WeftSession`. What is genuinely this application's is here: which storage it uses, who this
-// tab is, how a row looks once the client's own knowledge is added to it, and how the schema's
-// relationships are resolved against rows the client already holds.
+// halves. Rows, decoding, mutators, hooks, reordering and the relationship accessors come from
+// `src/generated`, which `weft generate` writes from the schema; syncing, connectivity and status
+// come from `WeftSession`. What is genuinely this application's is here: which storage it uses,
+// who this tab is, and how a row looks once the client's own knowledge is added to it.
 import { hasConflictMarkers, rankBetween, rankString, rowId, type RowId, type TableName } from "weftdb/core";
 import {
   connectSocketTransport,
@@ -77,63 +76,6 @@ export const STATUSES: readonly [Status, ...Status[]] = ["open", "started", "clo
 export function nextStatus(status: Status): Status {
   const index = STATUSES.indexOf(status);
   return STATUSES[(index + 1) % STATUSES.length] ?? STATUSES[0];
-}
-
-// --- relationships -------------------------------------------------------------------------
-
-/**
- * A relationship as `weft generate` writes it: the field on each side and whether the far side
- * holds many rows. `src/generated/relationships.ts` has one of these per `S.hasOne` and
- * `S.hasMany` in the schema.
- */
-export interface Relationship {
-  readonly localField: string;
-  readonly foreignField: string;
-  readonly many: boolean;
-}
-
-/**
- * One relationship, with its target rows indexed by the field it joins on.
- *
- * The descriptor carries both field names, so nothing here names a foreign key and the same class
- * serves every relationship in the schema. Build it once per render from the rows the hooks
- * return; the client already holds them, so a join is a lookup rather than a query.
- */
-export class Related<Target extends object> {
-  readonly #relationship: Relationship;
-  readonly #byForeignField = new Map<string, Target[]>();
-
-  constructor(relationship: Relationship, targets: readonly Target[]) {
-    this.#relationship = relationship;
-    for (const target of targets) {
-      const key = field(target, relationship.foreignField);
-      const bucket = this.#byForeignField.get(key);
-      if (bucket === undefined) this.#byForeignField.set(key, [target]);
-      else bucket.push(target);
-    }
-  }
-
-  /** Every row on the far side of a `hasMany`, in the order the target rows arrived. */
-  all(source: object): readonly Target[] {
-    return this.#byForeignField.get(field(source, this.#relationship.localField)) ?? [];
-  }
-
-  /**
-   * The row on the far side of a `hasOne`, or undefined when the client does not hold it yet.
-   * A row can point at a target this device has not synced, so the caller decides what to show.
-   */
-  one(source: object): Target | undefined {
-    if (this.#relationship.many) {
-      throw new Error("one() is for a hasOne relationship; this one is a hasMany");
-    }
-    return this.all(source)[0];
-  }
-}
-
-/** Reads a field a relationship names. The schema fixes the type; the descriptor is strings. */
-function field(row: object, name: string): string {
-  const value = (row as Readonly<Record<string, unknown>>)[name];
-  return typeof value === "string" ? value : String(value);
 }
 
 // --- rows, plus what only the client knows -------------------------------------------------
