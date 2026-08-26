@@ -11,8 +11,14 @@
 // Where it will not — private browsing is the case that matters — the database is opened in memory
 // instead and the page is told which it got, so an application can say that this window will not
 // remember. What is never worked around is a *build* with no pool VFS in it at all: see below.
+//
+// Which pool is the namespace's to decide, and it arrives on this worker's own URL. A pool is held
+// exclusively, so two workers of one origin sharing one is the second of them being refused
+// storage; the namespace is what tells the page's two databases apart, so it is what tells their
+// pools apart too. See `poolNameFor` and `namespaceFromLocation`.
 import { schemaHash, type SchemaDefinition } from "weftdb/schema";
 import type { SqlExecutor } from "weftdb/shared";
+import { DEFAULT_NAMESPACE, WEFT_NAMESPACE_PARAM } from "./database-key.ts";
 import { SqliteClientStore } from "./sqlite.ts";
 import { connectSocketTransport } from "./socket-transport.ts";
 import { httpTransport, type FetchLike } from "./transport.ts";
@@ -64,6 +70,13 @@ export interface ServeWeftWorkerDefaultsOptions {
   readonly port?: WorkerHostPortLike;
   /** The database's name within the pool. */
   readonly path?: string;
+  /**
+   * Which pool of OPFS files to open in.
+   *
+   * Derived from the namespace on this worker's own URL unless it is said here, which is what keeps
+   * two applications of one origin off each other's access handles. A worker an application built
+   * and loaded itself, under a URL nothing wrote a namespace into, is what this is for.
+   */
   readonly poolName?: string;
   readonly initialCapacity?: number;
 }
@@ -130,9 +143,14 @@ export async function serveWeftWorkerDefaults(
  * rethrown and the open is refused.
  *
  * Anything else thrown from installing the pool or opening the file means the function is there and
- * the browser declined — a mode with no OPFS to give, which is what private browsing is. The person
- * asked the browser for a session it would not remember; they get a working database that keeps
- * nothing, and the page is told so.
+ * this worker did not get a pool. Which is as much as can be said from in here, and less than it
+ * looks: a browser with no OPFS to give and a pool another document has not finished giving back
+ * throw the same way. Private browsing is the first, and the person asked for a session that would
+ * not be remembered; they get a working database that keeps nothing and the page is told so. A
+ * successor tab opening a moment ahead of a crashed predecessor's teardown is the second, and it is
+ * the page that tells the two apart, because the page is the only place that knows this device was
+ * reading a durable database a moment ago — see `DatabaseTab.#succeedToWorker`, which throws such a
+ * worker away and asks for another. So what is reported here is what was opened, not why.
  */
 async function openDatabase(
   sqlite3: Sqlite3Module,
@@ -141,7 +159,7 @@ async function openDatabase(
   try {
     const executor = await openWebSqliteExecutor(sqlite3, {
       path: options.path ?? "weft.sqlite3",
-      ...(options.poolName === undefined ? {} : { poolName: options.poolName }),
+      poolName: options.poolName ?? poolNameFor(namespaceFromLocation()),
       ...(options.initialCapacity === undefined ? {} : { initialCapacity: options.initialCapacity }),
     });
     return { executor, durability: "durable" };
@@ -150,6 +168,40 @@ async function openDatabase(
     // `:memory:` needs no OPFS, no VFS install and no access handle, so nothing that just failed can
     // fail again here. It is a real SQLite: every statement the durable path answers, this answers.
     return { executor: openMemorySqliteExecutor(sqlite3), durability: "ephemeral" };
+  }
+}
+
+/**
+ * Which pool of OPFS files this worker opens in, for one namespace.
+ *
+ * The pool rather than the file inside it, because the pool is where the exclusion lives: installing
+ * one takes a synchronous access handle on every file it holds, so a second worker asking for the
+ * same pool is refused it whatever name it meant to open within. Two namespaces in one origin are
+ * two applications and need two pools; two scopes of one namespace share a pool and take a file each
+ * out of it, which is what keeps a device signed into several scopes on one set of reserved files.
+ *
+ * Encoded because a namespace is a string an application chose and this is an OPFS directory name.
+ * `encodeURIComponent` leaves an ordinary name readable, escapes the separator rather than nesting a
+ * directory on it, and cannot map two namespaces onto one pool: it can be decoded back.
+ */
+function poolNameFor(namespace: string): string {
+  return `weft-${encodeURIComponent(namespace)}`;
+}
+
+/**
+ * The namespace `openWeftDatabase` wrote into this worker's URL.
+ *
+ * The default where nothing did, which is a worker an application constructed itself or one a test
+ * drives directly. Such a worker is the only worker of its origin unless the application arranged
+ * otherwise, and where it is not, `poolName` says so outright.
+ */
+function namespaceFromLocation(): string {
+  const href = (globalThis as { location?: { href?: string } }).location?.href;
+  if (href === undefined) return DEFAULT_NAMESPACE;
+  try {
+    return new URL(href).searchParams.get(WEFT_NAMESPACE_PARAM) ?? DEFAULT_NAMESPACE;
+  } catch {
+    return DEFAULT_NAMESPACE;
   }
 }
 

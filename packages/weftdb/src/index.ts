@@ -124,6 +124,7 @@ export {
   serveWeftPortBroker,
   serveWeftWorker,
   visibleChildren,
+  weftDatabaseKey,
   withRequestId,
   WorkerPortTransport,
 } from "weftdb/client";

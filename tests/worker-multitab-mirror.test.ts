@@ -330,8 +330,9 @@ class Tabs {
     const brokered = broker.requestPort();
     const transport = new WorkerPortTransport(brokered.port);
     // The same probe `openWeftDatabase` makes: the handover is not acknowledged, so the only
-    // evidence the port reached the worker is the worker answering something over it.
-    await transport.request({ type: "open", scopeId: SCOPE });
+    // evidence the port reached the worker is the worker answering something over it, and what it
+    // asks is the hydrate it was going to send first anyway.
+    await transport.request({ type: "hydrate", scopeId: SCOPE, deviceId: DEVICE });
     const tab = new GuestTab(
       broker,
       transport,

@@ -36,9 +36,9 @@ import type { ClientPersistence, LocalRow, WeftClient } from "./index.ts";
 import {
   isWeftWorkerConnect,
   type WeftDurability,
-  type WeftWorkerOpened,
   type WireRow,
   type WorkerDelta,
+  type WorkerHydrated,
   type WorkerMessage,
   type WorkerMutation,
   type WorkerRequest,
@@ -103,8 +103,8 @@ export interface WeftWorkerHostOptions {
    * is what OPFS gives and what everything above assumes.
    *
    * The host takes it rather than working it out, for the same reason it takes the executor: nothing
-   * here knows about OPFS. What it does with it is answer `open` — which is the only way a tab that
-   * was handed a port, rather than the tab that created the worker, can ever learn it.
+   * here knows about OPFS. What it does with it is answer every `hydrate` — which is the only way a
+   * tab that was handed a port, rather than the tab that created the worker, can ever learn it.
    */
   readonly durability?: WeftDurability;
 }
@@ -285,12 +285,6 @@ export class WeftWorkerHost {
   /** Answers, or a promise of one: `sync` settles when the sync it ran has finished. */
   #handle(connection: HostConnection, request: WorkerRequest): unknown {
     switch (request.type) {
-      case "open":
-        // The database was opened before this host was constructed — the executor is an option —
-        // so this is an acknowledgement that the worker is up, not an instruction. What it carries
-        // back is what a tab holding only a port cannot find out any other way: the worker's own
-        // announcement went to the tab that created it, and this tab was not that tab.
-        return this.#opened();
       case "close":
         return this.#close();
       case "disconnect":
@@ -315,10 +309,6 @@ export class WeftWorkerHost {
         this.#requireSession().discardQuarantine();
         return null;
     }
-  }
-
-  #opened(): WeftWorkerOpened {
-    return { durability: this.#durability };
   }
 
   /**
@@ -440,7 +430,14 @@ export class WeftWorkerHost {
     return session;
   }
 
-  #hydrate(connection: HostConnection, scopeId: string, deviceId: string): WorkerDelta {
+  /**
+   * Every row of the scope, and what kind of database holds them.
+   *
+   * Answering at all is also what tells a tab that the port it was handed reached a document that is
+   * still there; nothing else on this protocol has to be sent for that, because this is the first
+   * thing a tab sends and it is waiting for the reply regardless.
+   */
+  #hydrate(connection: HostConnection, scopeId: string, deviceId: string): WorkerHydrated {
     const client = this.#store.hydrate(toScopeId(scopeId), toDeviceId(deviceId));
     client.persistence = this.#recorder(client.persistence);
     // A hydrate replaces the client, and a session drives the one it was built with. Ending the
@@ -451,7 +448,7 @@ export class WeftWorkerHost {
     this.#startSession();
     // Every row this scope holds, in the one delta shape a push uses, so the page has a single
     // path for "rows arrived" and `_weft_rev` cannot be carried differently by the two.
-    return this.#delta(connection, [...client.rows.keys()]);
+    return { ...this.#delta(connection, [...client.rows.keys()]), durability: this.#durability };
   }
 
   /**

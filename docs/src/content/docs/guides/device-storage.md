@@ -112,6 +112,10 @@ It opens the OPFS executor, builds the store, installs the schema, serves the pr
 the page whether the database opened. A browser with no access handle pool is reported rather than
 thrown, so the page can fail the open with the reason rather than a stack from a worker.
 
+The pool it opens in is named from the namespace `openWeftDatabase` wrote into this worker's URL, so
+two applications in one origin hold two pools rather than contending for one. `poolName` names the
+pool outright, for a worker an application loads itself.
+
 The same worker assembled by hand, for an application that needs a piece of it:
 
 ```ts title="src/storage-worker.ts"
@@ -140,7 +144,9 @@ the rows it selects are saved into another.
 
 `openWebSqliteExecutor` takes an initialised `sqlite3` module rather than importing one. The caller
 supplies the module, so the library keeps no SQLite runtime dependency of its own, and which build
-ships, or whether one ships at all, stays the application's decision.
+ships, or whether one ships at all, stays the application's decision. Its `poolName` defaults to
+whatever the SQLite build defaults to, so a worker assembled this way names its own pool wherever an
+origin holds more than one database.
 
 A build with no `installOpfsSAHPoolVfs` is refused rather than opened against memory:
 `openWebSqliteExecutor` throws a `WasmSqliteUnavailableError`. Such a build has no durable storage
@@ -178,12 +184,21 @@ Two modules, and each is one import. The storage worker holds the database; the 
 [Reaching the worker from another tab](#reaching-the-worker-from-another-tab).
 
 `weft.source` is a `WeftSource`, so `use<Collection>` and `use<Collection>Query` take it unchanged,
-and it is a `MutationTarget`, so `<collection>Mutators` writes through it. `weft.role` is `leader`
-or `follower`; drive a banner from it, paired with `weft.subscribeRole()`, rather than from a
-request that may not come back. `weft.durability` is `durable` or `ephemeral`; tell a person their
-window will not remember by reading it. `weft.status()` and `weft.subscribeStatus()` report the
+and it is a `MutationTarget`, so `<collection>Mutators` writes through it. `weft.durability` is
+`durable` or `ephemeral`; drive a banner from it, and tell a person their window will not remember.
+It is settled at the open and holds for the session, so there is nothing to subscribe to.
+`weft.role` is `leader` or `follower` and `weft.subscribeRole()` fires on a promotion; both are
+diagnostics, because every tab reaches the worker in one hop whichever part it plays.
+`weft.status()` and `weft.subscribeStatus()` report the
 worker's sync session, `weft.setToken()` hands over a credential or signs out, and `weft.dispose()`
 unwinds everything in the order it was built.
+
+`namespace` says which application in the origin this database belongs to, and defaults to `"weft"`.
+It identifies the database together with `scopeId`. Two calls that agree on both are two tabs of one
+database. Two that differ in either are two databases, even under one `scopeId`: separate elections,
+separate workers, separate device identifiers, and separate OPFS pools.
+[Multi-tab coordination](/concepts/multi-tab/) covers the composed key and how the namespace reaches
+the worker.
 
 The relay's address is not among the options. The worker builds the transport, so the base URL
 belongs there; the token is the exception, because a worker has no `localStorage` to read one from.
@@ -349,7 +364,13 @@ const weft = await openWeftDatabase({
 ```
 
 The broker touches no storage, and the module above is the whole of it. A browser with no
-`SharedWorker` is refused at the open in every tab, with `reason` `"no-broker"`.
+`SharedWorker` is refused at the open in every tab, with `reason` `"no-broker"`. A browser with no
+Web Locks is refused the same way, with `reason` `"no-locks"`: nothing else can decide which tab may
+hold the database.
+
+One broker serves every database the origin has open, so `WeftBrokerClient` takes the namespace as
+its third argument and registers under the namespace and the scope together. A port asked for in one
+namespace reaches no other namespace's provider.
 
 Assembling it by hand is two subscriptions:
 
@@ -387,9 +408,11 @@ await mirror.hydrate();
 ```
 
 The handover is never acknowledged: the broker forwards the port into another document and hears
-nothing back. So ask the worker something over the port and treat an answer as the evidence it
-arrived. `brokered.refused` settles when the broker had no tab to give the port to, which is a tab
-that opened while the winner of the election was still starting its worker.
+nothing back. The `hydrate` above is what proves the port arrived: a reply to it is a document that
+is still there. Its `durability` field is also how a tab handed a port learns what kind of database
+it is reading. `brokered.refused` settles when the broker had no tab to give
+the port to, which is a tab that opened while the winner of the election was still starting its
+worker.
 
 A dedicated worker dies with the document that created it, so when that tab goes, every other tab's
 port breaks. The tab at the head of the lock queue learns of it from the Web Lock, which wakes one

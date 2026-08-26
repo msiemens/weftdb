@@ -23,13 +23,12 @@ export type WorkerMutation =
   | { readonly kind: "delete" | "restore"; readonly tableName: string; readonly rowId: string; readonly txnId: string };
 
 /**
- * What a page can ask for, without the correlation id. `open`, `execute` and `close` drive the
- * database alone; the rest drive the client the worker host owns. Every tab speaks the whole
- * vocabulary, because every tab holds a port straight to the worker — a follower that could only
- * `execute` had no way to drive a mirror.
+ * What a page can ask for, without the correlation id. `execute` and `close` drive the database
+ * alone; the rest drive the client the worker host owns. Every tab speaks the whole vocabulary,
+ * because every tab holds a port straight to the worker — a follower that could only `execute` had
+ * no way to drive a mirror.
  */
 export type WorkerRequestBody =
-  | { readonly type: "open"; readonly scopeId: string }
   | { readonly type: "execute"; readonly query: CompiledQuery }
   | { readonly type: "close" }
   /**
@@ -44,6 +43,14 @@ export type WorkerRequestBody =
    * access handle away from the tabs that are staying.
    */
   | { readonly type: "disconnect" }
+  /**
+   * Every row of a scope, and what kind of database they are in. The first thing any tab sends.
+   *
+   * It doubles as a tab's proof that the port it was handed reached a document that is still there.
+   * The broker forwards a port and hears nothing back, and a registration left by a tab that has
+   * gone is indistinguishable from a live one, so the test is not whether the port was accepted but
+   * whether anything answers over it — and this is the answer a tab needs anyway.
+   */
   | { readonly type: "hydrate"; readonly scopeId: string; readonly deviceId: string }
   | { readonly type: "mutate"; readonly mutation: WorkerMutation }
   | { readonly type: "watch"; readonly cacheKey: string; readonly tableName: string; readonly query: CompiledQuery }
@@ -182,19 +189,20 @@ export type WeftWorkerReady =
   | { readonly weft: "ready"; readonly ok: false; readonly error: string };
 
 /**
- * What an `open` request is answered with.
+ * What a `hydrate` is answered with: the scope's rows, and what kind of database they are in.
  *
- * This is the second path the durability has to travel, and it is not decoration. A follower is
- * never present for the announcement above — it is handed a `MessagePort` to a worker another tab
- * created and starts by asking `open` — so without this the same database would be reported durable
- * in one tab and ephemeral in the next.
+ * The durability rides along because this is the second path it has to travel, and it is not
+ * decoration. A follower is never present for the announcement above — it is handed a `MessagePort`
+ * to a worker another tab created — so without this the same database would be reported durable in
+ * one tab and ephemeral in the next. A tab is already sending this and already waiting for its
+ * reply, so carrying it here costs a field rather than a round trip.
  */
-export interface WeftWorkerOpened {
+export interface WorkerHydrated extends WorkerDelta {
   readonly durability: WeftDurability;
 }
 
-/** Reads an `open` reply that crossed a structured clone, which types as `unknown` on arrival. */
-export function isWeftWorkerOpened(value: unknown): value is WeftWorkerOpened {
+/** Reads a `hydrate` reply that crossed a structured clone, which types as `unknown` on arrival. */
+export function isWorkerHydrated(value: unknown): value is WorkerHydrated {
   if (typeof value !== "object" || value === null) return false;
   const durability: unknown = (value as { readonly durability?: unknown }).durability;
   return durability === "durable" || durability === "ephemeral";
@@ -303,10 +311,6 @@ export class WorkerPortTransport {
     this.#worker.start?.();
   }
 
-  open(scopeId: string): Promise<unknown> {
-    return this.request({ type: "open", scopeId });
-  }
-
   execute(query: CompiledQuery): Promise<unknown> {
     return this.request({ type: "execute", query });
   }
@@ -316,7 +320,7 @@ export class WorkerPortTransport {
   }
 
   /**
-   * Any request, correlated. The three named methods above are conveniences over this one;
+   * Any request, correlated. The two named methods above are conveniences over this one;
    * everything the worker host adds goes through here rather than growing a method apiece, so
    * correlation stays in one place.
    */

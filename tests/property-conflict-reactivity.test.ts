@@ -361,7 +361,7 @@ test("§9.42 exactly one tab holds the OPFS handle at any instant", async () => 
       const roles: TabRole[] = [];
       for (const coordinator of coordinators) roles.push(await coordinator.elect());
       assert.equal(roles.filter((role) => role === "leader").length, 1, "leadership was not exclusive");
-      assert.equal(roles.filter((role) => role === "follower").length, tabs - 1, "a tab was left degraded");
+      assert.equal(roles.filter((role) => role === "follower").length, tabs - 1, "a tab was left without a role");
 
       // The leader dies; exactly one successor takes the handle.
       locks.releaseAll();

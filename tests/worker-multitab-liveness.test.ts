@@ -22,7 +22,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import fc from "fast-check";
-import { MultiTabCoordinator, type LockManagerLike, type LockRequestOptionsLike } from "weftdb/client";
+import { MultiTabCoordinator, weftDatabaseKey, type LockManagerLike, type LockRequestOptionsLike } from "weftdb/client";
 import { SCENARIO_RUNS } from "./property-model.ts";
 import { delay, QueuedLocks, uniqueName, waitFor, outcome as settle } from "./multitab-fixtures.ts";
 
@@ -212,7 +212,10 @@ class TabWorld {
 
   constructor(label: string) {
     this.scopeId = uniqueName(`scope-${label}`);
-    this.lockName = `weft:${this.scopeId}:opfs`;
+    // The name a coordinator composes for this database, written out because a world has to be able
+    // to hold and kill the lock before any tab of it exists. A database is a namespace and a scope
+    // together, and every tab here is in the default namespace.
+    this.lockName = `weft:${weftDatabaseKey(this.scopeId)}:opfs`;
   }
 
   tab(): Tab {

@@ -21,6 +21,7 @@ import {
   reactiveSqlQuery,
   serveWeftWorker,
   WeftBrokerClient,
+  weftDatabaseKey,
   WorkerPortTransport,
   type ReactiveSqlQuery,
   type WeftWorkerHost,
@@ -121,6 +122,35 @@ test("§8.7 a port asked for in one scope is never delivered to another scope's 
   }
 });
 
+test("§8.7 a port asked for in one namespace is never delivered to another namespace's provider", async () => {
+  const hub = new BrokerHub();
+  const provider = new WeftBrokerClient(hub.connect(), SCOPE, "beta");
+  const consumer = new WeftBrokerClient(hub.connect(), SCOPE, "alpha");
+  try {
+    const delivered: unknown[] = [];
+    provider.onPort((port) => delivered.push(port));
+    provider.provide();
+
+    // Same scope, different applications. One broker serves the whole origin, so a registry keyed on
+    // the scope alone hands this port to a database the asking tab is not in — the same rows, the
+    // same statements, and another application's file underneath.
+    const brokered = consumer.requestPort();
+    assert.equal(
+      await Promise.race([brokered.refused.then(() => "refused"), delay(500).then(() => "pending")]),
+      "refused",
+      "a port asked for in one namespace was accepted by another namespace's provider",
+    );
+    assert.deepEqual(delivered, [], "another namespace's provider was handed a port");
+    // And the two are registered apart rather than one having replaced the other.
+    assert.deepEqual(hub.broker.providers(), [weftDatabaseKey(SCOPE, "beta")]);
+    brokered.discard();
+  } finally {
+    consumer.dispose();
+    provider.dispose();
+    hub.close();
+  }
+});
+
 test("§8.7 the last tab to register is the one ports are delivered to", async () => {
   const hub = new BrokerHub();
   const first = new WeftBrokerClient(hub.connect(), SCOPE);
@@ -146,7 +176,11 @@ test("§8.7 the last tab to register is the one ports are delivered to", async (
     const again = consumer.requestPort();
     await settle(() => toSecond.length === 2);
     again.discard();
-    assert.deepEqual(hub.broker.providers(), [SCOPE], "the successor's registration was withdrawn by its predecessor");
+    assert.deepEqual(
+      hub.broker.providers(),
+      [weftDatabaseKey(SCOPE)],
+      "the successor's registration was withdrawn by its predecessor",
+    );
   } finally {
     consumer.dispose();
     second.dispose();
@@ -254,7 +288,7 @@ test("§8.7 an error goes back to the tab whose request failed", async () => {
       () => "resolved",
       () => "rejected",
     );
-    const answered = first.request({ type: "open", scopeId: SCOPE }).then(
+    const answered = first.request({ type: "hydrate", scopeId: SCOPE, deviceId: DEVICE }).then(
       () => "resolved",
       () => "rejected",
     );

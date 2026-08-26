@@ -160,26 +160,25 @@ One tab of an origin holds the database and every other tab reaches it over a `M
 and writes the same way in both. [Multi-tab coordination](/concepts/multi-tab/) covers the election,
 the port broker, and succession.
 
-Render `weft.role` to show which part this tab is playing. Pair it with `weft.subscribeRole`, which
-fires when a tab is granted the lock:
+The banner worth rendering is `weft.durability`, which says whether this window will remember what
+is typed into it:
 
-```tsx title="src/tab-banner.tsx"
-import { useSyncExternalStore } from "react";
+```tsx title="src/storage-banner.tsx"
 import { weft } from "./store.ts";
 
-export function TabBanner() {
-  const role = useSyncExternalStore(
-    (listener) => weft.subscribeRole(listener),
-    () => weft.role,
-  );
-  if (role === "leader") return null;
-  return <p>Another tab of this browser holds the database.</p>;
+export function StorageBanner() {
+  if (weft.durability === "durable") return null;
+  return <p>This window will forget these notes when it closes.</p>;
 }
 ```
 
-`role` is `leader` in the tab that created the worker, `follower` in every other tab, and `degraded`
-in a browser without Web Locks. Drive a banner from it rather than from a request that a follower
-may still be waiting on.
+No subscription, because `durability` is settled when the database opens and holds for the session.
+A tab that takes the database over reopens the same one, so a device that was durable stays durable.
+
+`weft.role` is `leader` in the tab that created the worker and `follower` in every other tab, and
+`weft.subscribeRole` fires when a tab is granted the lock. Both are diagnostics. Every tab holds a
+port straight to the worker, so a follower is one hop from the database exactly as the leader is.
+Which tab created the worker changes nothing a person can see or act on.
 
 When leadership moves, the mirror reconnects, re-hydrates, and registers every watched statement
 again, so each `use<Collection>Query` re-renders with the rows the new worker reports. A request in

@@ -20,9 +20,9 @@
 // refused.
 //
 // The shape is a provider and its consumers. The tab holding the worker registers as the provider
-// for a scope; every other tab makes a `MessageChannel`, keeps one end, and asks the broker to give
-// the other end to whoever is providing. From then on that tab and the worker talk directly, and
-// the tab that owns the worker is not on the path at all.
+// for a database; every other tab makes a `MessageChannel`, keeps one end, and asks the broker to
+// give the other end to whoever is providing. From then on that tab and the worker talk directly,
+// and the tab that owns the worker is not on the path at all.
 //
 // Being a per-origin rendezvous with a live connection to every tab also makes this the right place
 // for the one thing a Web Lock cannot say. A lock wakes the next waiter and tells nobody else, so
@@ -31,6 +31,7 @@
 // so the broker tells every other connection that somebody new is providing. That is a reconnect
 // notice and nothing more: leadership is still concluded from the lock alone, and there is no
 // message in this file that means "you are the leader".
+import { weftDatabaseKey } from "./database-key.ts";
 import type { WorkerLike } from "./worker.ts";
 
 /**
@@ -40,16 +41,17 @@ import type { WorkerLike } from "./worker.ts";
  * application is free to connect to the same broker for its own purposes, and a message that is not
  * ours has to be recognisable as not ours rather than acted on.
  *
- * `scopeId` is on every message because one broker serves every scope the origin has open. A tab
- * signed into two scopes runs two workers, and a port meant for one of them delivered to the other
- * is a tab reading a database it is not signed into.
+ * `database` is on every message because one broker serves every database the origin has open, and
+ * a database is a namespace and a scope together (see `./database-key.ts`). A tab signed into two
+ * scopes runs two workers, as do two applications sharing an origin, and a port meant for one of
+ * them delivered to another is a tab reading a database it never asked for.
  */
 export type BrokerMessage =
-  /** A tab saying it holds the worker for this scope. The most recent claim is the one that stands. */
-  | { readonly weft: "broker"; readonly type: "provide"; readonly scopeId: string }
+  /** A tab saying it holds this database's worker. The most recent claim is the one that stands. */
+  | { readonly weft: "broker"; readonly type: "provide"; readonly database: string }
   /**
    * Told to every *other* connected tab when a `provide` lands: somebody new is holding this
-   * scope's worker.
+   * database's worker.
    *
    * This is the succession announcement, and the whole of it. A Web Lock wakes the next waiter and
    * nobody else, so the tabs further back in the queue would otherwise go on talking to a port
@@ -62,22 +64,22 @@ export type BrokerMessage =
    * the leader. So a spurious one costs a reconnect, where a spurious grant would cost a second
    * worker on one access handle — and only the browser can issue a grant.
    */
-  | { readonly weft: "broker"; readonly type: "provided"; readonly scopeId: string }
+  | { readonly weft: "broker"; readonly type: "provided"; readonly database: string }
   /** A provider standing down, on an orderly close. */
-  | { readonly weft: "broker"; readonly type: "withdraw"; readonly scopeId: string }
+  | { readonly weft: "broker"; readonly type: "withdraw"; readonly database: string }
   /** A tab asking for its port to be given to the provider. `port` is transferred alongside. */
   | {
       readonly weft: "broker";
       readonly type: "request";
-      readonly scopeId: string;
+      readonly database: string;
       readonly id: number;
       readonly port: unknown;
     }
   /** A port arriving at the provider, to be forwarded into its worker. */
-  | { readonly weft: "broker"; readonly type: "deliver"; readonly scopeId: string; readonly port: unknown }
+  | { readonly weft: "broker"; readonly type: "deliver"; readonly database: string; readonly port: unknown }
   /** Told to a requester the broker had nowhere to send the port. Named by request, so a tab that
    * asked twice can tell which attempt was refused. */
-  | { readonly weft: "broker"; readonly type: "unavailable"; readonly scopeId: string; readonly id: number };
+  | { readonly weft: "broker"; readonly type: "unavailable"; readonly database: string; readonly id: number };
 
 /**
  * One end of a connection to the broker: a `SharedWorker`'s `port` on the page, and a port from
@@ -106,7 +108,7 @@ export interface BrokerPortLike {
 export interface WeftPortBroker {
   /** Serves one connected document. Called once per `onconnect`. */
   connect(port: BrokerPortLike): void;
-  /** Which tab is providing each scope, for a test to read. */
+  /** The key of each database somebody is providing, for a test to read. */
   providers(): readonly string[];
   stop(): void;
 }
@@ -126,7 +128,7 @@ export interface WeftPortBroker {
  * election runs on is the only thing that can tell them apart, and it already does.
  */
 export function serveWeftPortBroker(): WeftPortBroker {
-  /** scopeId -> the connection of the tab that last claimed to hold that scope's worker. */
+  /** database key -> the connection of the tab that last claimed to hold that database's worker. */
   const providers = new Map<string, BrokerPortLike>();
   const connections = new Map<BrokerPortLike, (event: MessageEvent<unknown>) => void>();
   let serving = true;
@@ -137,16 +139,16 @@ export function serveWeftPortBroker(): WeftPortBroker {
     if (!isBrokerMessage(message)) return;
     switch (message.type) {
       case "provide": {
-        providers.set(message.scopeId, port);
+        providers.set(message.database, port);
         // And every other tab is told, which is how a succession reaches the followers the Web Lock
         // will never wake. To every connection rather than to the ones known to care: the broker
-        // keeps no register of who is watching which scope, each client drops what is not its own,
-        // and the alternative is a second registry to be wrong.
+        // keeps no register of who is watching which database, each client drops what is not its
+        // own, and the alternative is a second registry to be wrong.
         //
         // Not back to the provider. A tab that heard its own claim would tear down the worker it
         // had just built. Nothing here promotes anybody either way — see the message's own note.
         for (const other of connections.keys()) {
-          if (other !== port) other.postMessage({ weft: "broker", type: "provided", scopeId: message.scopeId });
+          if (other !== port) other.postMessage({ weft: "broker", type: "provided", database: message.database });
         }
         return;
       }
@@ -154,20 +156,20 @@ export function serveWeftPortBroker(): WeftPortBroker {
         // Only if this port is the one registered. A provider that stood down after being replaced
         // would otherwise deregister its successor, and every tab opened next would be told there
         // is nobody holding a worker that is running.
-        if (providers.get(message.scopeId) === port) providers.delete(message.scopeId);
+        if (providers.get(message.database) === port) providers.delete(message.database);
         return;
       case "request": {
-        const provider = providers.get(message.scopeId);
+        const provider = providers.get(message.database);
         if (provider === undefined || provider === port) {
           // `provider === port` is a tab asking itself for a port. It cannot happen through
           // `openWeftDatabase` — a tab that provides never requests — and answering it would hand a
           // tab a channel whose two ends it holds, which deadlocks quietly rather than loudly.
-          port.postMessage({ weft: "broker", type: "unavailable", scopeId: message.scopeId, id: message.id });
+          port.postMessage({ weft: "broker", type: "unavailable", database: message.database, id: message.id });
           return;
         }
         // The whole point of this module, in one line: a port that arrived here transferred is sent
         // on transferred, and neither this thread nor the page that asked keeps a usable copy.
-        provider.postMessage({ weft: "broker", type: "deliver", scopeId: message.scopeId, port: message.port }, [
+        provider.postMessage({ weft: "broker", type: "deliver", database: message.database, port: message.port }, [
           message.port,
         ]);
         return;
@@ -216,7 +218,7 @@ interface ChannelLike {
  * `openWeftDatabase` does with an `open` request against a deadline.
  */
 export interface BrokeredPort {
-  /** This tab's end. The other end was sent to whichever tab is providing the scope. */
+  /** This tab's end. The other end was sent to whichever tab is providing the database. */
   readonly port: WorkerLike;
   /** Resolves if the broker had no provider to give the other end to. Otherwise never settles. */
   readonly refused: Promise<void>;
@@ -233,7 +235,8 @@ export interface BrokeredPort {
  */
 export class WeftBrokerClient {
   readonly #port: BrokerPortLike;
-  readonly #scopeId: string;
+  /** The `(namespace, scope)` pair this tab's traffic is about, as one key. */
+  readonly #database: string;
   readonly #deliveries = new Set<(port: unknown) => void>();
   readonly #successions = new Set<() => void>();
   readonly #refusals = new Map<number, () => void>();
@@ -241,19 +244,24 @@ export class WeftBrokerClient {
   #providing = false;
   #disposed = false;
 
-  constructor(port: BrokerPortLike, scopeId: string) {
+  /**
+   * `namespace` is which application in this origin the scope belongs to, `"weft"` by default. It
+   * is composed with the scope here rather than left to the caller, because getting the two into
+   * one key is the whole of what keeps two applications' workers apart — see `./database-key.ts`.
+   */
+  constructor(port: BrokerPortLike, scopeId: string, namespace?: string) {
     this.#port = port;
-    this.#scopeId = scopeId;
+    this.#database = weftDatabaseKey(scopeId, namespace);
     this.#port.addEventListener("message", this.#onMessage);
     this.#port.start?.();
   }
 
   /**
-   * Says this tab holds the scope's worker, so ports asked for are sent here.
+   * Says this tab holds the database's worker, so ports asked for are sent here.
    *
-   * Idempotent, and re-announcing costs nothing: the broker keeps the last claim per scope, which
-   * is what makes succession a matter of the new leader saying so rather than of the old one being
-   * noticed to have stopped.
+   * Idempotent, and re-announcing costs nothing: the broker keeps the last claim per database,
+   * which is what makes succession a matter of the new leader saying so rather than of the old one
+   * being noticed to have stopped.
    *
    * It is also what tells the other tabs. The broker passes each claim on to every other connection
    * as a `provided`, which is how a follower nowhere near the front of the lock queue learns that
@@ -263,7 +271,7 @@ export class WeftBrokerClient {
   provide(): void {
     if (this.#disposed) return;
     this.#providing = true;
-    this.#port.postMessage({ weft: "broker", type: "provide", scopeId: this.#scopeId });
+    this.#port.postMessage({ weft: "broker", type: "provide", database: this.#database });
   }
 
   /** Where a delivered port arrives. The leader forwards each into its worker. */
@@ -275,8 +283,8 @@ export class WeftBrokerClient {
   }
 
   /**
-   * Where another tab taking over this scope arrives: a successor called `provide`, so the worker
-   * this tab was talking to is not the one serving the scope any more.
+   * Where another tab taking over this database arrives: a successor called `provide`, so the
+   * worker this tab was talking to is not the one serving the database any more.
    *
    * This is what a Web Lock cannot say. A lock wakes the next waiter and tells nobody else, so
    * every follower further back in the queue would otherwise hold a port into a document that has
@@ -308,7 +316,7 @@ export class WeftBrokerClient {
     const refused = new Promise<void>((resolve) => {
       this.#refusals.set(id, resolve);
     });
-    this.#port.postMessage({ weft: "broker", type: "request", scopeId: this.#scopeId, id, port: channel.port2 }, [
+    this.#port.postMessage({ weft: "broker", type: "request", database: this.#database, id, port: channel.port2 }, [
       channel.port2,
     ]);
     // Started here rather than left to whoever is handed it. A browser's `MessagePort` queues what
@@ -334,7 +342,7 @@ export class WeftBrokerClient {
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
-    if (this.#providing) this.#port.postMessage({ weft: "broker", type: "withdraw", scopeId: this.#scopeId });
+    if (this.#providing) this.#port.postMessage({ weft: "broker", type: "withdraw", database: this.#database });
     this.#providing = false;
     this.#port.removeEventListener("message", this.#onMessage);
     this.#deliveries.clear();
@@ -348,7 +356,7 @@ export class WeftBrokerClient {
 
   readonly #onMessage = (event: MessageEvent<unknown>): void => {
     const message = event.data;
-    if (!isBrokerMessage(message) || message.scopeId !== this.#scopeId) return;
+    if (!isBrokerMessage(message) || message.database !== this.#database) return;
     if (message.type === "deliver") {
       for (const handler of [...this.#deliveries]) handler(message.port);
       return;
@@ -356,7 +364,7 @@ export class WeftBrokerClient {
     if (message.type === "provided") {
       // Only if this tab is not the one providing. The broker already spares a provider its own
       // claim; this covers the tab that has since become the provider itself, whose worker is the
-      // one now serving the scope and must not be torn down on the strength of a message.
+      // one now serving the database and must not be torn down on the strength of a message.
       if (this.#providing) return;
       for (const handler of [...this.#successions]) handler();
       return;
@@ -375,8 +383,8 @@ export class WeftBrokerClient {
  */
 export function isBrokerMessage(value: unknown): value is BrokerMessage {
   if (typeof value !== "object" || value === null) return false;
-  const message = value as { readonly weft?: unknown; readonly type?: unknown; readonly scopeId?: unknown };
-  if (message.weft !== "broker" || typeof message.scopeId !== "string") return false;
+  const message = value as { readonly weft?: unknown; readonly type?: unknown; readonly database?: unknown };
+  if (message.weft !== "broker" || typeof message.database !== "string") return false;
   return (
     message.type === "provide" ||
     message.type === "provided" ||

@@ -84,8 +84,13 @@ test("editor buffer holds remote edits while focused", () => {
 test("worker transport correlates requests and responses", async () => {
   const worker = new LoopbackWorker();
   const transport = new WorkerPortTransport(worker);
-  assert.deepEqual(await transport.open("scope"), { opened: "scope" });
-  assert.deepEqual(await transport.execute({ sql: "select 1", parameters: [] }), { rows: [] });
+  // Two requests in flight at once, answered out of order by the worker below. Each caller gets the
+  // reply carrying its own number: a transport that read the first reply for the first caller would
+  // hand one tab's rows to whoever asked first and never be caught by a single round trip.
+  const hydrated = transport.request({ type: "hydrate", scopeId: "scope", deviceId: "device" });
+  const executed = transport.execute({ sql: "select 1", parameters: [] });
+  assert.deepEqual(await executed, { rows: [] });
+  assert.deepEqual(await hydrated, { hydrated: "scope", durability: "durable" });
   transport.dispose();
 });
 
@@ -104,17 +109,21 @@ test("multi-tab coordinator elects leader and follower roles", async () => {
   follower.close();
 });
 
+/** A worker that answers out of order, so correlation is what the test above is reading. */
 class LoopbackWorker {
   #listener: ((event: MessageEvent<WorkerResponse>) => void) | undefined;
 
   postMessage(message: WorkerRequest): void {
     const response: WorkerResponse =
-      message.type === "open"
-        ? { id: message.id, ok: true, value: { opened: message.scopeId } }
+      message.type === "hydrate"
+        ? { id: message.id, ok: true, value: { hydrated: message.scopeId, durability: "durable" } }
         : message.type === "execute"
           ? { id: message.id, ok: true, value: { rows: [] } }
           : { id: message.id, ok: true, value: null };
-    queueMicrotask(() => this.#listener?.({ data: response } as MessageEvent<WorkerResponse>));
+    const answer = (): void => this.#listener?.({ data: response } as MessageEvent<WorkerResponse>);
+    // A hydrate reads the whole scope, so it answers after whatever was asked next.
+    if (message.type === "hydrate") setTimeout(answer, 0);
+    else queueMicrotask(answer);
   }
 
   addEventListener(_type: "message", listener: (event: MessageEvent<WorkerResponse>) => void): void {

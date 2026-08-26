@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MessageChannel } from "node:worker_threads";
 import { test } from "vitest";
+import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 import { fieldName, rowId, tableName, txnId, wireText, type ScopeId, type WeftOp } from "weftdb/core";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
 import { WeftServer } from "weftdb/server";
@@ -28,6 +29,7 @@ import {
   reactiveSqlQuery,
   serveWeftWorker,
   WeftBrokerClient,
+  weftDatabaseKey,
   WeftOpenError,
   WorkerPortTransport,
   type AsyncSyncTransport,
@@ -38,6 +40,7 @@ import {
   type StorageLike,
   type WeftClientMirror,
   type WeftDatabase,
+  type WeftDurability,
   type WeftWorkerHost,
   type WeftWorkerReady,
   type WorkerLike,
@@ -45,7 +48,7 @@ import {
   type WorkerRequest,
 } from "weftdb/client";
 import { SqliteClientStore } from "weftdb/client/sqlite";
-import type { Sqlite3Module } from "weftdb/client/wasm-sqlite";
+import type { Sqlite3Module, WasmDatabase } from "weftdb/client/wasm-sqlite";
 import { serveWeftWorkerDefaults } from "weftdb/client/worker-entry";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
 import type { WeftSource } from "weftdb-react";
@@ -73,6 +76,12 @@ interface Database {
 const TODOS = tableName("todos");
 const HASH = schemaHash(schema);
 const statements = compileOnlyKysely<Database>();
+
+/**
+ * The build that ships to a browser, minus the one thing Node cannot give it: this has no
+ * `installOpfsSAHPoolVfs`, which is what `OpfsPools` puts back.
+ */
+const sqlite3: Sqlite3Module = await sqlite3InitModule();
 
 test("§8.7 one call opens, hydrates, and hands back a source a generated query reads", async () =>
   withBrowser(async (browser) => {
@@ -125,6 +134,171 @@ test("§8.7 a second tab on the same scope follows, and a write in one appears i
     follower.source.update(TODOS, rowId("todo-1"), { title: "edited in the follower" }, txnId("t2"));
     await settle(() => titles(rowsOf(leader.source, all))[0] === "edited in the follower");
     assert.deepEqual(titles(rowsOf(follower.source, all)), ["edited in the follower"]);
+  }));
+
+test("§8.7 one scope in two namespaces is two databases, and neither tab is in the other's", async () =>
+  withBrowser(async (browser) => {
+    // A database is a namespace and a scope together. The scope alone used to name it, so two
+    // applications sharing an origin — or one application keeping a second profile beside the first —
+    // met at the Web Lock, at the broker, and on the OPFS pool, and the second of them silently
+    // became another tab of the first's database. Under the same person's `scopeId`, which is
+    // exactly when it would happen.
+    const alpha = `${browser.namespace}-alpha`;
+    const beta = `${browser.namespace}-beta`;
+    const first = await browser.open("scope-1", { namespace: alpha });
+    const second = await browser.open("scope-1", { namespace: beta });
+
+    // Two elections rather than one. Only one tab can hold a lock, so two leaders is two locks —
+    // and each of them built a worker of its own, which the single-namespace case forbids.
+    assert.equal(first.role, "leader");
+    assert.equal(second.role, "leader", "the second namespace lost an election it was never standing in");
+    assert.equal(browser.workers.length, 2, "two namespaces shared one storage worker");
+    assert.equal(browser.workers[0]?.host.connections, 1, "a tab of one namespace connected to the other's worker");
+    assert.equal(browser.workers[1]?.host.connections, 1, "a tab of one namespace connected to the other's worker");
+    // And two devices, because the device id is already namespaced. A shared one would have each
+    // database's relay cursor advanced by the other's pulls.
+    assert.notEqual(first.source.deviceId, second.source.deviceId, "two databases were opened as one device");
+
+    const all = query("scope-1", (statement) => statement.orderBy("rank"));
+    await first.source.watch(all);
+    await second.source.watch(all);
+
+    first.source.create(TODOS, rowId("todo-1"), { title: "in alpha", done: false, rank: 1 }, txnId("txn-1"));
+    await settle(() => first.source.rows.size === 1);
+    // Long enough for a delta to have crossed if anything were carrying one. Two tabs of one
+    // database see each other's writes within a turn or two — see the test above.
+    await delay(50);
+
+    assert.equal(second.source.rows.size, 0, "a write in one namespace was pushed into another namespace's tab");
+    assert.deepEqual(titles(rowsOf(second.source, all)), [], "one namespace's statement answered with another's rows");
+    // In the file as well as in the mirror: this is two databases, not one database two tabs are
+    // reading selectively.
+    assert.equal(browser.stored("scope-1", "todo-1", alpha)?.["title"], "in alpha");
+    assert.equal(browser.stored("scope-1", "todo-1", beta), undefined, "two namespaces wrote into one file");
+  }));
+
+test("§8.7 a tab is never handed the storage worker of another namespace", async () =>
+  withBrowser(async (browser) => {
+    // The broker's half of the same rule, and the half the isolation above cannot show: two tabs
+    // that each hold a worker never ask anybody for a port. This one has to ask.
+    //
+    // One `SharedWorker` serves the whole origin, so a provider registered under the scope alone
+    // would be handed out to whoever named that scope — and a tab of `alpha` would be given a port
+    // straight into `beta`'s worker, hydrate from it, and render another application's rows without
+    // an error anywhere.
+    const alpha = `${browser.namespace}-alpha`;
+    const beta = `${browser.namespace}-beta`;
+    const other = await browser.open("scope-1", { namespace: beta });
+    assert.equal(other.role, "leader");
+
+    // A tab of `alpha` that lost its own election: there is a provider for this scope in the origin,
+    // and none for this database.
+    browser.locks.hold(browser.lockName("scope-1", alpha));
+    const error = await browser.open("scope-1", { namespace: alpha, leaderTimeoutMs: 150 }).then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+
+    assert.ok(error instanceof WeftOpenError, "a tab was handed the storage worker of another namespace");
+    assert.equal(error.reason, "no-leader");
+    assert.equal(browser.worker.host.connections, 1, "another namespace's worker accepted a port it was sent");
+  }));
+
+test("§8.7 a namespace and a scope that run together are still two databases", async () =>
+  withBrowser(async (browser) => {
+    // Both halves of the key are strings an application chose, so joining them with a separator is
+    // not enough: namespace `x:a` with scope `b:scope-1` and namespace `x:a:b` with scope `scope-1`
+    // read as one key the moment the separator is all that divides them. That is two applications on
+    // one lock, one worker and one file, and nothing anywhere would report it.
+    const joined = `${browser.namespace}:a`;
+    const split = `${browser.namespace}:a:b`;
+    assert.notEqual(
+      weftDatabaseKey("b:scope-1", joined),
+      weftDatabaseKey("scope-1", split),
+      "a namespace and a scope ran together into one key",
+    );
+
+    const first = await browser.open("b:scope-1", { namespace: joined });
+    const second = await browser.open("scope-1", { namespace: split });
+
+    // Two leaders is two locks, which is the composition holding where a plain join would have made
+    // the second tab a follower of the first.
+    assert.equal(first.role, "leader");
+    assert.equal(second.role, "leader", "two databases whose parts run together were elected as one");
+    assert.equal(browser.workers.length, 2, "two databases whose parts run together shared a worker");
+
+    first.source.create(TODOS, rowId("todo-1"), { title: "in the first", done: false, rank: 1 }, txnId("txn-1"));
+    await settle(() => first.source.rows.size === 1);
+    await delay(50);
+    assert.equal(second.source.rows.size, 0, "a write reached a database that only shares a spelling");
+    assert.equal(browser.stored("b:scope-1", "todo-1", joined)?.["title"], "in the first");
+    assert.equal(browser.stored("scope-1", "todo-1", split), undefined, "the two wrote into one file");
+  }));
+
+test("§8.7 the storage worker is constructed at a URL carrying its namespace", async () =>
+  withBrowser(async (browser) => {
+    // How the namespace reaches the one part of this that decides where the bytes go. The worker
+    // opens its database as it starts, before the page has said anything to it, so the URL it is
+    // constructed at is the only channel that exists in time — and `serveWeftWorkerDefaults` reads
+    // the namespace back off its own `location` to name the OPFS pool it asks for.
+    const alpha = `${browser.namespace}-alpha`;
+    const beta = `${browser.namespace}-beta`;
+    const urls: string[] = [];
+    await withWorkerConstructor(browser, urls, async () => {
+      const first = await browser.open("scope-1", { namespace: alpha, useDefaultWorker: true });
+      const second = await browser.open("scope-1", { namespace: beta, useDefaultWorker: true });
+
+      // The workers here were built by the default `createWorker` and told nothing but their URL, so
+      // a write staying in its own database is the round trip working end to end.
+      first.source.create(TODOS, rowId("todo-1"), { title: "in alpha", done: false, rank: 1 }, txnId("txn-1"));
+      await settle(() => first.source.rows.size === 1);
+      await delay(50);
+      assert.equal(second.source.rows.size, 0, "the namespace never reached the worker, so both opened one database");
+      // And in the file the URL named. Two workers that were told nothing would both open the
+      // default one — quietly, since a worker reading a file another worker is writing answers every
+      // statement and merely stops agreeing with it.
+      assert.equal(
+        browser.stored("scope-1", "todo-1", alpha)?.["title"],
+        "in alpha",
+        "the worker did not open the database its URL named",
+      );
+      assert.equal(browser.stored("scope-1", "todo-1", beta), undefined, "both workers opened one file");
+    });
+
+    assert.deepEqual(
+      urls.map((url) => new URL(url).searchParams.get("weft-namespace")),
+      [alpha, beta],
+      "the worker's URL does not say which namespace's database to open",
+    );
+    // And the URL still points at the module the application named, resolved against the document.
+    assert.deepEqual(
+      urls.map((url) => new URL(url).pathname),
+      ["/app/storage-worker.ts", "/app/storage-worker.ts"],
+      "the namespace was written into the URL at the cost of the URL",
+    );
+  }));
+
+test("§8.7 two namespaces ask for two OPFS pools, and one namespace asks for one", async () =>
+  withBrowser(async (browser) => {
+    // The exclusion the namespace has to reach, in the one place it is real. A pool is installed by
+    // taking a synchronous access handle on every file it holds, so a second worker asking for a
+    // pool another worker has is refused it — and, being unable to tell that from a browser with no
+    // OPFS at all, opens in memory instead. Two applications of one origin would therefore have the
+    // second of them quietly ephemeral beside the first's durable file.
+    const pools = new OpfsPools();
+    const alpha = await pools.open(`${browser.namespace}-alpha`);
+    const beta = await pools.open(`${browser.namespace}-beta`);
+
+    assert.equal(alpha, "durable");
+    assert.equal(beta, "durable", "a second namespace was refused the pool the first is holding");
+    assert.equal(new Set(pools.installed).size, 2, "two namespaces asked for one pool");
+
+    // And the same namespace twice is the same pool, which is what makes the exclusion above the
+    // real thing rather than a fresh name per worker. A second tab never gets here — one tab holds
+    // the worker — but a successor built while a crashed predecessor is still letting go does.
+    const again = await pools.open(`${browser.namespace}-alpha`);
+    assert.equal(again, "ephemeral", "a worker of the same namespace was given a pool of its own");
+    assert.equal(pools.installed.at(-1), pools.installed[0], "the pool a namespace opens in is not stable");
   }));
 
 test("§8.7 two tabs of one scope do not share a subscription engine", async () =>
@@ -296,7 +470,7 @@ test("§8.7 a tab with no worker to reach is told, rather than waiting forever",
     // A tab that lost the election while the winner was still starting its worker. The broker has
     // no provider to give its port to, and a handover is never acknowledged — so without a deadline
     // this is a page that shows a spinner for the rest of the session.
-    browser.locks.hold(`weft:scope-1:opfs`);
+    browser.locks.hold(browser.lockName("scope-1"));
     const error = await browser.open("scope-1", { leaderTimeoutMs: 150 }).then(
       () => undefined,
       (reason: unknown) => reason,
@@ -304,6 +478,34 @@ test("§8.7 a tab with no worker to reach is told, rather than waiting forever",
     assert.ok(error instanceof WeftOpenError, "a tab with no worker to reach waited instead of reporting");
     assert.equal(error.reason, "no-leader");
     assert.match(error.message, /storage worker/u);
+  }));
+
+test("§8.7 a tab whose port reaches a document that has gone is told within the deadline", async () =>
+  withBrowser(async (browser) => {
+    // The case the probe exists for, and the one a refusal does not cover. The broker keeps no
+    // liveness — deliberately, since it cannot tell a tab that has gone from one the browser has
+    // frozen — so a provider that died leaves its registration standing, and a port asked for is
+    // accepted, forwarded, and delivered into nothing. No error, no refusal, silence. Without a
+    // deadline over something the far end has to answer, this is a page that spins for ever.
+    const ghost = new WeftBrokerClient(browser.hub.connect(), "scope-1", browser.namespace);
+    ghost.provide();
+    browser.locks.hold(browser.lockName("scope-1"));
+    try {
+      const started = Date.now();
+      const error = await browser.open("scope-1", { leaderTimeoutMs: 150 }).then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+      const elapsed = Date.now() - started;
+      assert.ok(error instanceof WeftOpenError, "a tab whose port reached nobody waited instead of reporting");
+      assert.equal(error.reason, "no-leader");
+      // Bounded by the deadline it was given, not by the deadline plus however long one attempt is
+      // left standing: attempts are kept so a slow worker can still win, and they are all closed
+      // when the deadline passes.
+      assert.ok(elapsed < 2_000, `a tab with a 150ms deadline reported after ${elapsed}ms`);
+    } finally {
+      ghost.dispose();
+    }
   }));
 
 test("§8.7 a browser with no SharedWorker is refused before anything is opened", async () =>
@@ -328,6 +530,121 @@ test("§8.7 a browser with no SharedWorker is refused before anything is opened"
     assert.deepEqual(browser.workers, [], "a refused open started a worker");
     const next = await browser.open("scope-1");
     assert.equal(next.role, "leader", "the refused open kept the Web Lock");
+  }));
+
+test("§8.7 a browser with no Web Locks is refused in every tab, before a worker is created", async () =>
+  withBrowser(async (browser) => {
+    // Refused rather than run without an election, and refused everywhere rather than in the tabs
+    // that would have lost one. Nothing decides who may touch the file without a lock, so two tabs
+    // of one browser would each create a worker: two databases, two outboxes and two sync sessions
+    // under a single device id, each pushing to the relay as the same device.
+    //
+    // `navigator.locks` is what the option falls back to, so a browser without Web Locks is a
+    // `navigator` without one — which is what this puts back for the length of the test.
+    await withoutWebLocks(async () => {
+      const refused = await browser.open("scope-1", { withoutLocks: true }).then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+      assert.ok(refused instanceof WeftOpenError, "a browser with no Web Locks was allowed to open anyway");
+      assert.equal(refused.reason, "no-locks");
+      assert.match(refused.message, /navigator\.locks/u, "the failure does not name what is missing");
+      assert.deepEqual(browser.workers, [], "a refused open started a worker");
+
+      // The second tab is refused the same way. This is the assertion: a rule that only caught the
+      // tabs which lost an election would let the first tab of the browser run, and the fault would
+      // surface in the second tab as a database that silently disagrees with the first.
+      const second = await browser.open("scope-1", { withoutLocks: true }).then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+      assert.ok(second instanceof WeftOpenError, "the second tab of a browser with no Web Locks opened");
+      assert.equal(second.reason, "no-locks");
+      assert.deepEqual(browser.workers, [], "the second refused open started a worker");
+    });
+
+    // And nothing was left holding the scope: a tab in a browser that has Web Locks opens and leads.
+    const next = await browser.open("scope-1");
+    assert.equal(next.role, "leader", "a refused open left the scope unopenable");
+  }));
+
+test("§8.7 a successor whose pool is still held retries rather than taking an in-memory database", async () =>
+  withBrowser(async (browser) => {
+    // The handover race. A tab that crashes runs no teardown, so the browser hands the lock on while
+    // it is still letting go of the access handles, and a successor that asks a moment early is
+    // refused the pool. From inside the worker that is indistinguishable from a browser with no OPFS
+    // to give, and it is answered the same way: an in-memory database. Accepting it would leave this
+    // device on an empty database with its real one on disk beside it and nothing left to reach it,
+    // and the page would report `durability: "ephemeral"` where it had said `durable` a second ago.
+    const dying = await browser.open("scope-1");
+    const successor = await browser.open("scope-1");
+    assert.equal(dying.durability, "durable");
+    assert.equal(successor.durability, "durable");
+
+    const all = query("scope-1", (statement) => statement.orderBy("rank"));
+    await successor.source.watch(all);
+    dying.source.create(TODOS, rowId("todo-1"), { title: "before the crash", done: false, rank: 1 }, txnId("txn-1"));
+    await settle(() => successor.source.rows.size === 1);
+
+    // The first two workers the successor builds find the pool still held.
+    browser.poolRefusals = 2;
+    browser.crash("scope-1");
+
+    await waitFor(() => successor.role === "leader", "no tab took over the OPFS access handle");
+    // Waited on the migration having finished rather than on the lock having moved: this mirror is
+    // still holding the rows the dead worker gave it, so its own row count says nothing yet. A
+    // hydrated client in the newest worker is the tab having reconnected to it.
+    await waitFor(() => hydrated(browser), "the successor never reconnected to a worker", 4_000);
+
+    assert.equal(successor.durability, "durable", "a device that was durable was quietly downgraded");
+    assert.equal(browser.poolRefusals, 0, "the successor gave up before the pool came free");
+    assert.equal(browser.workers.length, 4, "the successor accepted the first worker it was given");
+
+    // And a write, because which database this tab ended up on is the whole question.
+    successor.source.create(TODOS, rowId("todo-2"), { title: "after taking over", done: false, rank: 2 }, txnId("t2"));
+    await settle(() => successor.source.rows.size === 2, 4_000);
+
+    // The database is the one that was there before, not a fresh one. This is what the retry is for:
+    // the first row was written by the tab that crashed, and it is readable because the successor is
+    // on the same file rather than on an empty database that happens to answer the same statements.
+    assert.deepEqual(
+      titles(rowsOf(successor.source, all)),
+      ["before the crash", "after taking over"],
+      "the successor reopened an empty database instead of the one this device had",
+    );
+    assert.equal(browser.stored("scope-1", "todo-1")?.["title"], "before the crash");
+    assert.equal(browser.stored("scope-1", "todo-2")?.["title"], "after taking over");
+  }));
+
+test("§8.7 a browser that has no pool at all pays nothing for the successor's retry", async () =>
+  withBrowser(async (browser) => {
+    // The other side of the same rule, and the reason it is written as "was this device durable"
+    // rather than "try again before believing it". In private browsing the pool fails every time, so
+    // a retry before every fallback would add its whole wait to every open in that mode and end in
+    // the answer it started with. A device that was already ephemeral therefore asks once.
+    browser.poolDeclines = true;
+    const dying = await browser.open("scope-1");
+    const successor = await browser.open("scope-1");
+    assert.equal(dying.durability, "ephemeral");
+    assert.equal(successor.durability, "ephemeral", "a tab handed a port never learned what kind of database it is on");
+    assert.equal(browser.workers.length, 1, "the first open of a private window retried something");
+
+    const started = Date.now();
+    browser.crash("scope-1");
+    await waitFor(() => successor.role === "leader", "no tab took over");
+    // What is timed is the whole takeover, up to a write the new worker answers, rather than the
+    // moment the lock changed hands.
+    await waitFor(() => hydrated(browser), "the successor never reconnected to a worker", 4_000);
+    successor.source.create(TODOS, rowId("todo-1"), { title: "after taking over", done: false, rank: 1 }, txnId("t1"));
+    await settle(() => successor.source.rows.size === 1, 4_000);
+    const elapsed = Date.now() - started;
+
+    // One worker, not a run of them. A successor that retried here would build every attempt the
+    // bound allows, sleep between each, and arrive at the same in-memory database it was offered
+    // first — a wait added to every takeover in a mode where waiting can never help.
+    assert.equal(browser.workers.length, 2, "a browser with no pool to give was made to ask again");
+    assert.equal(successor.durability, "ephemeral");
+    assert.ok(elapsed < 400, `taking over cost ${elapsed}ms, so this tab waited on a pool that was never coming`);
   }));
 
 test("§8.7 when the tab holding the worker dies, a successor creates one and the rest reconnect", async () =>
@@ -592,43 +909,72 @@ class Browser {
   /** One `SharedWorker` for the whole browser, which is what makes it a broker at all. */
   readonly hub = new BrokerHub();
   /**
-   * One database file for the whole browser, rather than one per worker.
+   * One database file per namespace for the whole browser, rather than one per worker.
    *
-   * That is the property OPFS has and an in-memory database does not, and migration is where it
-   * matters: a successor tab creates a *new* worker and reopens the *same* file, which is the whole
-   * reason a re-hydrate after a crash shows what committed rather than nothing.
+   * Two properties in one, and every worker built here goes through it. That a *later* worker of one
+   * namespace reopens the *same* file is what OPFS gives and an in-memory database does not, and
+   * migration is where it matters: a successor tab creates a new worker and has to find what the tab
+   * before it committed. That a worker of *another* namespace opens a different file is the OPFS
+   * pool, which a worker derives from the namespace it was given — see `serveWeftWorkerDefaults`,
+   * where the same derivation decides which pool of access handles the worker asks for.
    */
   readonly directory = mkdtempSync(join(tmpdir(), "weft-open-"));
-  readonly databasePath = join(this.directory, "weft.sqlite3");
   /** Every token a transport was built from, in order, so "per credential" is an assertion. */
   readonly tokens: string[] = [];
   readonly workers: FakeWorker[] = [];
   /** Set to leave a sync in flight for ever, which is how "the worker died mid-request" is arranged. */
   stallRelay = false;
+  /**
+   * How many of the next workers find the OPFS pool still held.
+   *
+   * The handover race, as a number. A tab that crashes runs no teardown, so the browser releases its
+   * lock and its access handles when it gets round to it, and a successor granted the lock in
+   * between asks for a pool that is not free yet. Counted down rather than timed, so the test says
+   * how many attempts the race lasts instead of guessing at a duration.
+   */
+  poolRefusals = 0;
+  /** A browser with no pool to give at all, on any attempt: private browsing. */
+  poolDeclines = false;
   readonly #opened: WeftDatabase[] = [];
+
+  /**
+   * Whether the worker being built now gets the OPFS pool. Exclusive, and from inside the worker
+   * indistinguishable from a browser that has none — which is the whole difficulty.
+   */
+  takePool(): boolean {
+    if (this.poolDeclines) return false;
+    if (this.poolRefusals <= 0) return true;
+    this.poolRefusals -= 1;
+    return false;
+  }
 
   async open(scopeId: string, overrides: OpenOverrides = {}): Promise<WeftDatabase> {
     // A turn, so an election runs after a lock a previous `dispose` handed back has actually been
     // released. A browser serialises its own lock queue; this fake resolves a release through
     // ordinary promises, which take a tick that a synchronous `open` would run inside.
     await delay(0);
-    const announce: WeftWorkerReady = overrides.announce ?? { weft: "ready", ok: true, schemaHash: HASH };
     const weft = await openWeftDatabase({
       schema,
       scopeId,
       // Never dereferenced: `createWorker` and `createBroker` are what turn these into a worker and
       // a connection, and under Node that is a MessageChannel with a `serveWeftWorker` on the far
-      // end and one with `serveWeftPortBroker` on the far end.
+      // end and one with `serveWeftPortBroker` on the far end. The one test about the *default*
+      // `createWorker` leaves it out and puts a `Worker` on the global instead.
       worker: "./storage-worker.ts",
       broker: "./broker.ts",
       deviceStorage: this.storage,
-      namespace: this.namespace,
-      locks: this.locks,
-      createWorker: () => {
-        const worker = new FakeWorker(this, announce);
-        this.workers.push(worker);
-        return worker;
-      },
+      namespace: overrides.namespace ?? this.namespace,
+      // Left out for the one test about a browser that has none, which is refused before anything
+      // is built rather than run without an election.
+      ...(overrides.withoutLocks === true ? {} : { locks: this.locks }),
+      ...(overrides.useDefaultWorker === true
+        ? {}
+        : {
+            // The namespace is taken from the argument rather than from the option above, because
+            // what a worker stores under is what it was handed: in a browser it reads that off its
+            // own URL, and a page that never passed it would have two namespaces on one pool.
+            createWorker: (_url: URL | string, namespace: string) => this.build(namespace, overrides.announce),
+          }),
       createBroker: overrides.createBroker ?? (() => this.hub.connect()),
       workerTimeoutMs: 2_000,
       ...(overrides.leaderTimeoutMs === undefined ? {} : { leaderTimeoutMs: overrides.leaderTimeoutMs }),
@@ -638,11 +984,28 @@ class Browser {
     return weft;
   }
 
+  /** One more worker, on this browser's storage for the namespace it was given. */
+  build(namespace: string, announce?: WeftWorkerReady): FakeWorker {
+    const worker = new FakeWorker(this, namespace, announce);
+    this.workers.push(worker);
+    return worker;
+  }
+
   /** The worker created most recently, which after a migration is the successor's. */
   get worker(): FakeWorker {
     const worker = this.workers.at(-1);
     if (worker === undefined) throw new Error("no worker was ever created");
     return worker;
+  }
+
+  /**
+   * The Web Lock one of this browser's databases is elected on.
+   *
+   * A database is a namespace and a scope together, so this takes both — and the namespace defaults
+   * to the browser's own, which is what every tab a test opens is in.
+   */
+  lockName(scopeId: string, namespace: string = this.namespace): string {
+    return `weft:${weftDatabaseKey(scopeId, namespace)}:opfs`;
   }
 
   /**
@@ -654,13 +1017,18 @@ class Browser {
    */
   crash(scopeId: string): void {
     this.worker.terminate();
-    this.locks.kill(`weft:${scopeId}:opfs`);
+    this.locks.kill(this.lockName(scopeId));
+  }
+
+  /** Where one namespace's database lives. Two namespaces of one origin are two of these. */
+  databasePath(namespace: string = this.namespace): string {
+    return join(this.directory, `${encodeURIComponent(namespace)}.sqlite3`);
   }
 
   /** What SQLite holds for a row, which is what survives every tab. Read over its own connection,
    * so it answers whether or not a worker is up. */
-  stored(scopeId: string, id: string): Record<string, unknown> | undefined {
-    const executor = openSqliteExecutor(this.databasePath);
+  stored(scopeId: string, id: string, namespace: string = this.namespace): Record<string, unknown> | undefined {
+    const executor = openSqliteExecutor(this.databasePath(namespace));
     try {
       return executor.get({
         sql: 'SELECT * FROM "todos" WHERE scope_id = ? AND id = ?',
@@ -708,6 +1076,86 @@ interface OpenOverrides {
   readonly leaderTimeoutMs?: number;
   /** For the one test about a browser that has no `SharedWorker` to connect to. */
   readonly createBroker?: (url: URL | string) => BrokerPortLike;
+  /** For the one test about a browser that has no Web Locks. */
+  readonly withoutLocks?: boolean;
+  /** Another application of this origin. The browser's own namespace by default. */
+  readonly namespace?: string;
+  /** For the tests about the default `createWorker`, which reads a `Worker` off the global. */
+  readonly useDefaultWorker?: boolean;
+}
+
+/**
+ * Whether the newest worker has hydrated a client, which is a tab having reconnected to it.
+ *
+ * What a migration test needs and a mirror's own row count cannot give: the rows it is holding came
+ * from the worker that died and stay there until the new one answers.
+ */
+function hydrated(browser: Browser): boolean {
+  return browser.workers.length > 1 && browser.worker.host.client !== undefined;
+}
+
+/**
+ * Runs a body in an environment that has both halves of what the default `createWorker` needs: a
+ * `Worker` constructor, and a document for a relative worker URL to be resolved against.
+ *
+ * The stand-in constructor reads the namespace off the URL it was handed and opens that namespace's
+ * storage, which is exactly what `serveWeftWorkerDefaults` does with the same URL — a worker is told
+ * which database to open by where it was loaded from and by nothing else.
+ */
+async function withWorkerConstructor(browser: Browser, urls: string[], body: () => Promise<void>): Promise<void> {
+  // A function rather than a class, because a class constructor may not hand back an object of
+  // another type and this one has to: what the page is given is the fake worker, and what the fake
+  // worker is given is the namespace its URL named.
+  const constructor = function (url: URL | string): FakeWorker {
+    urls.push(String(url));
+    return browser.build(namespaceOfWorkerUrl(String(url)));
+  } as unknown as new (url: URL | string) => unknown;
+  await withGlobals({ location: { href: "https://weft.test/app/index.html" }, Worker: constructor }, body);
+}
+
+/**
+ * Which namespace a worker loaded from this URL would open, read the way the worker reads it.
+ *
+ * A URL with nothing written into it is the default namespace, which is what makes a page that
+ * stopped writing one two workers on a single database rather than an error.
+ */
+function namespaceOfWorkerUrl(url: string): string {
+  return new URL(url).searchParams.get("weft-namespace") ?? "weft";
+}
+
+/** Runs a body with globals a browser has and Node does not, and puts back whatever was there. */
+async function withGlobals<T>(values: Record<string, unknown>, body: () => Promise<T>): Promise<T> {
+  const originals = Object.keys(values).map(
+    (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const,
+  );
+  for (const [name, value] of Object.entries(values))
+    Object.defineProperty(globalThis, name, { value, configurable: true });
+  try {
+    return await body();
+  } finally {
+    for (const [name, descriptor] of originals) {
+      if (descriptor === undefined) delete (globalThis as Record<string, unknown>)[name];
+      else Object.defineProperty(globalThis, name, descriptor);
+    }
+  }
+}
+
+/**
+ * Runs a body in an environment whose `navigator` has no `locks`.
+ *
+ * Node's own `navigator` has a real `LockManager` on it, which is the same place the library reads
+ * one from — so a test about a browser that has none has to take that one away rather than merely
+ * leave the option out. Restored afterwards, because every other test in this file elects.
+ */
+async function withoutWebLocks(body: () => Promise<void>): Promise<void> {
+  const original = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", { value: {}, configurable: true });
+  try {
+    await body();
+  } finally {
+    if (original === undefined) delete (globalThis as { navigator?: unknown }).navigator;
+    else Object.defineProperty(globalThis, "navigator", original);
+  }
 }
 
 async function withBrowser(body: (browser: Browser) => Promise<void>): Promise<void> {
@@ -735,20 +1183,28 @@ async function withBrowser(body: (browser: Browser) => Promise<void>): Promise<v
 class FakeWorker implements WorkerLike {
   readonly host: WeftWorkerHost;
   readonly executor: ReturnType<typeof openSqliteExecutor>;
+  /** What this worker got, which is what it announces and what it answers every hydrate with. */
+  readonly durability: WeftDurability;
   terminated = false;
   readonly #channel = new MessageChannel();
   readonly #page: PortEndpoint<WorkerMessage>;
 
-  constructor(browser: Browser, announce: WeftWorkerReady) {
-    // The browser's one file, not a database of this worker's own: a successor tab creates a new
-    // worker and has to find what the tab before it committed.
-    this.executor = openSqliteExecutor(browser.databasePath);
+  constructor(browser: Browser, namespace: string, announce?: WeftWorkerReady) {
+    // The browser's one file for this namespace, not a database of this worker's own: a successor
+    // tab creates a new worker and has to find what the tab before it committed, while a worker of
+    // another namespace has been given a pool of its own and finds nothing of this one's. A worker
+    // refused the pool falls back to memory and says so, exactly as `serveWeftWorkerDefaults` does —
+    // a different, empty database with the durable one still on disk beside it.
+    const pooled = browser.takePool();
+    this.durability = pooled ? "durable" : "ephemeral";
+    this.executor = openSqliteExecutor(pooled ? browser.databasePath(namespace) : ":memory:");
     const store = new SqliteClientStore(this.executor, schema);
     store.installSchema();
     this.host = serveWeftWorker({
       port: new PortEndpoint<WorkerRequest>(this.#channel.port2),
       executor: this.executor,
       store,
+      durability: this.durability,
       session: {
         schemaHash: HASH,
         transport: (token) => browser.relay(token),
@@ -760,7 +1216,9 @@ class FakeWorker implements WorkerLike {
       },
     });
     this.#page = new PortEndpoint<WorkerMessage>(this.#channel.port1);
-    this.#channel.port2.postMessage(announce);
+    this.#channel.port2.postMessage(
+      announce ?? { weft: "ready", ok: true, schemaHash: HASH, durability: this.durability },
+    );
   }
 
   // The transfer list is the whole handover: `openWeftDatabase` forwards a port that arrived from
@@ -791,6 +1249,67 @@ class FakeWorker implements WorkerLike {
     }
     this.#channel.port1.close();
     this.#channel.port2.close();
+  }
+}
+
+/**
+ * The OPFS synchronous access handle pools of one origin, as a worker meets them.
+ *
+ * A pool is installed by taking an access handle on every file it holds, so a pool one document has
+ * is refused to the next — and from inside the worker that refusal is indistinguishable from a
+ * browser that has no OPFS at all, which is why it comes back as an in-memory database rather than
+ * as an error. That is the whole reason a namespace has to reach the worker: two applications of one
+ * origin asking for one pool is the second of them silently ephemeral.
+ *
+ * Everything else is real. The SQLite is `@sqlite.org/sqlite-wasm`, the entry point under test is
+ * `serveWeftWorkerDefaults`, and what a worker is told about its namespace is what a browser tells
+ * it: its own URL.
+ */
+class OpfsPools {
+  /** Every pool name a worker asked for, in the order they asked. */
+  readonly installed: string[] = [];
+  readonly #held = new Set<string>();
+
+  /** Starts one worker in a namespace, and reports what kind of database it ended up with. */
+  async open(namespace: string): Promise<WeftDurability> {
+    const port = new CollectingPort();
+    const href = `https://weft.test/app/storage-worker.ts?weft-namespace=${encodeURIComponent(namespace)}`;
+    await withGlobals({ location: { href } }, async () => {
+      await serveWeftWorkerDefaults({ schema, port, sqlite3InitModule: async () => this.#module() });
+    });
+    const announced = port.sent[0];
+    if (announced?.ok !== true) throw new Error("the worker opened no database at all");
+    return announced.durability ?? "durable";
+  }
+
+  #module(): Sqlite3Module {
+    return {
+      oo1: sqlite3.oo1,
+      installOpfsSAHPoolVfs: async (options) => {
+        const name = options.name ?? "opfs-sahpool";
+        this.installed.push(name);
+        if (this.#held.has(name)) throw new Error(`the pool ${name} is held by another document`);
+        this.#held.add(name);
+        return { OpfsSAHPoolDb: PooledDatabase };
+      },
+    };
+  }
+}
+
+/** A database out of a pool, which for this test is any real SQLite that is not the other one. */
+class PooledDatabase implements WasmDatabase {
+  readonly #database = new sqlite3.oo1.DB(":memory:", "c");
+
+  prepare(sql: string): ReturnType<WasmDatabase["prepare"]> {
+    return this.#database.prepare(sql);
+  }
+
+  exec(sql: string): unknown {
+    return this.#database.exec(sql);
+  }
+
+  close(): void {
+    this.#database.close();
   }
 }
 
@@ -853,17 +1372,19 @@ function titles(rows: readonly MaterializedRow[]): readonly (string | undefined)
 /**
  * Whether any tab is still serving a scope. Used to prove a teardown really tore down.
  *
- * Asked the way a tab asks: through the broker, over a port, with an `open` the host answers
- * without doing anything. A registration alone would not do — a provider that has gone leaves one
- * standing on purpose — so what is tested is whether something answers.
+ * Asked the way a tab asks: through the broker, over a port, with the `hydrate` a tab sends first.
+ * A registration alone would not do — a provider that has gone leaves one standing on purpose — so
+ * what is tested is whether something answers.
  */
 async function answers(browser: Browser, scopeId: string): Promise<boolean> {
-  const broker = new WeftBrokerClient(browser.hub.connect(), scopeId);
+  // In this browser's namespace, or it would be asking after a database no tab of the test ever
+  // opened and be told nobody is serving it however many tabs are.
+  const broker = new WeftBrokerClient(browser.hub.connect(), scopeId, browser.namespace);
   const brokered = broker.requestPort();
   const transport = new WorkerPortTransport(brokered.port);
   try {
     return await Promise.race([
-      transport.request({ type: "open", scopeId }).then(
+      transport.request({ type: "hydrate", scopeId, deviceId: "device-probe" }).then(
         () => true,
         () => true,
       ),

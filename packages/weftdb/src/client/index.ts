@@ -955,8 +955,8 @@ export type { ScopedRowQuery } from "./kysely.ts";
 export {
   isDeltaPush,
   isWeftWorkerConnect,
-  isWeftWorkerOpened,
   isWeftWorkerReady,
+  isWorkerHydrated,
   isWorkerPush,
   withRequestId,
   WorkerPortTransport,
@@ -964,11 +964,11 @@ export {
 export type {
   WeftDurability,
   WeftWorkerConnect,
-  WeftWorkerOpened,
   WeftWorkerReady,
   WireRow,
   WorkerDelta,
   WorkerDeltaPush,
+  WorkerHydrated,
   WorkerLike,
   WorkerMessage,
   WorkerMutation,
@@ -983,6 +983,7 @@ export { serveWeftWorker, WeftWorkerHost } from "./worker-host.ts";
 export type { WeftWorkerHostOptions, WorkerHostPortLike } from "./worker-host.ts";
 export { WeftClientMirror } from "./worker-mirror.ts";
 export type { WeftClientMirrorOptions } from "./worker-mirror.ts";
+export { weftDatabaseKey } from "./database-key.ts";
 export { MultiTabCoordinator } from "./multitab.ts";
 export type {
   LeadershipListener,

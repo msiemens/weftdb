@@ -15,7 +15,19 @@
 // tell a tab that has gone from one the browser has frozen, and treating the second as the first is
 // how two documents come to hold one OPFS access handle. A browser-owned lock is released on a
 // crash; a connection is not evidence.
-export type TabRole = "leader" | "follower" | "degraded";
+//
+// There is no third state for a browser that has no Web Locks. Web Locks is available strictly
+// earlier than everything else this design needs — Safari 15.4, against 16.4 for `SharedWorker` and
+// 17 for OPFS synchronous access handles — so a browser that can hold the database at all can hold
+// the lock, and one that cannot is refused at the front door (see `openWeftDatabase`) rather than
+// run without an election.
+//
+// One lock per database, and a database is a namespace and a scope together (see
+// `./database-key.ts`). Two scopes elect separately because they are two databases; so do two
+// namespaces of one scope, which is one browser running two applications over one origin.
+import { weftDatabaseKey } from "./database-key.ts";
+
+export type TabRole = "leader" | "follower";
 
 /**
  * The subset of `LockOptions` this module uses. `ifAvailable` is how an election asks without
@@ -40,7 +52,13 @@ export interface LockManagerLike {
 
 export interface MultiTabOptions {
   readonly scopeId: string;
-  readonly locks?: LockManagerLike;
+  /**
+   * Which application in this origin the scope belongs to. `"weft"` by default, and part of the
+   * lock's name: an election is per database, and a database is this and the scope together.
+   */
+  readonly namespace?: string;
+  /** Required: there is no election without one, and no tab may create a worker without an election. */
+  readonly locks: LockManagerLike;
 }
 
 /**
@@ -58,8 +76,17 @@ export type LeadershipListener = () => void;
 
 export class MultiTabCoordinator {
   readonly scopeId: string;
-  readonly locks: LockManagerLike | undefined;
-  role: TabRole = "degraded";
+  /**
+   * The Web Lock this election runs on, `weft:<database key>:opfs`.
+   *
+   * Composed once here rather than at each request, and named on the instance because it is the one
+   * thing about a coordinator another party may need to say out loud — a diagnostic, or a test
+   * arranging a lock that is already held.
+   */
+  readonly lockName: string;
+  readonly locks: LockManagerLike;
+  /** A tab leads only once the browser has granted it the lock, so this is where every tab starts. */
+  role: TabRole = "follower";
   /** Resolved to hand the lock back; held for as long as this tab is the leader. */
   #release: (() => void) | undefined;
   /** Aborts the queued succession request, so a tab that closes stops standing in line. */
@@ -69,6 +96,7 @@ export class MultiTabCoordinator {
 
   constructor(options: MultiTabOptions) {
     this.scopeId = options.scopeId;
+    this.lockName = `weft:${weftDatabaseKey(options.scopeId, options.namespace)}:opfs`;
     this.locks = options.locks;
   }
 
@@ -82,14 +110,10 @@ export class MultiTabCoordinator {
    * turns "somebody else has it" into "and this tab will be told when they no longer do".
    */
   async elect(): Promise<TabRole> {
-    if (this.locks === undefined) {
-      this.role = "degraded";
-      return this.role;
-    }
     if (this.role === "leader") return this.role;
     const locks = this.locks;
     return new Promise<TabRole>((resolveRole, rejectRole) => {
-      const held = locks.request(`weft:${this.scopeId}:opfs`, { ifAvailable: true }, (lock) => {
+      const held = locks.request(this.lockName, { ifAvailable: true }, (lock) => {
         if (lock === null) {
           this.role = "follower";
           resolveRole(this.role);
@@ -144,16 +168,16 @@ export class MultiTabCoordinator {
    * tabs: the queue is the browser's, it hands the lock to one waiter at a time, and every other
    * waiter simply stays in line for the next death.
    *
-   * Idempotent, and a no-op for a tab that already leads or that has no Web Locks to wait on.
+   * Idempotent, and a no-op for a tab that already leads.
    */
   watchLeader(): void {
-    if (this.locks === undefined || this.#closed) return;
+    if (this.#closed) return;
     if (this.role !== "follower") return;
     if (this.#standby !== undefined) return;
     const controller = new AbortController();
     this.#standby = controller;
     const locks = this.locks;
-    const held = locks.request(`weft:${this.scopeId}:opfs`, { signal: controller.signal }, (lock) => {
+    const held = locks.request(this.lockName, { signal: controller.signal }, (lock) => {
       // A queued request is granted or it is not. `null` is what `ifAvailable` answers with, so an
       // implementation that returned it here is saying the lock was busy — and taking that for a
       // grant is precisely the second leader this class exists to prevent.
@@ -182,7 +206,9 @@ export class MultiTabCoordinator {
     this.#standby = undefined;
     this.#release?.();
     this.#release = undefined;
-    if (this.role === "leader") this.role = "degraded";
+    // Back to where every tab starts. This tab holds nothing now, and a page reading the role on
+    // its way out is told what is true rather than what was.
+    this.role = "follower";
     // A tab that is closing has no use for its own listeners, and telling them leadership had moved
     // would have the page rebuild itself on the way out.
     this.#listeners.clear();

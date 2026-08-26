@@ -173,8 +173,8 @@ test("§8.7 an ephemeral database answers a compiled query with a WHERE and an O
 test("§8.7 a follower reports the same durability as the leader", async () =>
   withBrowser(async (browser) => {
     // The awkward half. A worker announces itself once, to the tab that created it, and a follower
-    // is never there to hear it — it is handed a `MessagePort` and starts by asking `open`. So the
-    // value has to come back on that reply as well, or the same database in a second tab of one
+    // is never there to hear it — it is handed a `MessagePort` and starts by asking `hydrate`. So
+    // the value has to come back on that reply as well, or the same database in a second tab of one
     // browser tells the person the opposite thing about whether the window will remember.
     const leader = await browser.open("scope-1");
     const follower = await browser.open("scope-1");

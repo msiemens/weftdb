@@ -30,14 +30,15 @@
 // `role` rather than something an application has to infer.
 import { deviceId as toDeviceId, type DeviceId } from "weftdb/core";
 import { schemaHash, type SchemaDefinition } from "weftdb/schema";
+import { DEFAULT_NAMESPACE, WEFT_NAMESPACE_PARAM } from "./database-key.ts";
 import { MultiTabCoordinator, type LockManagerLike, type TabRole } from "./multitab.ts";
 import { WeftBrokerClient, type BrokeredPort, type BrokerPortLike } from "./broker.ts";
 import { SubscriptionEngine } from "./subscriptions.ts";
 import type { SessionStatus } from "./session.ts";
 import type { StorageLike } from "./web-storage.ts";
 import {
-  isWeftWorkerOpened,
   isWeftWorkerReady,
+  isWorkerHydrated,
   WorkerPortTransport,
   type WeftDurability,
   type WorkerLike,
@@ -93,7 +94,16 @@ export interface OpenWeftDatabaseOptions {
    * an option is what makes the identity testable and lets an application supply storage of its own.
    */
   readonly deviceStorage?: StorageLike;
-  /** Prefixes every key this writes, so two applications in one origin do not collide. */
+  /**
+   * Which application in this origin this database belongs to. `"weft"` by default.
+   *
+   * It is half of the database's identity, and the scope is the other half. Two calls that agree on
+   * both are two tabs of one database: one election, one worker, one device id. Two calls that
+   * differ in either are two databases that share nothing — separate locks, separate workers,
+   * separate device ids, separate OPFS pools — even where the `scopeId` is the same string.
+   *
+   * It also prefixes every key the device id is kept under, which is where it started.
+   */
   readonly namespace?: string;
   /** Web Locks, which decide which tab holds the worker. `navigator.locks` by default. */
   readonly locks?: LockManagerLike;
@@ -102,8 +112,14 @@ export interface OpenWeftDatabaseOptions {
    * outside a browser, which is exactly why it is an option: under Node the whole assembly below —
    * the election, the port handover, the migration, the teardown order — is real, and only this is
    * replaced by a `MessageChannel` with a `serveWeftWorker` on the far end.
+   *
+   * The namespace is handed over with the URL because the worker opens the database and only the
+   * page knows which one to open. The default writes it into the URL's query string, where
+   * `serveWeftWorkerDefaults` reads it back off its own `location`; a `createWorker` of an
+   * application's own has to put it somewhere its worker will read, or two namespaces in one origin
+   * will contend for a single OPFS pool and the second tab will be refused it.
    */
-  readonly createWorker?: (url: URL | string) => WorkerLike;
+  readonly createWorker?: (url: URL | string, namespace: string) => WorkerLike;
   /**
    * How the connection to the broker is made. The default constructs a `SharedWorker` and hands
    * back its port; this is the seam for everything that is not a browser.
@@ -138,16 +154,20 @@ export interface WeftDatabase {
   /**
    * Which part this tab is playing, read live rather than fixed at the open. A follower granted the
    * lock becomes the leader without the page being rebuilt, so a role captured once would go on
-   * describing a tab that had stopped being it. Drive a banner off this, never off a request in
-   * flight.
+   * describing a tab that had stopped being it.
+   *
+   * Diagnostics rather than something to render. Every tab holds a port straight to the worker, so a
+   * follower is one hop from the database exactly as the leader is, and there is nothing a person
+   * reading "another tab holds the database" could do about it or would want to. `durability` is the
+   * value worth a banner, because it says the window will not remember.
    */
   readonly role: TabRole;
   /**
    * Fires when `role` changes, so a renderer has something to re-read it on.
    *
-   * Reading a live getter is only half of a banner: a promoted tab holds the lock from the moment
-   * the browser grants it, and a page with nothing to subscribe to goes on showing the role it had
-   * at the open until some unrelated state happens to re-render it. Pair the two the way
+   * Reading a live getter is only half of it: a promoted tab holds the lock from the moment the
+   * browser grants it, and a page with nothing to subscribe to goes on showing the role it had at
+   * the open until some unrelated state happens to re-render it. Pair the two the way
    * `status`/`subscribeStatus` are paired.
    *
    * Only a promotion moves the role. A tab hearing that somebody else is providing stays a follower,
@@ -165,7 +185,11 @@ export interface WeftDatabase {
    *
    * A getter rather than a value, for the same reason `role` is one: leadership moving reopens this
    * tab against a different worker, and the answer comes from whichever worker is serving it now.
-   * Every tab of one scope reports the same thing — a follower learns it from its `open`.
+   * Every tab of one scope reports the same thing — a follower learns it from its `hydrate`.
+   *
+   * It does not move during a session, so there is nothing to subscribe to. A device that was
+   * durable stays durable: a successor that came up in memory because the predecessor had not let
+   * the pool go yet is discarded and made again rather than accepted (see `#succeedToWorker`).
    */
   readonly durability: WeftDurability;
   /** What the worker's sync session last reported, or nothing before this device has signed in. */
@@ -200,6 +224,11 @@ export type WeftOpenFailure =
   | "no-worker"
   /** This environment has no `SharedWorker`, so no tab can be given a port to the worker. */
   | "no-broker"
+  /**
+   * This environment has no Web Locks, so there is nothing that can decide which tab holds the
+   * database. Reported in every tab, before a worker is created anywhere.
+   */
+  | "no-locks"
   /** This environment has no `localStorage` to keep a device id in, and none was supplied. */
   | "no-device-storage";
 
@@ -213,12 +242,20 @@ export class WeftOpenError extends Error {
   }
 }
 
-const DEFAULT_NAMESPACE = "weft";
 const DEFAULT_WORKER_TIMEOUT_MS = 30_000;
 const DEFAULT_LEADER_TIMEOUT_MS = 10_000;
 const DEFAULT_CLOSE_TIMEOUT_MS = 2_000;
-/** How long one handover attempt is given, and how long the next waits. */
+/** How long one handover attempt is given before another port is asked for alongside it. */
 const LEADER_PROBE_MS = 100;
+/**
+ * How many workers a successor builds before it gives up on the database this tab already had, and
+ * the step between them: attempt `n` waits `n` steps, so six attempts span three quarters of a
+ * second. Long enough for a browser to finish releasing a crashed document's access handles, short
+ * enough that a tab taking over is not visibly stalled — and paid only by a tab that was durable and
+ * whose successor worker was not. See `DatabaseTab.#succeedToWorker`.
+ */
+const POOL_HANDOVER_ATTEMPTS = 6;
+const POOL_HANDOVER_STEP_MS = 50;
 /** What a request in flight when the worker went away is rejected with. */
 const MIGRATED = "the tab holding the storage worker went away; the write's outcome is unknown";
 
@@ -254,18 +291,26 @@ export function deviceIdForScope(
  */
 export async function openWeftDatabase(options: OpenWeftDatabaseOptions): Promise<WeftDatabase> {
   const { scopeId } = options;
+  // Resolved once, here, and given to every part that decides which database this is: the device
+  // id's storage key, the lock the election runs on, the key the broker registers under, and the
+  // worker that opens the file. A default applied in four places is four chances for two of them to
+  // disagree, and a page whose lock says one database while its broker says another is a tab that
+  // leads an election nobody else is in.
+  const namespace = options.namespace ?? DEFAULT_NAMESPACE;
   const deviceId = deviceIdForScope(scopeId, {
     ...(options.deviceStorage === undefined ? {} : { storage: options.deviceStorage }),
-    ...(options.namespace === undefined ? {} : { namespace: options.namespace }),
+    namespace,
   });
-  const locks = resolveLocks(options);
-  const coordinator = new MultiTabCoordinator({ scopeId, ...(locks === undefined ? {} : { locks }) });
+  // First of the three refusals, and before anything has been built: a browser with no Web Locks
+  // has nothing that can decide which tab may touch the database, and there is no smaller
+  // arrangement to fall back to.
+  const coordinator = new MultiTabCoordinator({ scopeId, namespace, locks: resolveLocks(options) });
   // Before the election, because the tab that wins has to be registered as the provider before any
   // tab that loses starts asking for a port. Constructing it is also where a browser with no
   // `SharedWorker` is refused, and that has to happen before a lock is taken rather than after.
   let broker: WeftBrokerClient;
   try {
-    broker = new WeftBrokerClient((options.createBroker ?? defaultCreateBroker)(options.broker), scopeId);
+    broker = new WeftBrokerClient((options.createBroker ?? defaultCreateBroker)(options.broker), scopeId, namespace);
   } catch (error) {
     coordinator.close();
     throw error;
@@ -280,12 +325,10 @@ export async function openWeftDatabase(options: OpenWeftDatabaseOptions): Promis
     throw error;
   }
 
-  const tab = new DatabaseTab(options, coordinator, broker, deviceId);
+  const tab = new DatabaseTab(options, coordinator, broker, deviceId, namespace);
   try {
-    // A tab in a browser without Web Locks is `degraded`, and creates the worker: it is the only
-    // tab as far as anything here can tell. If it is not — two degraded tabs in one browser — the
-    // second one's worker fails to take the access handle and says so, which is the loud failure
-    // this module prefers to a quiet second database.
+    // A worker is created by the tab holding the lock and by no other, which is the whole of the
+    // exclusion: every other tab is handed a port to that one.
     await tab.start(role === "follower");
   } catch (error) {
     await tab.dispose();
@@ -308,6 +351,8 @@ class DatabaseTab {
   readonly #coordinator: MultiTabCoordinator;
   readonly #broker: WeftBrokerClient;
   readonly #deviceId: DeviceId;
+  /** Resolved by the caller, so every worker this tab builds opens the same database. */
+  readonly #namespace: string;
   #mirror: WeftClientMirror | undefined;
   /** The dedicated worker, in the tab that made one. Nothing in a tab that was handed a port. */
   #worker: WorkerLike | undefined;
@@ -340,11 +385,13 @@ class DatabaseTab {
     coordinator: MultiTabCoordinator,
     broker: WeftBrokerClient,
     deviceId: DeviceId,
+    namespace: string,
   ) {
     this.#options = options;
     this.#coordinator = coordinator;
     this.#broker = broker;
     this.#deviceId = deviceId;
+    this.#namespace = namespace;
   }
 
   /** Connects, hydrates, and stands this tab in line for the worker it does not hold. */
@@ -499,7 +546,7 @@ class DatabaseTab {
     this.#brokered?.discard();
     this.#brokered = undefined;
     try {
-      const transport = role === "leader" ? await this.#createWorker() : await this.#connectToProvider();
+      const transport = role === "leader" ? await this.#succeedToWorker() : await this.#connectToProvider();
       if (this.#disposed) return;
       // The rows and every registration are made again from the new worker. What comes back is
       // whatever committed to the database, which is also the answer for the write whose fate the
@@ -511,10 +558,59 @@ class DatabaseTab {
     }
   }
 
-  /** Creates the worker for this scope and registers as the tab that holds it. */
+  /** Creates the worker for this scope, takes it, and registers as the tab that holds it. */
   async #createWorker(): Promise<WorkerPortTransport> {
+    return this.#takeWorker(await this.#buildWorker());
+  }
+
+  /**
+   * Creates the worker for a tab the browser has just handed the lock to, and insists on the
+   * database this tab already had.
+   *
+   * A first open and a succession are not the same question, and only the page can tell them apart.
+   * Inside the worker a pool that will never be given and a pool that is still being given back look
+   * identical — both are a rejection out of `installOpfsSAHPoolVfs` — and both are answered with an
+   * in-memory database. A tab that crashes runs no teardown, so the browser releases its lock and
+   * its access handles on schedules of its own, and a successor granted the lock a moment early
+   * would come up ephemeral with the durable file still sitting on disk and nothing left that can
+   * reach it. Silently.
+   *
+   * The page has the one fact that settles it: what kind of database this tab was reading a moment
+   * ago. A device that was durable and whose new worker is not has hit the handover, not a browser
+   * that changed its mind, so that worker is thrown away and another is built. A device that was
+   * already ephemeral asks nothing and waits for nothing — which is what keeps private browsing,
+   * where the pool fails every time and no wait would ever help, paying none of this.
+   *
+   * The workers thrown away here were never taken: nothing on this tab was pointed at them and no
+   * other tab was told they existed, so stopping one unwinds nothing.
+   */
+  async #succeedToWorker(): Promise<WorkerPortTransport> {
+    const had = this.#durability;
+    for (let attempt = 1; ; attempt += 1) {
+      const built = await this.#buildWorker();
+      if (had === "ephemeral" || built.durability === "durable") return this.#takeWorker(built);
+      built.worker.terminate?.();
+      if (attempt >= POOL_HANDOVER_ATTEMPTS) {
+        throw new Error(
+          `this tab took over the storage worker for scope ${this.#options.scopeId}, and ${POOL_HANDOVER_ATTEMPTS} ` +
+            "attempts later the browser was still refusing the OPFS synchronous access handle pool. This " +
+            "device's database is durable, so an in-memory one would be a different and empty database " +
+            "with the real one unreachable beside it; the tab is left reporting this instead.",
+        );
+      }
+      await delay(POOL_HANDOVER_STEP_MS * attempt);
+      if (this.#disposed) throw new Error("the database was closed while it was taking over");
+    }
+  }
+
+  /**
+   * Starts a worker and waits for it to say what it opened.
+   *
+   * Nothing on this tab is changed by it, which is what lets `#succeedToWorker` throw one away.
+   */
+  async #buildWorker(): Promise<BuiltWorker> {
     const options = this.#options;
-    const worker = (options.createWorker ?? defaultCreateWorker)(options.worker);
+    const worker = (options.createWorker ?? defaultCreateWorker)(options.worker, this.#namespace);
     // Before the transport, because the worker announces itself unasked and a transport that was
     // listening would have to be told to ignore it. What comes back also settles whether there is a
     // database at all.
@@ -535,11 +631,16 @@ class DatabaseTab {
           "page reading this one would select columns that database has never had.",
       );
     }
+    return { worker, durability: ready.durability };
+  }
 
+  /** Points this tab at a worker it has decided to keep, and starts serving the other tabs from it. */
+  #takeWorker(built: BuiltWorker): WorkerPortTransport {
+    const worker = built.worker;
     const transport = new WorkerPortTransport(worker);
     this.#worker = worker;
     this.#transport = transport;
-    this.#durability = ready.durability;
+    this.#durability = built.durability;
     // The one line whose absence is invisible from here: a port delivered by the broker and not
     // forwarded into the worker leaves the tab that asked for it holding a channel with nothing on
     // the other end, waiting for an answer nobody is going to give.
@@ -560,61 +661,110 @@ class DatabaseTab {
    * tab asking they are the same: the broker may have no provider registered at all, or it may have
    * one that has since died — a registration is not liveness, and deliberately is not (see
    * `serveWeftPortBroker`). So the test is not "was the port accepted" but "does something answer
-   * over it", which is what `open` is for: the host answers it without doing anything, so it is an
-   * acknowledgement that somebody is serving rather than an instruction.
+   * over it".
    *
-   * Its answer is also the only route by which a tab that was handed a port learns whether the
-   * database is durable. The worker announced that once, to the tab that created it, and this tab
-   * was not that tab — so without reading the reply the same database would be reported durable here
-   * and ephemeral next door.
+   * What is asked is `hydrate`, which is what this tab was going to send first in any case. Its
+   * reply is also the only route by which a tab that was handed a port learns whether the database
+   * is durable: the worker announced that once, to the tab that created it, and this tab was not
+   * that tab, so without reading the reply the same database would be reported durable here and
+   * ephemeral next door.
+   *
+   * The rows in that reply are dropped, and the mirror built afterwards asks again. The alternative
+   * is a window with nothing listening: a mirror subscribes to the worker's pushes when it is
+   * constructed, and rows adopted from a reply that predates it would miss whatever another tab
+   * changed in between — a page one edit behind, for ever, with nothing reporting it. One round trip
+   * on a path taken once per connection buys that away.
    */
   async #connectToProvider(): Promise<WorkerPortTransport> {
     const timeoutMs = this.#options.leaderTimeoutMs ?? DEFAULT_LEADER_TIMEOUT_MS;
     const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      // Checked each time round, because this loop is the one thing in the open that can still be
-      // running when the tab goes: a port taken after `dispose` would be a connection nothing is
-      // left to close.
-      if (this.#disposed) throw new Error("the database was closed while it was reconnecting");
-      const brokered = this.#broker.requestPort();
-      // Posted before the far end has started delivering, which is safe and is what makes the
-      // handover raceless: a `MessagePort` queues what arrives while it is stopped, so the request
-      // below is waiting in the worker's own queue by the time the worker calls `start` on it.
-      const transport = new WorkerPortTransport(brokered.port);
-      let served: WeftDurability | undefined;
-      const reached = await Promise.race([
-        // The rejection is caught rather than raced: a worker that is answering but refusing is
-        // still a worker, and this is only asking whether one is there.
-        transport.request({ type: "open", scopeId: this.#options.scopeId }).then(
-          (value) => {
-            if (isWeftWorkerOpened(value)) served = value.durability;
-            return true;
-          },
-          () => true,
-        ),
-        brokered.refused.then(() => false),
-        delay(LEADER_PROBE_MS).then(() => false),
-      ]);
-      if (reached) {
-        this.#brokered = brokered;
-        this.#transport = transport;
-        // A worker old enough not to say is one that predates the memory fallback, and everything
-        // that predates it was OPFS.
-        this.#durability = served ?? "durable";
-        return transport;
+    const probes: ProviderProbe[] = [];
+    let kept: ProviderProbe | undefined;
+    try {
+      for (;;) {
+        // Checked each time round, because this loop is the one thing in the open that can still be
+        // running when the tab goes: a port taken after `dispose` would be a connection nothing is
+        // left to close.
+        if (this.#disposed) throw new Error("the database was closed while it was reconnecting");
+        probes.push(this.#probeProvider());
+        kept = await Promise.race([
+          ...probes.map(async (probe) => {
+            await probe.answered;
+            return probe;
+          }),
+          delay(LEADER_PROBE_MS).then(() => undefined),
+        ]);
+        if (kept !== undefined) {
+          this.#brokered = kept.brokered;
+          this.#transport = kept.transport;
+          // A worker old enough not to say is one that predates the memory fallback, and everything
+          // that predates it was OPFS.
+          this.#durability = kept.durability ?? "durable";
+          return kept.transport;
+        }
+        if (Date.now() >= deadline) {
+          throw new WeftOpenError(
+            "no-leader",
+            `no tab answered for scope ${this.#options.scopeId} within ${timeoutMs}ms. This tab does not ` +
+              "hold the storage worker — another tab holds the OPFS access handle — and the ports it asked " +
+              "the broker for reached nobody, so there is no tab serving rather than one being slow.",
+          );
+        }
       }
-      transport.dispose("this port never reached the storage worker");
-      brokered.discard();
-      if (Date.now() >= deadline) {
-        throw new WeftOpenError(
-          "no-leader",
-          `no tab answered for scope ${this.#options.scopeId} within ${timeoutMs}ms. This tab does not ` +
-            "hold the storage worker — another tab holds the OPFS access handle — and the port it asked " +
-            "the broker for reached nobody, so there is no tab serving rather than one being slow.",
-        );
-      }
-      await delay(LEADER_PROBE_MS);
+    } finally {
+      // Every attempt that did not win, including the ones still standing. A port left open is a
+      // channel into the worker that nothing on this tab is reading.
+      for (const probe of probes) if (probe !== kept) probe.discard();
     }
+  }
+
+  /**
+   * One attempt at reaching whoever is providing: a port from the broker, and a `hydrate` over it.
+   *
+   * Attempts are kept rather than abandoned when the probe interval passes, and that is the point of
+   * the shape. A port delivered into a document that has gone is silent for ever; a worker reading a
+   * large scope out of SQLite is silent for a while; nothing distinguishes the two at a hundred
+   * milliseconds. A loop that discarded on the interval would throw away a healthy worker's answer
+   * again and again and end by reporting `no-leader` against a database that was working the whole
+   * time. So each interval adds another port instead, and whichever answers first is the one kept.
+   */
+  #probeProvider(): ProviderProbe {
+    const brokered = this.#broker.requestPort();
+    // The transport is made before the far end has started delivering, which is safe and is what
+    // makes the handover raceless: a `MessagePort` queues what arrives while it is stopped, so the
+    // request below is waiting in the worker's own queue by the time the worker calls `start` on it.
+    const transport = new WorkerPortTransport(brokered.port);
+    let discarded = false;
+    const probe: ProviderProbe = {
+      transport,
+      brokered,
+      answered: Promise.resolve(),
+      durability: undefined,
+      discard: () => {
+        if (discarded) return;
+        discarded = true;
+        transport.dispose("this port never reached the storage worker");
+        brokered.discard();
+      },
+    };
+    probe.answered = new Promise<void>((answered) => {
+      const settle = (value: unknown): void => {
+        // A discarded attempt never wins. Closing its transport rejects the request standing on it,
+        // and taking that for an answer would hand this tab a port it had already closed.
+        if (discarded) return;
+        if (isWorkerHydrated(value)) probe.durability = value.durability;
+        answered();
+      };
+      // A rejection counts: a worker that is answering and refusing is still a worker, and this is
+      // only asking whether one is there.
+      void transport
+        .request({ type: "hydrate", scopeId: this.#options.scopeId, deviceId: this.#deviceId })
+        .then(settle, () => settle(undefined));
+    });
+    // The broker had nobody to give the port to, which is no provider rather than a slow one. That
+    // attempt can never answer, so it is closed now instead of at the deadline.
+    void brokered.refused.then(() => probe.discard());
+    return probe;
   }
 
   #requireMirror(): WeftClientMirror {
@@ -627,6 +777,24 @@ class DatabaseTab {
     const report = this.#options.onError ?? defaultOnError;
     report(error instanceof Error ? error : new Error(String(error)));
   }
+}
+
+/** A worker that has said what it opened, before any tab has been pointed at it. */
+interface BuiltWorker {
+  readonly worker: WorkerLike;
+  readonly durability: WeftDurability;
+}
+
+/** One attempt at reaching the tab that holds the worker. See `DatabaseTab.#probeProvider`. */
+interface ProviderProbe {
+  readonly transport: WorkerPortTransport;
+  readonly brokered: BrokeredPort;
+  /** Settles when the far end answers, either way. A port nobody holds never settles it. */
+  answered: Promise<void>;
+  /** What the reply said about the database, for the attempt that gets one. */
+  durability: WeftDurability | undefined;
+  /** Closes this attempt's port. Idempotent, and after it nothing this attempt hears is an answer. */
+  discard(): void;
 }
 
 function defaultOnError(error: Error): void {
@@ -693,9 +861,30 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-function resolveLocks(options: OpenWeftDatabaseOptions): LockManagerLike | undefined {
-  if (options.locks !== undefined) return options.locks;
-  return (globalThis as { navigator?: { locks?: LockManagerLike } }).navigator?.locks;
+/**
+ * Web Locks, which is what decides who may touch the database.
+ *
+ * A browser without one is refused here, before anything is built and in every tab, for the reason
+ * `defaultCreateBroker` gives about `SharedWorker`. Only one document may hold the OPFS access
+ * handle and only the lock says which; without it every tab of an origin would believe it is the
+ * only one, and two tabs of one browser would run two databases, two outboxes and two sync sessions
+ * under a single device id — a device that overwrites its own work with a straight face.
+ *
+ * Nothing is lost by insisting. Web Locks reached Safari in 15.4, against 16.4 for `SharedWorker`
+ * and 17 for OPFS synchronous access handles, so every browser that can run any of this has it.
+ */
+function resolveLocks(options: OpenWeftDatabaseOptions): LockManagerLike {
+  const locks = options.locks ?? (globalThis as { navigator?: { locks?: LockManagerLike } }).navigator?.locks;
+  if (locks === undefined) {
+    throw new WeftOpenError(
+      "no-locks",
+      "this environment has no Web Locks (navigator.locks). weftdb needs one to decide which tab may " +
+        "hold the OPFS access handle: without it every tab would create a worker of its own, and two " +
+        "tabs of one browser would keep two databases and two outboxes under one device id. Pass " +
+        "`locks` to supply one.",
+    );
+  }
+  return locks;
 }
 
 function defaultDeviceStorage(): StorageLike {
@@ -709,7 +898,7 @@ function defaultDeviceStorage(): StorageLike {
   return storage;
 }
 
-function defaultCreateWorker(url: URL | string): WorkerLike {
+function defaultCreateWorker(url: URL | string, namespace: string): WorkerLike {
   const constructor = (globalThis as { Worker?: new (url: URL | string, options?: { type: "module" }) => unknown })
     .Worker;
   if (constructor === undefined) {
@@ -719,7 +908,39 @@ function defaultCreateWorker(url: URL | string): WorkerLike {
         "because an OPFS synchronous access handle exists nowhere else; pass `createWorker` to supply one.",
     );
   }
-  return new constructor(url, { type: "module" }) as WorkerLike;
+  return new constructor(namespacedWorkerUrl(url, namespace), { type: "module" }) as WorkerLike;
+}
+
+/**
+ * The worker's URL with this database's namespace written into its query string.
+ *
+ * Which file the worker opens is the one thing the page decides and the worker performs, and the
+ * URL is the only way to say it in time. A worker opens its database as it starts — the page's first
+ * message is the `ready` announcement coming back the other way — so anything sent over the port
+ * arrives after a pool has already been asked for, and the second application's tab would have been
+ * refused it by then. What the worker reads back out of this is in `serveWeftWorkerDefaults`.
+ *
+ * Resolved against the document's own address, because `new URL("./storage-worker.js")` is not a
+ * URL: the value an application passes is usually `new URL("./storage-worker.ts", import.meta.url)`,
+ * which is absolute, but a relative string is what a `Worker` constructor takes and has to keep
+ * meaning the same thing.
+ */
+function namespacedWorkerUrl(url: URL | string, namespace: string): URL {
+  const base = (globalThis as { location?: { href?: string } }).location?.href;
+  let resolved: URL;
+  try {
+    resolved = new URL(String(url), base);
+  } catch {
+    // Not a `WeftOpenError`: every reason in that union names a capability the environment does not
+    // have, and this is a value the caller passed. It is also a URL no `Worker` constructor would
+    // have accepted either, so nothing is being refused that would otherwise have worked.
+    throw new Error(
+      `the storage worker's URL could not be resolved: ${String(url)}. weftdb writes this database's ` +
+        "namespace into it, which is how the worker knows which OPFS pool is its own.",
+    );
+  }
+  resolved.searchParams.set(WEFT_NAMESPACE_PARAM, namespace);
+  return resolved;
 }
 
 /**
