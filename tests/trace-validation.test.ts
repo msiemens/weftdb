@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
 import { test } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import fc from "fast-check";
 import { rowId, txnId, type RowId } from "weftdb/core";
@@ -29,6 +30,24 @@ import {
 } from "./property-model.ts";
 
 const TLC = process.env["WEFT_TLC"] ?? "tlc";
+/**
+ * TLA+ is distributed as `tla2tools.jar` and a `tlc` launcher is something a person installs
+ * separately, so a jar is what most machines have. `WEFT_TLA_JAR` takes one; the default is where
+ * the TLA+ tools put themselves.
+ */
+const TLA_JAR = process.env["WEFT_TLA_JAR"] ?? join(homedir(), ".local/lib/tlaplus/tla2tools.jar");
+
+/** The command and its leading arguments, whichever of the two is present. */
+function tlcCommand(): { readonly command: string; readonly leading: readonly string[] } | undefined {
+  if (existsSync(TLA_JAR)) return { command: "java", leading: ["-cp", TLA_JAR, "tlc2.TLC"] };
+  if (existsSync(TLC)) return { command: TLC, leading: [] };
+  try {
+    execFileSync(TLC, ["-help"], { encoding: "utf8", timeout: 30_000 });
+    return { command: TLC, leading: [] };
+  } catch {
+    return undefined;
+  }
+}
 const SPEC_DIRECTORY = join(process.cwd(), "spec");
 
 /** The specification's constants: two devices, two rows, named as the model names them. */
@@ -85,8 +104,8 @@ const actionArb: fc.Arbitrary<Action> = fc.record({
 
 test("recorded implementation behaviour is behaviour the specification allows", { timeout: 600_000 }, async (t) => {
   let checked = 0;
-  if (!hasTlc()) {
-    t.skip("TLC is not on PATH; set WEFT_TLC to its path to run trace validation");
+  if (tlcCommand() === undefined) {
+    t.skip("no TLC found; set WEFT_TLA_JAR to a tla2tools.jar, or WEFT_TLC to a tlc launcher");
     return;
   }
 
@@ -362,10 +381,11 @@ EXTENDS Naturals, Sequences, TLC
 
 \\* The individual model values are constants so the trace can name them; the sets below are
 \\* what the specification is instantiated with.
-CONSTANTS Devices, Rows, MaxSeq, PullChecksFloor, FloorRisesFirst, d1, d2, r1, r2
+CONSTANTS Devices, Rows, MaxSeq, PullChecksFloor, FloorRisesFirst, AckReportsSupersession,
+          d1, d2, r1, r2
 
 VARIABLES serverState, serverRowSeq, serverSeq, floor, purging, purgeSeq,
-          cursor, view, outbox, quarantined, resyncing, index
+          cursor, view, outbox, quarantined, resyncing, fieldSeq, superseded, index
 
 Sync == INSTANCE WeftSync
 
@@ -405,6 +425,10 @@ TraceInit ==
     /\\ index = 1
     /\\ purging = {}
     /\\ purgeSeq = [r \\in Rows |-> 0]
+    \\* Left out of Matches, so Sync!Next drives them from the recorded transitions and the
+    \\* field half of the specification is checked against a real trace for nothing extra.
+    /\\ fieldSeq = [r \\in Rows |-> 0]
+    /\\ superseded = [d \\in Devices |-> [r \\in Rows |-> FALSE]]
     /\\ Matches(Trace[1])
 
 TraceNext ==
@@ -414,7 +438,7 @@ TraceNext ==
     /\\ Sync!Next
 
 TraceSpec == TraceInit /\\ [][TraceNext]_<<serverState, serverRowSeq, serverSeq, floor,
-    purging, purgeSeq, cursor, view, outbox, quarantined, resyncing, index>>
+    purging, purgeSeq, cursor, view, outbox, quarantined, resyncing, fieldSeq, superseded, index>>
 
 \\* Every recorded state must satisfy the specification's own invariants.
 TraceTypeOK == Sync!TypeOK
@@ -438,6 +462,7 @@ CONSTANTS
     MaxSeq = 60
     PullChecksFloor = TRUE
     FloorRisesFirst = TRUE
+    AckReportsSupersession = TRUE
 
 INVARIANT TraceTypeOK
 INVARIANT TraceConsistent
@@ -463,8 +488,10 @@ function quoted(value: string): string {
 }
 
 function runTlc(directory: string, module: string): string {
+  const tlc = tlcCommand();
+  if (tlc === undefined) throw new Error("TLC is not available");
   try {
-    return execFileSync(TLC, ["-config", `${module}.cfg`, `${module}.tla`], {
+    return execFileSync(tlc.command, [...tlc.leading, "-config", `${module}.cfg`, `${module}.tla`], {
       cwd: directory,
       encoding: "utf8",
       timeout: 120_000,
@@ -486,16 +513,6 @@ function summarise(output: string): string {
     .filter((line) => line.trim().length > 0)
     .slice(-25)
     .join("\n");
-}
-
-function hasTlc(): boolean {
-  if (existsSync(TLC)) return true;
-  try {
-    execFileSync(TLC, ["-help"], { encoding: "utf8", timeout: 30_000 });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function describe(action: Action): string {
