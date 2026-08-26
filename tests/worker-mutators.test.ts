@@ -16,10 +16,10 @@ import { test } from "vitest";
 import { deviceId, fieldName, rowId, scopeId, txnId } from "weftdb/core";
 import {
   createWeftDb,
-  OpfsWorkerTransport,
   serveWeftWorker,
   WeftClient,
   WeftClientMirror,
+  WorkerPortTransport,
   type WeftWorkerHost,
   type MutationTarget,
   type WeftDbTarget,
@@ -169,7 +169,7 @@ test("§8.7 a materialized row from a mirror does not alias the mirror's own row
 class Bridge {
   readonly mirror: WeftClientMirror;
   /** The mirror's transport, owned here rather than by the mirror: a leader tab needs it too. */
-  readonly transport: OpfsWorkerTransport;
+  readonly transport: WorkerPortTransport;
   readonly host: WeftWorkerHost;
   readonly store: SqliteClientStore;
   readonly #executor: ReturnType<typeof openSqliteExecutor>;
@@ -185,7 +185,7 @@ class Bridge {
       executor,
       store: this.store,
     });
-    this.transport = new OpfsWorkerTransport(new PortEndpoint<WorkerMessage>(this.#channel.port1));
+    this.transport = new WorkerPortTransport(new PortEndpoint<WorkerMessage>(this.#channel.port1));
     this.mirror = new WeftClientMirror({ transport: this.transport, scopeId: SCOPE, deviceId: DEVICE });
   }
 
@@ -246,7 +246,7 @@ class PortEndpoint<Incoming> {
     this.#port.start();
   }
 
-  postMessage(message: WorkerRequest | WorkerMessage): void {
+  postMessage(message: unknown): void {
     this.#port.postMessage(message);
   }
 

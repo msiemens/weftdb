@@ -45,8 +45,8 @@
   <body>
     <h1>Can a SharedWorker hold the database?</h1>
     <p>
-      weftdb arbitrates access to one OPFS database by hand: a Web Lock election picks a leader tab, every other tab
-      proxies to it over a BroadcastChannel, and the leader relays the worker's pushes back. All of that exists because
+      weftdb arbitrates access to one OPFS database by hand: a Web Lock election picks the tab that creates the worker,
+      and a second SharedWorker brokers a MessagePort from every other tab straight into it. All of that exists because
       a synchronous access handle is exclusive and a dedicated worker belongs to one tab.
     </p>
     <p>

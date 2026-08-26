@@ -1,0 +1,20 @@
+---
+/*
+ * Starlight's head, plus the one line that decides whether this page needs a diagram renderer.
+ *
+ * Mermaid is about a megabyte, and most pages have no diagram. The guard below is the whole
+ * mechanism: it is bundled into the page's own script — a few hundred bytes, alongside Starlight's
+ * own — and the renderer is behind a dynamic `import`, so it is a separate chunk that the browser
+ * only ever fetches on a page that has something to draw.
+ */
+import Default from "@astrojs/starlight/components/Head.astro";
+---
+
+<Default />
+
+<script>
+  if (document.querySelector(".mermaid-diagram") !== null) {
+    const { mountDiagrams } = await import("../scripts/mermaid.js");
+    mountDiagrams();
+  }
+</script>

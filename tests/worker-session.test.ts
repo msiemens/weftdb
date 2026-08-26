@@ -12,10 +12,10 @@ import { deviceId, fieldName, rowId, scopeId, tableName, txnId, type ScopeId, ty
 import { defineSchema, S, schemaHash } from "weftdb/schema";
 import { WeftServer } from "weftdb/server";
 import {
-  OpfsWorkerTransport,
   serveWeftWorker,
   WeftClient,
   WeftClientMirror,
+  WorkerPortTransport,
   type AsyncSyncTransport,
   type SessionStatus,
   type WeftWorkerHost,
@@ -200,7 +200,7 @@ test("§8.7 syncing before a token has been given says which of the two is missi
  */
 class Bridge {
   readonly mirror: WeftClientMirror;
-  readonly transport: OpfsWorkerTransport;
+  readonly transport: WorkerPortTransport;
   readonly host: WeftWorkerHost;
   readonly store: SqliteClientStore;
   readonly server = new WeftServer();
@@ -238,7 +238,7 @@ class Bridge {
         : {}),
     });
     const page = new PortEndpoint<WorkerMessage>(this.#channel.port1);
-    this.transport = new OpfsWorkerTransport(page);
+    this.transport = new WorkerPortTransport(page);
     this.mirror = new WeftClientMirror({ transport: this.transport, scopeId: SCOPE, deviceId: DEVICE });
   }
 

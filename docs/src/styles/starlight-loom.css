@@ -241,6 +241,48 @@ header.header {
   background: color-mix(in srgb, var(--sunken) 55%, var(--surface));
 }
 
+/* --- diagrams ------------------------------------------------------------------------ */
+
+/*
+ * A Mermaid diagram, in the recess a code block sits in — same ground, same hairline, same radius,
+ * so a drawing and a listing read as the same kind of object rather than as a picture pasted onto
+ * the page. The colours inside the drawing are the tokens too; `scripts/mermaid.js` reads them off
+ * the page and hands them to the renderer.
+ *
+ * The box scrolls for the same reason `.table-scroll` does: a diagram that is wider than the
+ * measure is common, and the alternative is either a widened page or a drawing shrunk past reading.
+ *
+ * It is empty until the renderer has run, which is why it has a height of its own — otherwise the
+ * page settles at one length and jumps to another a moment later.
+ */
+.sl-markdown-content .mermaid-diagram {
+  margin: 1.5rem 0;
+  padding: 18px;
+  min-height: 5rem;
+  overflow-x: auto;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+
+/* Once drawn the SVG carries its own width, so this only stops it inheriting a text baseline's
+   gap under it. */
+.sl-markdown-content .mermaid-diagram svg {
+  display: block;
+  height: auto;
+}
+
+/* A diagram that will not parse. The renderer is told not to draw its own error picture, so this
+   is the message standing where the drawing would have been — quoted, in the voice of the machine,
+   and in the colour the rest of the site uses for something being wrong. */
+.sl-markdown-content .mermaid-diagram[data-mermaid-error] {
+  border-color: var(--bad);
+  background: var(--bad-wash);
+  font: 500 12.5px/1.6 var(--mono);
+  color: var(--bad);
+  white-space: pre-wrap;
+}
+
 /* --- the wordmark -------------------------------------------------------------------- */
 
 /*

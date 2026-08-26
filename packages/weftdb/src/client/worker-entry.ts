@@ -7,17 +7,25 @@
 // codegen for the same reason. A worker entry point is the one place that dependency belongs, so
 // this has a package subpath of its own and nothing on the page imports it.
 //
-// One storage backend: OPFS, through a synchronous access handle pool. A build or a browsing mode
-// that cannot give one is reported rather than worked around — see the note in `open.ts`.
+// Storage is OPFS, through a synchronous access handle pool, wherever a browser will hand one out.
+// Where it will not — private browsing is the case that matters — the database is opened in memory
+// instead and the page is told which it got, so an application can say that this window will not
+// remember. What is never worked around is a *build* with no pool VFS in it at all: see below.
 import { schemaHash, type SchemaDefinition } from "weftdb/schema";
 import type { SqlExecutor } from "weftdb/shared";
 import { SqliteClientStore } from "./sqlite.ts";
 import { connectSocketTransport } from "./socket-transport.ts";
 import { httpTransport, type FetchLike } from "./transport.ts";
 import type { SocketHandlers } from "./session.ts";
-import { openWebSqliteExecutor, type Sqlite3Module } from "./wasm-sqlite.ts";
+import {
+  openMemorySqliteExecutor,
+  openWebSqliteExecutor,
+  WasmSqliteUnavailableError,
+  type Sqlite3Module,
+  type WasmSqliteExecutor,
+} from "./wasm-sqlite.ts";
 import { serveWeftWorker, type WeftWorkerHost, type WorkerHostPortLike } from "./worker-host.ts";
-import type { WeftWorkerReady } from "./worker.ts";
+import type { WeftDurability, WeftWorkerReady } from "./worker.ts";
 import type { WebSocketFactory } from "./wakeups.ts";
 
 /**
@@ -26,7 +34,8 @@ import type { WebSocketFactory } from "./wakeups.ts";
  * The credential is deliberately absent: the page holds that, because the page is the only place a
  * token can be got, and it arrives over the port. What is here is what the worker builds a transport
  * out of — and it is here rather than on the page because the worker is where the transport is
- * built. A base URL declared on both sides that had to agree would be another `relayPush`.
+ * built. A base URL declared on both sides that had to agree is a value nothing checks, wrong only
+ * at runtime and only sometimes.
  */
 export interface WeftWorkerRelayOptions {
   /** Where the relay is mounted, e.g. `/api/db` behind a dev-server proxy or an absolute origin. */
@@ -66,7 +75,8 @@ export interface ServeWeftWorkerDefaultsOptions {
  * handle pool is a property of the worker and of nothing the page can see, so the page cannot decide
  * in advance; and a failure thrown here would reach it as an `error` event with no detail, or as an
  * unhandled rejection with none at all. Reported as an ordinary message, it becomes a rejected
- * `openWeftDatabase` naming the cause.
+ * `openWeftDatabase` naming the cause — or, where the database was opened in memory instead, an open
+ * that succeeds and reports `durability: "ephemeral"`.
  *
  * Resolves with the host, or with nothing when there was no database to serve — the page has already
  * been told which by then.
@@ -79,11 +89,9 @@ export async function serveWeftWorkerDefaults(
   let executor: (SqlExecutor & { close(): void }) | undefined;
   try {
     const sqlite3 = await options.sqlite3InitModule();
-    executor = await openWebSqliteExecutor(sqlite3, {
-      path: options.path ?? "weft.sqlite3",
-      ...(options.poolName === undefined ? {} : { poolName: options.poolName }),
-      ...(options.initialCapacity === undefined ? {} : { initialCapacity: options.initialCapacity }),
-    });
+    const opened = await openDatabase(sqlite3, options);
+    executor = opened.executor;
+    const durability = opened.durability;
     const store = new SqliteClientStore(executor, options.schema);
     // Every open, not only the first: this is also what adds the columns a schema edit introduced
     // since the database was last opened.
@@ -92,12 +100,13 @@ export async function serveWeftWorkerDefaults(
       port,
       executor,
       store,
+      durability,
       ...(options.relay === undefined ? {} : { session: session(options.schema, options.relay) }),
     });
     // After `serveWeftWorker`, never before. The page waits for this before it posts anything, so a
     // request cannot arrive while there is no listener to receive it — which on a dedicated worker
     // is a message delivered to nobody rather than a message queued.
-    post(port, { weft: "ready", ok: true, schemaHash: schemaHash(options.schema) });
+    post(port, { weft: "ready", ok: true, schemaHash: schemaHash(options.schema), durability });
     return host;
   } catch (error) {
     // The handle, if one was ever taken, before the page is told there is no database: a pool left
@@ -105,6 +114,42 @@ export async function serveWeftWorkerDefaults(
     executor?.close();
     post(port, { weft: "ready", ok: false, error: describe(error) });
     return undefined;
+  }
+}
+
+/**
+ * OPFS if the browser will have it, memory if it will not — and nothing at all if the build cannot
+ * do OPFS in the first place.
+ *
+ * The two failures are one failure to look at and could not be further apart in what they mean.
+ *
+ * `WasmSqliteUnavailableError` says the sqlite3 module has no `installOpfsSAHPoolVfs` on it: there
+ * is no pool VFS in this build, on any browser, for anybody. Falling back there would hand a
+ * developer a database that works perfectly through every reload of development and loses every
+ * device's data in production, with the build that shipped wrong never once saying so. So it is
+ * rethrown and the open is refused.
+ *
+ * Anything else thrown from installing the pool or opening the file means the function is there and
+ * the browser declined — a mode with no OPFS to give, which is what private browsing is. The person
+ * asked the browser for a session it would not remember; they get a working database that keeps
+ * nothing, and the page is told so.
+ */
+async function openDatabase(
+  sqlite3: Sqlite3Module,
+  options: ServeWeftWorkerDefaultsOptions,
+): Promise<{ readonly executor: WasmSqliteExecutor; readonly durability: WeftDurability }> {
+  try {
+    const executor = await openWebSqliteExecutor(sqlite3, {
+      path: options.path ?? "weft.sqlite3",
+      ...(options.poolName === undefined ? {} : { poolName: options.poolName }),
+      ...(options.initialCapacity === undefined ? {} : { initialCapacity: options.initialCapacity }),
+    });
+    return { executor, durability: "durable" };
+  } catch (error) {
+    if (error instanceof WasmSqliteUnavailableError) throw error;
+    // `:memory:` needs no OPFS, no VFS install and no access handle, so nothing that just failed can
+    // fail again here. It is a real SQLite: every statement the durable path answers, this answers.
+    return { executor: openMemorySqliteExecutor(sqlite3), durability: "ephemeral" };
   }
 }
 

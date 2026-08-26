@@ -356,15 +356,7 @@ test("§9.42 exactly one tab holds the OPFS handle at any instant", async () => 
   await fc.assert(
     fc.asyncProperty(fc.integer({ min: 2, max: 6 }), async (tabs) => {
       const locks = new ExclusiveLocks();
-      const coordinators = Array.from(
-        { length: tabs },
-        (_, index) =>
-          new MultiTabCoordinator({
-            scopeId: "tabs",
-            locks,
-            channel: new BroadcastChannel(`weft-tabs-${index}`),
-          }),
-      );
+      const coordinators = Array.from({ length: tabs }, () => new MultiTabCoordinator({ scopeId: "tabs", locks }));
 
       const roles: TabRole[] = [];
       for (const coordinator of coordinators) roles.push(await coordinator.elect());

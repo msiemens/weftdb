@@ -1,39 +1,39 @@
-// §8.7 end to end across tabs: one worker, one leader tab holding it, and follower tabs reaching
-// it over a BroadcastChannel.
+// §8.7 end to end across tabs: one worker, and every tab holding a `MessagePort` straight to it.
 //
-// This is the case the two halves were built for and neither could show alone. `worker-bridge`
-// proves a mirror works against a worker port; `worker-multitab` proves a request and a push cross
-// the channel in the right envelope. Only together do they answer the question that matters: does a
-// follower tab — which may not touch OPFS, because one tab holds the access handle — render the
-// same rows as the leader.
+// This is the case the pieces were built for and none of them shows alone. `worker-bridge` proves a
+// mirror works against a worker port; `worker-port-broker` proves a port really crosses from one
+// document to another and that the worker answers each one separately. Only together do they answer
+// the question that matters: does a tab that may not touch OPFS — because another tab holds the
+// access handle — render the same rows as the tab that does, while sending its traffic to the
+// worker rather than through its neighbour.
 //
 // Everything real except the browser. A `node:worker_threads` MessageChannel stands in for the
-// worker port and Node's own `BroadcastChannel` for the channel, so messages really are
-// structured-cloned and really do arrive on a later turn, which is where the ordering mistakes are.
+// worker port and for every tab's connection, and the broker relaying those connections is the
+// shipped one, so messages really are structured-cloned, ports really are transferred, and they
+// really do arrive on a later turn — which is where the ordering mistakes are.
 import assert from "node:assert/strict";
-import { MessageChannel, type MessagePort } from "node:worker_threads";
+import { MessageChannel } from "node:worker_threads";
 import { test } from "vitest";
 import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/core";
 import { defineSchema, S } from "weftdb/schema";
 import {
-  BroadcastDbProxy,
   compileOnlyKysely,
   isDeltaPush,
-  OpfsWorkerTransport,
   reactiveSqlQuery,
-  serveBroadcastDbProxy,
   serveWeftWorker,
+  WeftBrokerClient,
   WeftClientMirror,
-  type BroadcastDbProxyServer,
-  type MirrorTransport,
+  WorkerPortTransport,
   type ReactiveSqlQuery,
   type ScopedRowQuery,
   type WeftWorkerHost,
   type WorkerMessage,
+  type WorkerPush,
   type WorkerRequest,
 } from "weftdb/client";
 import { SqliteClientStore } from "weftdb/client/sqlite";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
+import { BrokerHub, PortEndpoint, settle } from "./multitab-fixtures.ts";
 
 const schema = defineSchema({
   todos: S.collection({
@@ -58,90 +58,97 @@ const SCOPE = scopeId("scope-1");
 const DEVICE = deviceId("device-1");
 const TODOS = tableName("todos");
 
-test("§8.7 a follower tab hydrates, mutates and watches through the leader", async () => {
+test("§8.7 a tab that was handed a port hydrates, mutates and watches through it", async () => {
   using tabs = Tabs.open();
   tabs.seed("todo-1", { title: "alpha", done: false, rank: 1 });
   tabs.seed("todo-2", { title: "beta", done: true, rank: 2 });
-  // Edited in that earlier session, so the rows arrive on different revisions and a follower that
+  // Edited in that earlier session, so the rows arrive on different revisions and a tab that
   // renumbered them from one would be caught here rather than in a re-render three screens later.
   tabs.seedUpdate("todo-1", "alpha prime");
-  const follower = tabs.follower();
+  const guest = await tabs.guest();
 
-  await tabs.leader.hydrate();
-  await follower.mirror.hydrate();
+  await tabs.owner.hydrate();
+  await guest.mirror.hydrate();
 
-  assert.deepEqual([...follower.mirror.rows.keys()].sort(), ["todos\0todo-1", "todos\0todo-2"]);
-  assert.equal(follower.mirror.rows.get("todos\0todo-1")?.fields.get(fieldName("title")), "alpha prime");
-  // The revision is the row's identity as far as `RowIdentityCache` is concerned, and it has now
-  // crossed two boundaries rather than one — the worker port and then the channel. If either leg
-  // rebuilt the row instead of carrying it, the two tabs disagree here.
-  for (const [key, row] of follower.mirror.rows) {
+  assert.deepEqual([...guest.mirror.rows.keys()].sort(), ["todos\0todo-1", "todos\0todo-2"]);
+  assert.equal(guest.mirror.rows.get("todos\0todo-1")?.fields.get(fieldName("title")), "alpha prime");
+  // The revision is the row's identity as far as `RowIdentityCache` is concerned. Both tabs read it
+  // from the same worker over their own ports, so a port that rebuilt rows instead of carrying them
+  // would have the two tabs disagree here.
+  for (const [key, row] of guest.mirror.rows) {
     assert.equal(
       row.internals._weft_rev,
-      tabs.leader.rows.get(key)?.internals._weft_rev,
-      `${key} reached the follower on a revision the leader does not hold`,
+      tabs.owner.rows.get(key)?.internals._weft_rev,
+      `${key} reached the second tab on a revision the first does not hold`,
     );
     assert.equal(row.internals._weft_rev, tabs.host.client?.rows.get(key)?.internals._weft_rev);
   }
 
-  // And it can drive the worker, not only read it. The four client verbs used to be refused by the
-  // leader's dispatch by name, which is what made multi-tab unusable on the OPFS path.
+  // And it can drive the worker, not only read it.
   const open = tabs.query((statement) => statement.where("done", "=", false).orderBy("rank"));
-  await follower.mirror.watch(open);
-  assert.deepEqual(ids(follower.mirror, open), ["todo-1"], "the follower's watch answered with nothing");
+  await guest.mirror.watch(open);
+  assert.deepEqual(ids(guest.mirror, open), ["todo-1"], "the second tab's watch answered with nothing");
 
-  follower.mirror.update(TODOS, rowId("todo-2"), { done: false }, txnId("txn-from-follower"));
-  await settle(() => ids(follower.mirror, open).length === 2);
-  assert.deepEqual(ids(follower.mirror, open), ["todo-1", "todo-2"]);
+  guest.mirror.update(TODOS, rowId("todo-2"), { done: false }, txnId("txn-from-guest"));
+  await settle(() => ids(guest.mirror, open).length === 2);
+  assert.deepEqual(ids(guest.mirror, open), ["todo-1", "todo-2"]);
   assert.equal(
     tabs.stored("todo-2")?.["done"],
     0,
-    "a follower's mutation never reached SQLite, so it dies with the tab",
+    "a second tab's mutation never reached SQLite, so it dies with the tab",
   );
 });
 
 test("§8.7 one tab's mutation reaches every tab's mirror", async () => {
   using tabs = Tabs.open();
-  const follower = tabs.follower();
-  await tabs.leader.hydrate();
-  await follower.mirror.hydrate();
+  const guest = await tabs.guest();
+  await tabs.owner.hydrate();
+  await guest.mirror.hydrate();
 
   const all = tabs.query((statement) => statement.orderBy("rank"));
-  await tabs.leader.watch(all);
-  await follower.mirror.watch(all);
+  await tabs.owner.watch(all);
+  await guest.mirror.watch(all);
 
-  // From the follower, which is the direction that did not exist: follower → leader → worker, and
-  // the resulting delta back out to every tab at once. A relay that only answered the tab that
-  // asked would leave the leader's own list stale until something else happened to it.
-  follower.mirror.create(TODOS, rowId("todo-1"), { title: "made in a follower", done: false, rank: 1 }, txnId("txn-1"));
-  await settle(() => tabs.leader.rows.size === 1 && follower.mirror.rows.size === 1);
+  // From the tab that does not own the worker, and back out to both. A worker that answered only
+  // the port that asked would leave the owning tab's list stale until something else happened to
+  // it — and that is the mistake this design makes possible, because a response now *is* addressed
+  // to one port.
+  guest.mirror.create(TODOS, rowId("todo-1"), { title: "made in a guest tab", done: false, rank: 1 }, txnId("txn-1"));
+  await settle(() => tabs.owner.rows.size === 1 && guest.mirror.rows.size === 1);
 
   for (const [name, mirror] of [
-    ["the leader", tabs.leader],
-    ["the follower", follower.mirror],
+    ["the owning tab", tabs.owner],
+    ["the guest tab", guest.mirror],
   ] as const) {
     assert.equal(
       mirror.rows.get("todos\0todo-1")?.fields.get(fieldName("title")),
-      "made in a follower",
+      "made in a guest tab",
       `${name} never saw the row`,
     );
     assert.deepEqual(ids(mirror, all), ["todo-1"], `${name}'s watched list did not move`);
   }
 
-  // The other direction too, so this is not a relay that happens to work one way round.
-  tabs.leader.update(TODOS, rowId("todo-1"), { title: "edited in the leader" }, txnId("txn-2"));
+  // The other direction too, so this is not a path that happens to work one way round.
+  tabs.owner.update(TODOS, rowId("todo-1"), { title: "edited in the owning tab" }, txnId("txn-2"));
   await settle(
-    () => follower.mirror.rows.get("todos\0todo-1")?.fields.get(fieldName("title")) === "edited in the leader",
+    () => guest.mirror.rows.get("todos\0todo-1")?.fields.get(fieldName("title")) === "edited in the owning tab",
   );
-  assert.equal(tabs.leader.rows.get("todos\0todo-1")?.fields.get(fieldName("title")), "edited in the leader");
+  assert.equal(tabs.owner.rows.get("todos\0todo-1")?.fields.get(fieldName("title")), "edited in the owning tab");
 });
 
-test("§8.7 two followers watching different statements each get their own ids", async () => {
+test("§8.7 a tab is sent its own statements' results and never another tab's", async () => {
+  // The routing rule for results, and the whole reason the host counts watches per port. A tab
+  // rendering one list has no use for the lists its neighbours are rendering: a delta carrying them
+  // wakes this tab's engine and it re-scans its own subscriptions to learn that nothing it reads
+  // has moved. So the assertion is on what crossed the port, not on what the mirror kept — a mirror
+  // that filtered the surplus out would pass a test written the second way while the tab went on
+  // being woken by every query in the browser.
   using tabs = Tabs.open();
   tabs.seed("todo-1", { title: "alpha", done: false, rank: 1 });
   tabs.seed("todo-2", { title: "beta", done: true, rank: 2 });
-  const first = tabs.follower();
-  const second = tabs.follower();
+  const first = await tabs.guest();
+  const second = await tabs.guest();
+  await tabs.owner.hydrate();
   await first.mirror.hydrate();
   await second.mirror.hydrate();
 
@@ -150,107 +157,140 @@ test("§8.7 two followers watching different statements each get their own ids",
   await first.mirror.watch(open);
   await second.mirror.watch(done);
 
-  // One push carries every watched statement's answer, because the host has one registry for every
-  // tab. Each mirror keeps the keys it asked for and drops the rest — so a mirror that cached the
-  // whole `results` array would start answering a statement its own tab never registered, out of
-  // ids it can never refresh.
   assert.deepEqual(ids(first.mirror, open), ["todo-1"]);
-  assert.deepEqual(ids(first.mirror, done), [], "a follower answered from a statement the other tab watches");
+  assert.deepEqual(ids(first.mirror, done), [], "a tab answered from a statement the other tab watches");
   assert.deepEqual(ids(second.mirror, done), ["todo-2"]);
-  assert.deepEqual(ids(second.mirror, open), [], "a follower answered from a statement the other tab watches");
+  assert.deepEqual(ids(second.mirror, open), [], "a tab answered from a statement the other tab watches");
 
-  // A change that moves a row between the two lists has to move both, from one delta.
+  // A change that moves a row between the two lists has to move both, from one mutation. The rows
+  // go to everybody — a row belongs to the scope — so both tabs are pushed to, and the point is
+  // what each push carries.
+  const ownerPushes = tabs.pushes();
+  first.clearPushes();
+  second.clearPushes();
   first.mirror.update(TODOS, rowId("todo-1"), { done: true }, txnId("txn-1"));
   await settle(() => ids(first.mirror, open).length === 0 && ids(second.mirror, done).length === 2);
   assert.deepEqual(ids(second.mirror, done), ["todo-1", "todo-2"]);
+
+  assert.deepEqual(first.results(), [open.cacheKey], "a tab was sent the results of another tab's statement");
+  assert.deepEqual(second.results(), [done.cacheKey], "a tab was sent the results of another tab's statement");
+  // And the owning tab, which watches nothing at all, is pushed to — the row is the scope's — and
+  // told about no statement whatever.
+  assert.ok(tabs.pushes() > ownerPushes, "the tab that watches nothing was not told the row had moved");
+  assert.deepEqual(tabs.lastResults(), [], "a tab watching nothing was sent somebody else's results");
 });
 
 test("§8.7 two tabs watching one statement do not retire it from under each other", async () => {
   using tabs = Tabs.open();
   tabs.seed("todo-1", { title: "alpha", done: false, rank: 1 });
-  const follower = tabs.follower();
-  await tabs.leader.hydrate();
-  await follower.mirror.hydrate();
+  const guest = await tabs.guest();
+  await tabs.owner.hydrate();
+  await guest.mirror.hydrate();
 
   // The same statement, so the same cache key: the host keys its registry by that and nothing else.
   const all = tabs.query((statement) => statement.orderBy("rank"));
-  await tabs.leader.watch(all);
-  await follower.mirror.watch(all);
-  assert.deepEqual(ids(tabs.leader, all), ["todo-1"]);
+  await tabs.owner.watch(all);
+  await guest.mirror.watch(all);
+  assert.deepEqual(ids(tabs.owner, all), ["todo-1"]);
 
-  follower.mirror.unwatch(all);
-  await settle(() => follower.mirror.select(all).length === 0);
+  guest.mirror.unwatch(all);
+  await settle(() => guest.mirror.select(all).length === 0);
 
   // A row joining the list, not merely changing inside it. A mirror whose registration was retired
   // keeps the ids it last had, so an edit to an existing row leaves the two indistinguishable —
   // only a change of membership tells a live list from a frozen one.
-  tabs.leader.create(TODOS, rowId("todo-2"), { title: "beta", done: false, rank: 2 }, txnId("txn-1"));
-  await settle(() => tabs.leader.rows.size === 2);
+  tabs.owner.create(TODOS, rowId("todo-2"), { title: "beta", done: false, rank: 2 }, txnId("txn-1"));
+  await settle(() => tabs.owner.rows.size === 2);
 
-  // Without a reference count the follower's unwatch deletes the shared registration, and the
-  // leader's list silently stops updating — no error anywhere, just a list frozen at the ids it
+  // Without a reference count the second tab's unwatch deletes the shared registration, and the
+  // first tab's list silently stops updating — no error anywhere, just a list frozen at the ids it
   // happened to have when the other tab let go.
   assert.deepEqual(
-    ids(tabs.leader, all),
+    ids(tabs.owner, all),
     ["todo-1", "todo-2"],
     "one tab's unwatch retired a statement another tab was reading",
   );
-  assert.deepEqual(follower.mirror.select(all), [], "the tab that unwatched kept being answered");
+  assert.deepEqual(guest.mirror.select(all), [], "the tab that unwatched kept being answered");
 
   // And the last release really does retire it, or the count leaks the other way and the worker
-  // re-runs statements nobody reads for the rest of the session.
-  tabs.leader.unwatch(all);
+  // re-runs statements nobody reads for the rest of the session. Read off the worker's own registry:
+  // a delta carries only the statements the tab it is addressed to registered, so a statement left
+  // standing on behalf of a tab that has let go is invisible from every port.
+  tabs.owner.unwatch(all);
   const before = tabs.pushes();
-  tabs.leader.update(TODOS, rowId("todo-1"), { title: "alpha prime" }, txnId("txn-2"));
+  tabs.owner.update(TODOS, rowId("todo-1"), { title: "alpha prime" }, txnId("txn-2"));
   await settle(() => tabs.pushes() > before);
-  assert.deepEqual(tabs.lastResults(), [], "the worker kept recomputing a statement every tab had released");
+  assert.deepEqual(tabs.host.watching, [], "the worker kept recomputing a statement every tab had released");
 });
 
-test("§8.7 a follower that closes hands its watches back to the worker", async () => {
+test("§8.7 a tab that disconnects has its watches released by the worker", async () => {
   using tabs = Tabs.open();
   tabs.seed("todo-1", { title: "alpha", done: false, rank: 1 });
-  const follower = tabs.follower();
-  await tabs.leader.hydrate();
-  await follower.mirror.hydrate();
+  const guest = await tabs.guest();
+  await tabs.owner.hydrate();
+  await guest.mirror.hydrate();
 
   const all = tabs.query((statement) => statement.orderBy("rank"));
-  await follower.mirror.watch(all);
+  await guest.mirror.watch(all);
+  assert.deepEqual(tabs.host.watching, [all.cacheKey], "the guest's statement was never registered");
 
-  // A tab going away, orderly: `pagehide` disposes the mirror and the proxy. Nothing else tells the
-  // leader's host that the tab is gone — a BroadcastChannel has no liveness signal — so a proxy
-  // that did not hand its registrations back would leave the worker running this statement after
-  // every mutation any tab makes, forever.
-  follower.close();
-  await settle(() => tabs.pushes() >= 0);
+  // A tab going away, orderly: `pagehide` disposes the mirror and says goodbye on its port. A
+  // `MessagePort` has no liveness signal the worker can rely on, so a tab that simply stopped would
+  // leave the worker running this statement after every mutation any tab makes, for ever.
+  await guest.close();
 
-  tabs.leader.create(TODOS, rowId("todo-2"), { title: "beta", done: false, rank: 2 }, txnId("txn-1"));
-  await settle(() => tabs.leader.rows.size === 2);
+  tabs.owner.create(TODOS, rowId("todo-2"), { title: "beta", done: false, rank: 2 }, txnId("txn-1"));
+  await settle(() => tabs.owner.rows.size === 2);
 
-  assert.deepEqual(tabs.lastResults(), [], "a closed follower left its statement registered in the worker");
+  assert.deepEqual(tabs.host.watching, [], "a disconnected tab left its statement registered in the worker");
+  assert.equal(tabs.host.connections, 1, "the worker is still serving a port whose tab has gone");
+});
+
+test("§8.7 a tab may not release a registration it never took", async () => {
+  using tabs = Tabs.open();
+  tabs.seed("todo-1", { title: "alpha", done: false, rank: 1 });
+  const guest = await tabs.guest();
+  await tabs.owner.hydrate();
+  await guest.mirror.hydrate();
+
+  const all = tabs.query((statement) => statement.orderBy("rank"));
+  await tabs.owner.watch(all);
+  assert.deepEqual(ids(tabs.owner, all), ["todo-1"]);
+
+  // Straight down the port, bypassing the mirror's own reference counting: a tab handing back a
+  // registration it never made. The worker counts per port precisely so this cannot retire the
+  // statement the other tab is reading.
+  await guest.transport.request({ type: "unwatch", cacheKey: all.cacheKey });
+
+  tabs.owner.create(TODOS, rowId("todo-2"), { title: "beta", done: false, rank: 2 }, txnId("txn-1"));
+  await settle(() => tabs.owner.rows.size === 2);
+  assert.deepEqual(
+    ids(tabs.owner, all),
+    ["todo-1", "todo-2"],
+    "one tab's unwatch retired a statement it had never registered",
+  );
 });
 
 /**
- * One worker, one leader tab, and however many follower tabs a test asks for.
+ * One worker, the tab that made it, and however many other tabs a test asks for.
  *
- * The leader is the assembly the application would write: a transport to the worker, a responder on
- * the channel with that transport as its target, and one subscription relaying the worker's pushes
- * onto the channel. The follower is the whole of what a follower tab needs — a proxy, and a mirror
- * over it. Neither mirror is told which it is.
+ * The owning tab is the assembly the application would write: a transport to the worker, a broker
+ * connection registered as the provider, and one subscription forwarding each arriving port into
+ * the worker. A guest tab is the whole of what such a tab needs — a broker connection, a port it
+ * asked for, and a mirror over it. Neither mirror is told which it is.
  */
 class Tabs {
   readonly db = compileOnlyKysely<Database>();
   readonly host: WeftWorkerHost;
   readonly store: SqliteClientStore;
-  readonly leader: WeftClientMirror;
-  readonly leaderServer: BroadcastDbProxyServer;
-  leading = true;
+  readonly owner: WeftClientMirror;
+  readonly hub = new BrokerHub();
   readonly #executor: ReturnType<typeof openSqliteExecutor>;
   readonly #channel: MessageChannel;
-  readonly #channelName: string;
-  readonly #leaderChannel: BroadcastChannel;
-  readonly #transport: OpfsWorkerTransport;
-  readonly #offRelay: () => void;
-  readonly #followers: FollowerTab[] = [];
+  readonly #broker: WeftBrokerClient;
+  readonly #transport: WorkerPortTransport;
+  readonly #offPort: () => void;
+  readonly #guests: GuestTab[] = [];
   /** Every delta the worker sent, as only a listener on the raw port can see them. */
   readonly #pushes: WorkerMessage[] = [];
 
@@ -269,40 +309,39 @@ class Tabs {
     page.addEventListener("message", (event: MessageEvent<WorkerMessage>) => {
       if ("push" in event.data) this.#pushes.push(event.data);
     });
-    this.#channelName = `weft-tabs-${Math.trunc(performance.now() * 1000)}-${Math.trunc(Math.random() * 1e6)}`;
-    this.#leaderChannel = new BroadcastChannel(this.#channelName);
-    this.#transport = new OpfsWorkerTransport(page);
-    this.leaderServer = serveBroadcastDbProxy({
-      channel: this.#leaderChannel,
-      target: this.#transport,
-      isLeader: () => this.leading,
+    this.#transport = new WorkerPortTransport(page);
+    this.#broker = new WeftBrokerClient(this.hub.connect(), SCOPE);
+    // The one line that lets another tab exist at all: a port the broker delivers is moved into the
+    // worker, and from that moment this tab is not on that tab's path.
+    this.#offPort = this.#broker.onPort((port) => {
+      page.postMessage({ weft: "connect", port }, [port]);
     });
-    // The one line that makes a follower's mirror live: the leader subscribes to its own worker's
-    // deltas and puts each on the channel. The responder is not given the transport's push side —
-    // it is handed a request sink — so this wiring is the leader's to do, and is visible here.
-    this.#offRelay = this.#transport.onPush((push) => {
-      this.leaderServer.relayPush(push);
-    });
-    this.leader = new WeftClientMirror({ transport: this.#transport, scopeId: SCOPE, deviceId: DEVICE });
+    this.#broker.provide();
+    this.owner = new WeftClientMirror({ transport: this.#transport, scopeId: SCOPE, deviceId: DEVICE });
   }
 
   static open(): Tabs {
     return new Tabs(openSqliteExecutor(":memory:"));
   }
 
-  /** Another tab that may not touch the database, reaching the worker only through the leader. */
-  follower(): FollowerTab {
-    const channel = new BroadcastChannel(this.#channelName);
-    const proxy = new BroadcastDbProxy(channel);
-    // The proxy passed where the leader passes its worker transport. That assignment is the claim
-    // this whole file is making, and it is checked by the compiler rather than by an assertion.
-    const transport: MirrorTransport = proxy;
-    const tab = new FollowerTab(
-      proxy,
-      channel,
-      new WeftClientMirror({ transport, scopeId: SCOPE, deviceId: deviceId(`device-${this.#followers.length + 2}`) }),
+  /** Another tab that may not touch the database, reaching the worker over a port of its own. */
+  async guest(): Promise<GuestTab> {
+    const broker = new WeftBrokerClient(this.hub.connect(), SCOPE);
+    const brokered = broker.requestPort();
+    const transport = new WorkerPortTransport(brokered.port);
+    // The same probe `openWeftDatabase` makes: the handover is not acknowledged, so the only
+    // evidence the port reached the worker is the worker answering something over it.
+    await transport.request({ type: "open", scopeId: SCOPE });
+    const tab = new GuestTab(
+      broker,
+      transport,
+      new WeftClientMirror({
+        transport,
+        scopeId: SCOPE,
+        deviceId: deviceId(`device-${this.#guests.length + 2}`),
+      }),
     );
-    this.#followers.push(tab);
+    this.#guests.push(tab);
     return tab;
   }
 
@@ -351,97 +390,73 @@ class Tabs {
   }
 
   [Symbol.dispose](): void {
-    for (const follower of this.#followers) follower.close();
-    this.leader.dispose();
-    this.#offRelay();
-    this.leaderServer.stop();
+    for (const guest of this.#guests) guest.abandon();
+    this.owner.dispose();
+    this.#offPort();
+    this.#broker.dispose();
     this.#transport.dispose();
     this.host.stop();
-    this.#leaderChannel.close();
-    // An open port or channel keeps Node's event loop alive, so a failing run that skipped these
-    // would hang the whole file rather than report a failure.
+    this.hub.close();
+    // An open port keeps Node's event loop alive, so a failing run that skipped these would hang
+    // the whole file rather than report a failure.
     this.#channel.port1.close();
     this.#channel.port2.close();
     this.#executor.close();
   }
 }
 
-class FollowerTab {
-  readonly proxy: BroadcastDbProxy;
+class GuestTab {
+  readonly broker: WeftBrokerClient;
+  readonly transport: WorkerPortTransport;
   readonly mirror: WeftClientMirror;
-  readonly #channel: BroadcastChannel;
+  /**
+   * Every push that reached *this tab's* port, read off the transport rather than out of the
+   * mirror. What the mirror kept is a second question: a mirror that was sent the whole scope's
+   * statements and quietly dropped the surplus looks identical from the outside, and the tab is
+   * woken either way.
+   */
+  readonly #pushes: WorkerPush[] = [];
   #closed = false;
 
-  constructor(proxy: BroadcastDbProxy, channel: BroadcastChannel, mirror: WeftClientMirror) {
-    this.proxy = proxy;
-    this.#channel = channel;
+  constructor(broker: WeftBrokerClient, transport: WorkerPortTransport, mirror: WeftClientMirror) {
+    this.broker = broker;
+    this.transport = transport;
     this.mirror = mirror;
+    transport.onPush((push) => this.#pushes.push(push));
   }
 
-  /** The tab going away, in the order a `pagehide` handler would. Idempotent, because the fixture
-   * closes every follower on teardown and a test may already have closed one. */
-  close(): void {
+  /** Which statements the last delta to this tab carried, in the order the worker listed them. */
+  results(): readonly string[] {
+    const last = this.#pushes.filter(isDeltaPush).at(-1);
+    return last === undefined ? [] : last.results.map(([cacheKey]) => cacheKey);
+  }
+
+  clearPushes(): void {
+    this.#pushes.length = 0;
+  }
+
+  /** The tab going away, in the order a `pagehide` handler would. */
+  async close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
     this.mirror.dispose();
-    this.proxy.dispose();
-    this.#channel.close();
+    // The goodbye, which is the only thing that tells the worker this tab is gone. Awaited, because
+    // what a test asserts next is what the worker did with it.
+    await this.transport.request({ type: "disconnect" }).catch(() => undefined);
+    this.transport.dispose();
+    this.broker.dispose();
+  }
+
+  /** Teardown for a tab a test never closed. Says nothing to the worker; the fixture is going. */
+  abandon(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.mirror.dispose();
+    this.transport.dispose();
+    this.broker.dispose();
   }
 }
 
 function ids(mirror: WeftClientMirror, query: ReactiveSqlQuery): readonly string[] {
   return mirror.engine.getSqlSnapshot(query, mirror.select, mirror.rows).rows.map((row) => String(row.id));
-}
-
-/**
- * A `MessagePort` and a `BroadcastChannel` both deliver on a later turn of the loop, and a mirror's
- * mutators return before anything has crossed either — so a test waits on the condition rather than
- * on a guessed number of ticks. A follower's traffic makes two crossings each way, which is exactly
- * the kind of thing a fixed delay gets wrong on a loaded machine.
- */
-async function settle(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
-    if (Date.now() > deadline) throw new Error("the tabs never reached the expected state");
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
-  // Two more turns, so a delta that arrives with the condition has finished crossing to the tab
-  // that did not cause it before the assertions read either map.
-  for (let index = 0; index < 2; index += 1) await new Promise((resolve) => setTimeout(resolve, 1));
-}
-
-/**
- * A `MessagePort` in the shape each side expects of the other. It sends and receives both halves of
- * the protocol, which is what lets one class stand in for the page's `WorkerLike` and the worker's
- * `WorkerHostPortLike` alike.
- */
-class PortEndpoint<Incoming> {
-  readonly #port: MessagePort;
-  readonly #wrapped = new Map<unknown, (event: unknown) => void>();
-
-  constructor(port: MessagePort) {
-    this.#port = port;
-    // A port reached through `addEventListener` rather than through its EventEmitter face does not
-    // begin delivering on its own.
-    this.#port.start();
-  }
-
-  postMessage(message: WorkerRequest | WorkerMessage): void {
-    this.#port.postMessage(message);
-  }
-
-  addEventListener(_type: "message", listener: (event: MessageEvent<Incoming>) => void): void {
-    const wrapped = (event: unknown): void => {
-      listener(event as MessageEvent<Incoming>);
-    };
-    this.#wrapped.set(listener, wrapped);
-    this.#port.addEventListener("message", wrapped);
-  }
-
-  removeEventListener(_type: "message", listener: (event: MessageEvent<Incoming>) => void): void {
-    const wrapped = this.#wrapped.get(listener);
-    if (wrapped === undefined) return;
-    this.#wrapped.delete(listener);
-    this.#port.removeEventListener("message", wrapped);
-  }
 }

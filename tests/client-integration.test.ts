@@ -3,16 +3,13 @@ import { test } from "vitest";
 import { fieldName, rowId, tableName } from "weftdb/core";
 import {
   AuthorizerDependencyRecorder,
-  BroadcastDbProxy,
   Diff3EditorBuffer,
   MultiTabCoordinator,
-  OpfsWorkerTransport,
+  WorkerPortTransport,
   compileOnlyKysely,
   compileQuery,
   invalidatesQuery,
   queryCacheKey,
-  type ProxyRequest,
-  type ProxyResponse,
   type WorkerRequest,
   type WorkerResponse,
 } from "weftdb/client";
@@ -86,7 +83,7 @@ test("editor buffer holds remote edits while focused", () => {
 
 test("worker transport correlates requests and responses", async () => {
   const worker = new LoopbackWorker();
-  const transport = new OpfsWorkerTransport(worker);
+  const transport = new WorkerPortTransport(worker);
   assert.deepEqual(await transport.open("scope"), { opened: "scope" });
   assert.deepEqual(await transport.execute({ sql: "select 1", parameters: [] }), { rows: [] });
   transport.dispose();
@@ -96,37 +93,15 @@ test("multi-tab coordinator elects leader and follower roles", async () => {
   const leader = new MultiTabCoordinator({
     scopeId: "scope",
     locks: { request: async (_name, _options, callback) => callback({}) },
-    channel: new BroadcastChannel("weft-test-leader"),
   });
   const follower = new MultiTabCoordinator({
     scopeId: "scope",
     locks: { request: async (_name, _options, callback) => callback(null) },
-    channel: new BroadcastChannel("weft-test-follower"),
   });
   assert.equal(await leader.elect(), "leader");
   assert.equal(await follower.elect(), "follower");
   leader.close();
   follower.close();
-});
-
-test("broadcast proxy resolves matching responses", async () => {
-  const channelName = `weft-test-${Date.now()}`;
-  const followerChannel = new BroadcastChannel(channelName);
-  const leaderChannel = new BroadcastChannel(channelName);
-  const proxy = new BroadcastDbProxy(followerChannel);
-  // The reply is addressed to the tab that asked. Every tab on the channel hears every message,
-  // so a reply that named only the request id would settle whichever tab happened to have an
-  // outstanding request under that number.
-  leaderChannel.addEventListener("message", (event: MessageEvent<ProxyRequest>) => {
-    const response: WorkerResponse = { id: event.data.request.id, ok: true, value: "proxied" };
-    leaderChannel.postMessage({ client: event.data.client, response } satisfies ProxyResponse);
-  });
-  // Unwrapped to the value the worker answered with, not the envelope it travelled in: that is what
-  // makes the proxy a `MirrorTransport` a follower's mirror can read as if it held the worker port.
-  assert.equal(await proxy.request({ type: "close" }), "proxied");
-  proxy.dispose();
-  followerChannel.close();
-  leaderChannel.close();
 });
 
 class LoopbackWorker {

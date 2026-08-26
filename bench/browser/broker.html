@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>weftdb: does the port broker work in a browser?</title>
+    <style>
+      body {
+        font:
+          14px/1.5 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+        margin: 2rem auto;
+        max-width: 60rem;
+        padding: 0 1rem;
+      }
+      h1 {
+        font-size: 1.1rem;
+      }
+      p {
+        max-width: 46rem;
+      }
+      button {
+        font: inherit;
+        padding: 0.4rem 0.9rem;
+      }
+      pre {
+        background: #f4f4f4;
+        overflow-x: auto;
+        padding: 1rem;
+        white-space: pre;
+      }
+      @media (prefers-color-scheme: dark) {
+        body {
+          background: #111;
+          color: #eee;
+        }
+        pre {
+          background: #1c1c1c;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Does the port broker work in a browser?</h1>
+    <p>
+      Every tab now holds a MessagePort straight to the one worker that owns the database. A port cannot cross a
+      BroadcastChannel, so a small SharedWorker carries it: a tab mints a channel, sends one end through the broker to
+      whichever tab holds the worker, and that tab passes it into the worker. No OPFS is involved in the brokering,
+      which is why it works in a browser that refuses OPFS inside a SharedWorker.
+    </p>
+    <p>
+      The broker also carries the succession notice. A Web Lock wakes the next waiter and nobody else, so when a
+      successor takes over it registers here and the broker tells every other connection to reconnect. That says
+      somebody else is serving, never that the hearer leads.
+    </p>
+    <p>
+      The test suite proves the relay in Node, where a port really is transferred but the broker runs in-process. What
+      only a browser can answer is whether a port survives the SharedWorker boundary into another document's worker and
+      still answers there. This page uses the shipped broker, not a copy of it. The decisive row is the third.
+    </p>
+    <p><button id="run" type="button">Run the probe</button></p>
+    <pre id="results">Not run yet.</pre>
+    <script type="module" src="./src/broker-probe.ts"></script>
+  </body>
+</html>

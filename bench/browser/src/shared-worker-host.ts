@@ -1,10 +1,11 @@
 // The question this file exists to answer: can a `SharedWorker` hold an OPFS synchronous access
 // handle, and can two tabs reach one database through it?
 //
-// If it can, the arbitration weftdb does by hand — a Web Lock election, a BroadcastChannel, a proxy
-// on one side and a responder on the other, a relayed push, and a liveness signal to notice a dead
-// leader — is arbitration the browser is already willing to do. One worker for the origin, a port
-// per tab, and none of those pieces has anything left to arbitrate.
+// If it can, the arbitration weftdb does by hand — a Web Lock election, a second `SharedWorker`
+// brokering a `MessagePort` from each tab into whichever one holds the database, a succession
+// notice when that tab dies, and a reconnect in every other tab — is arbitration the browser is
+// already willing to do. One worker for the origin, a port per tab, and none of those pieces has
+// anything left to arbitrate.
 //
 // It is a probe rather than a benchmark: what matters is whether each step is possible, and which
 // one fails where it is not.
@@ -15,13 +16,14 @@
 //                 second, and one worker reporting two connections.
 //   Firefox 152   `Missing required OPFS APIs` inside the SharedWorker. A synchronous access
 //                 handle is not reachable from `SharedWorkerGlobalScope` there.
+//   Chrome 151    the same refusal, headless.
 //
-// Firefox is the one following the specification. `createSyncAccessHandle()` is defined as
-// available in dedicated workers only, so Safari passing is Safari granting more than the standard
-// asks for. That settles it against a SharedWorker rather than leaving it open: a browser holding
-// to the specification needs the Web Lock election and the follower proxy regardless, so the
-// SharedWorker path would be a second one to keep working, resting on latitude one engine happens
-// to allow. The arbitration stays weftdb's.
+// Two engines of three refuse it, and they are the ones following the specification.
+// `createSyncAccessHandle()` is defined as available in dedicated workers only, so Safari passing is
+// Safari granting more than the standard asks for. That settles it against a SharedWorker rather
+// than leaving it open: a browser holding to the specification needs the Web Lock election and the
+// port broker regardless, so the SharedWorker path would be a second one to keep working, resting on
+// latitude one engine happens to allow. The arbitration stays weftdb's.
 //
 // Re-run this if the specification changes. Do not re-run it hoping a browser will.
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";

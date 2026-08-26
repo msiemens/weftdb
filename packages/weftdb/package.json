@@ -14,6 +14,7 @@
     "./client/wasm-sqlite": "./src/client/wasm-sqlite.ts",
     "./client/worker-entry": "./src/client/worker-entry.ts",
     "./client/worker-host": "./src/client/worker-host.ts",
+    "./client/broker-entry": "./src/client/broker-entry.ts",
     "./server": "./src/server/index.ts",
     "./server/sqlite": "./src/server/sqlite.ts",
     "./server/node-sqlite": "./src/server/node-sqlite.ts",

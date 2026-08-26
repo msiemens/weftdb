@@ -6,7 +6,7 @@
 // The executor interface is synchronous, and the only browser storage SQLite can reach
 // synchronously is an OPFS sync access handle, which exists only inside a dedicated worker.
 // A persistent executor therefore runs in a worker and the page reaches it through
-// `OpfsWorkerTransport`; on the main thread only an in-memory database can be opened, which is
+// `WorkerPortTransport`; on the main thread only an in-memory database can be opened, which is
 // useful for tests and useless for persistence.
 //
 // And the client module has no SQLite runtime dependency. The caller passes in an initialised sqlite3

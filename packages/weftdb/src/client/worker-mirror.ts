@@ -27,22 +27,22 @@ import type { LocalRow, MaterializedRow } from "./index.ts";
 import type { SessionStatus } from "./session.ts";
 import {
   isDeltaPush,
-  type MirrorTransport,
   type WireRow,
   type WorkerDelta,
   type WorkerMutation,
+  type WorkerPortTransport,
   type WorkerPush,
   type WorkerRequestBody,
 } from "./worker.ts";
 
 export interface WeftClientMirrorOptions {
   /**
-   * What this mirror talks to. `OpfsWorkerTransport` in a leader tab, `BroadcastDbProxy` in a
-   * follower — and nothing below this line can tell which, which is the point. The caller owns it:
-   * a leader tab needs the same transport to relay pushes onto the BroadcastChannel, so a mirror
-   * that constructed and disposed one privately would be taking a handle its tab still needs.
+   * What this mirror talks to: a worker port, whether this tab made the worker or was handed a
+   * port to it. Nothing below this line can tell which, which is the point. The caller owns it —
+   * a tab holding the worker also forwards ports into it — so a mirror that constructed and
+   * disposed one privately would be taking a handle its tab still needs.
    */
-  readonly transport: MirrorTransport;
+  readonly transport: WorkerPortTransport;
   readonly scopeId: string;
   readonly deviceId: string;
   /**
@@ -68,13 +68,13 @@ export class WeftClientMirror {
   readonly engine: SubscriptionEngine;
   readonly scopeId: string;
   readonly deviceId: string;
-  readonly #transport: MirrorTransport;
+  #transport: WorkerPortTransport;
   readonly #onError: (error: Error) => void;
   /** Statements this page has registered, by cache key, with how many callers still want each. */
   readonly #watched = new Map<string, MirrorWatch>();
   /** The ids each of those last matched, in order, as the worker last ran them. */
   readonly #results = new Map<string, readonly RowId[]>();
-  readonly #offPush: () => void;
+  #offPush: () => void;
   /** What the worker's session last said it was doing, held by identity for `useSyncExternalStore`. */
   #status: SessionStatus | undefined;
   readonly #statusListeners = new Set<() => void>();
@@ -98,6 +98,41 @@ export class WeftClientMirror {
    * hooks key their `useCallback` on the source's identity.
    */
   readonly select: RowSelect = (query) => this.#results.get(query.cacheKey) ?? EMPTY;
+
+  /**
+   * Points this mirror at another transport and reloads everything through it.
+   *
+   * This is what a tab does when leadership moves. A dedicated worker dies with the document that
+   * created it, so the tab that takes over builds a new one and every other tab is given a port to
+   * that one — and on both paths the mirror is holding rows from a worker that no longer exists and
+   * registrations in a registry that went with it.
+   *
+   * Both are dropped rather than carried over. The rows go because the tab was disconnected for
+   * some interval and cannot know what happened during it: the database is durable and the same
+   * file is being reopened, so what comes back is whatever committed, which is exactly the right
+   * answer — including for a write that was in flight when the worker died and whose fate the
+   * caller was told it could not know. The registrations go because the new worker has never heard
+   * of them; they are made again from the statements this mirror kept, which is what stops a list
+   * from silently freezing after a migration nobody noticed.
+   *
+   * The old transport is not disposed here. The caller made it and is the one that knows what to
+   * say to whatever was in flight on it.
+   */
+  async attach(transport: WorkerPortTransport): Promise<void> {
+    this.#offPush();
+    this.#transport = transport;
+    this.#offPush = transport.onPush(this.#onPush);
+    this.rows.clear();
+    this.#results.clear();
+    await this.hydrate();
+    const registered: Promise<void>[] = [];
+    for (const entry of [...this.#watched.values()]) {
+      entry.ready = this.#register(entry.query);
+      registered.push(entry.ready);
+    }
+    await Promise.all(registered);
+    this.engine.notify();
+  }
 
   /** Loads this scope's rows out of the worker. Resolves once they are here. */
   async hydrate(): Promise<void> {
@@ -130,7 +165,7 @@ export class WeftClientMirror {
     // dropped as belonging to a statement nobody asked for.
     // `ready` is filled in straight after rather than passed in, because `#register` resolves
     // against this very entry: the map has to hold it before the round trip can end.
-    const entry: MirrorWatch = { refs: 1, ready: Promise.resolve() };
+    const entry: MirrorWatch = { query, refs: 1, ready: Promise.resolve() };
     this.#watched.set(query.cacheKey, entry);
     entry.ready = this.#register(query);
     return entry.ready;
@@ -239,9 +274,9 @@ export class WeftClientMirror {
   }
 
   /**
-   * Stops applying pushes. The transport is left alone: the caller made it — a leader tab is still
-   * relaying its worker's pushes to the follower tabs over the same one — so tearing it down here
-   * would take the tab's channel with the mirror.
+   * Stops applying pushes. The transport is left alone: the caller made it, and on a migration the
+   * caller replaces it under a mirror that carries on — so tearing it down here would take the
+   * tab's connection with the mirror.
    */
   dispose(): void {
     this.#offPush();
@@ -294,17 +329,24 @@ export class WeftClientMirror {
     // it had — and with it the revision `RowIdentityCache` decides identity by, which is what makes
     // `React.memo` hold across a push that touched one row of a thousand.
     for (const row of delta.rows) this.rows.set(localKey(toTableName(row.tableName), toRowId(row.id)), toLocalRow(row));
-    for (const [cacheKey, ids] of delta.results) {
-      // A result for a statement this page is not watching — one unwatched while the push was on
-      // the wire — is dropped rather than stored, so nothing accumulates answers nobody reads.
-      if (!this.#watched.has(cacheKey)) continue;
-      this.#results.set(cacheKey, ids as readonly RowId[]);
-    }
+    // Every result in the delta is one this page asked for: the worker sends each port only the
+    // statements that port registered, so there is nothing here to sift out. A delta that carried
+    // the whole scope's statements would wake this tab for every list every other tab is rendering.
+    for (const [cacheKey, ids] of delta.results) this.#results.set(cacheKey, ids as readonly RowId[]);
   }
 }
 
 /** One registered statement, and how many callers here are still reading it. */
 interface MirrorWatch {
+  /**
+   * The statement itself, kept rather than only its cache key.
+   *
+   * A registration lives in the worker, and the worker dies with the tab that created it. A tab
+   * that reconnects after leadership moved therefore has to register everything it is reading all
+   * over again — and a cache key is a hash of the compiled statement, which cannot be turned back
+   * into one.
+   */
+  readonly query: ReactiveSqlQuery;
   refs: number;
   /** The first caller's round trip, which every later caller for this key awaits instead of its own. */
   ready: Promise<void>;

@@ -143,17 +143,16 @@ supplies the module, so the library keeps no SQLite runtime dependency of its ow
 ships, or whether one ships at all, stays the application's decision.
 
 A build with no `installOpfsSAHPoolVfs` is refused rather than opened against memory:
-`openWebSqliteExecutor` throws a `WasmSqliteUnavailableError`. A database backed by memory
-answers every read and write normally, then loses all of it on reload. Refusing to open makes
-that failure visible immediately, instead of after the data is already gone.
-`openMemorySqliteExecutor` opens an explicit in-memory database for tests, but nothing falls
-back to it on its own.
+`openWebSqliteExecutor` throws a `WasmSqliteUnavailableError`. Such a build has no durable storage
+on any browser, so a memory-backed database would serve every read and write through development
+and lose the data in production. `openMemorySqliteExecutor` opens an in-memory database directly,
+and `serveWeftWorkerDefaults` opens one when a browser declines the pool.
 
 ## Opening a database
 
-`openWeftDatabase` is the whole of what a page does. It elects this tab, opens the worker or reaches
-the tab that holds it, mints and stores a device id, builds the mirror, hydrates it, and hands back
-what the generated code reads and writes through:
+`openWeftDatabase` is the whole of what a page does. It elects this tab, creates the worker or gets
+a port to the one another tab created, mints and stores a device id, builds the mirror, hydrates it,
+and hands back what the generated code reads and writes through:
 
 ```ts title="src/store.ts"
 import { openWeftDatabase } from "weftdb/client";
@@ -164,6 +163,7 @@ export const weft = await openWeftDatabase({
   schema,
   scopeId: "user-1",
   worker: new URL("./storage-worker.ts", import.meta.url),
+  broker: new URL("./broker.ts", import.meta.url),
   relay: { token: () => localStorage.getItem("token") },
   onError: (error) => {
     console.error(error);
@@ -173,36 +173,46 @@ export const weft = await openWeftDatabase({
 export const todos = todosMutators(weft.source);
 ```
 
+Two modules, and each is one import. The storage worker holds the database; the broker is a
+`SharedWorker` that hands a port to it from one tab to another. See
+[Reaching the worker from another tab](#reaching-the-worker-from-another-tab).
+
 `weft.source` is a `WeftSource`, so `use<Collection>` and `use<Collection>Query` take it unchanged,
 and it is a `MutationTarget`, so `<collection>Mutators` writes through it. `weft.role` is `leader`
-or `follower`; drive a banner from it rather than from a request that may not come back.
-`weft.status()` and `weft.subscribeStatus()` report the worker's sync session, `weft.setToken()`
-hands over a credential or signs out, and `weft.dispose()` unwinds everything in the order it was
-built.
+or `follower`; drive a banner from it, paired with `weft.subscribeRole()`, rather than from a
+request that may not come back. `weft.durability` is `durable` or `ephemeral`; tell a person their
+window will not remember by reading it. `weft.status()` and `weft.subscribeStatus()` report the
+worker's sync session, `weft.setToken()` hands over a credential or signs out, and `weft.dispose()`
+unwinds everything in the order it was built.
 
 The relay's address is not among the options. The worker builds the transport, so the base URL
 belongs there; the token is the exception, because a worker has no `localStorage` to read one from.
 It is a function so that re-reading it is how a refreshed credential reaches the session, which is
 what `setToken()` with no argument does.
 
-A device whose browser has no synchronous access handle pool fails to open. `WeftOpenError` carries
-a `reason` naming which condition it was, and Safari's private browsing mode is the one that
-matters. Nothing is left running behind a failed open.
+A browser that declines the synchronous access handle pool is served an in-memory database, and
+`weft.durability` reports `ephemeral`. Safari's private browsing mode is the case that reaches it.
+Every query and hook works unchanged there. Rows, outbox, and quarantine all go when the window
+closes, a reload included. [Multi-tab coordination](/concepts/multi-tab/) covers both modes.
+
+An open still fails when the worker can open no database at all, and `WeftOpenError` carries a
+`reason` naming the condition. Nothing is left running behind a failed open.
 
 ## Assembling the same thing by hand
 
 `openWeftDatabase` is built from parts that stay public, for an application that needs a piece of
-this it cannot express through the front door. `OpfsWorkerTransport` wraps the `Worker` and
-correlates each request with its reply. `WeftClientMirror` holds the rows the worker last said the
-scope contains, applies every delta the worker pushes, and wakes the subscriptions that read them:
+this it cannot express through the front door. `WorkerPortTransport` numbers each request and
+settles the reply that carries the same number, over a dedicated `Worker` or over a `MessagePort` to
+one. `WeftClientMirror` holds the rows the worker last said the scope contains, applies every delta
+the worker pushes, and wakes the subscriptions that read them:
 
 ```ts title="src/store.ts"
-import { OpfsWorkerTransport, WeftClientMirror } from "weftdb/client";
+import { WeftClientMirror, WorkerPortTransport } from "weftdb/client";
 import { deviceId, scopeId } from "weftdb/core";
 import { todosMutators } from "./generated/bindings.ts";
 
 const worker = new Worker(new URL("./storage-worker.ts", import.meta.url), { type: "module" });
-export const transport = new OpfsWorkerTransport(worker);
+export const transport = new WorkerPortTransport(worker);
 
 export const mirror = new WeftClientMirror({
   transport,
@@ -317,24 +327,58 @@ const status = useSyncExternalStore(
 
 ## Reaching the worker from another tab
 
-One tab at a time may hold the OPFS access handle, so one tab at a time may hold the worker.
-`openWeftDatabase` elects the tab, names the channel from the scope, and builds whichever half this
-tab needs, so an application that opens through it writes none of what follows.
-[Using weftdb with React](/guides/react/) covers the election itself.
+`openWeftDatabase` elects the tab, moves the ports, and rebuilds the connection when leadership
+changes, so an application that opens through it writes none of what follows.
+[Multi-tab coordination](/concepts/multi-tab/) covers why one tab holds the database and how the
+other tabs reach it.
 
-A follower tab reaches the leader's worker over a `BroadcastChannel`. `BroadcastDbProxy` satisfies
-the same transport interface `OpfsWorkerTransport` does, so a follower's mirror is built the same
-way, with the proxy in place of the transport:
+Moving a port between tabs needs a `SharedWorker`, so ship one as a module of its own and give
+`openWeftDatabase` its URL:
 
-```ts title="src/follower.ts"
-import { BroadcastDbProxy, WeftClientMirror } from "weftdb/client";
+```ts title="src/broker.ts"
+import "weftdb/client/broker-entry";
+```
+
+```ts title="src/main.ts"
+const weft = await openWeftDatabase({
+  schema,
+  scopeId: "user-1",
+  worker: new URL("./storage-worker.ts", import.meta.url),
+  broker: new URL("./broker.ts", import.meta.url),
+});
+```
+
+The broker touches no storage, and the module above is the whole of it. A browser with no
+`SharedWorker` is refused at the open in every tab, with `reason` `"no-broker"`.
+
+Assembling it by hand is two subscriptions:
+
+```ts title="src/owner.ts"
+import { WeftBrokerClient } from "weftdb/client";
+
+const shared = new SharedWorker("/broker.js", { type: "module" });
+const broker = new WeftBrokerClient(shared.port, "user-1");
+const offPort = broker.onPort((port) => {
+  worker.postMessage({ weft: "connect", port }, [port]);
+});
+broker.provide();
+```
+
+```ts title="src/guest.ts"
+import { WeftBrokerClient, WeftClientMirror, WorkerPortTransport } from "weftdb/client";
 import { deviceId, scopeId } from "weftdb/core";
 
-const channel = new BroadcastChannel("weft:user-1:db");
-const proxy = new BroadcastDbProxy(channel);
+const shared = new SharedWorker("/broker.js", { type: "module" });
+const broker = new WeftBrokerClient(shared.port, "user-1");
+const brokered = broker.requestPort();
+const transport = new WorkerPortTransport(brokered.port);
+const offSuccession = broker.onProvider(() => {
+  // Another tab took the lock and now holds the worker. Reconnect through the broker; leadership
+  // is the lock's to grant, and this message never says that this tab has it.
+});
 
 export const mirror = new WeftClientMirror({
-  transport: proxy,
+  transport,
   scopeId: scopeId("user-1"),
   deviceId: deviceId("laptop"),
 });
@@ -342,24 +386,23 @@ export const mirror = new WeftClientMirror({
 await mirror.hydrate();
 ```
 
-Both halves take the same channel name, and `databaseChannelName(scopeId)` is what
-`openWeftDatabase` derives it with.
+The handover is never acknowledged: the broker forwards the port into another document and hears
+nothing back. So ask the worker something over the port and treat an answer as the evidence it
+arrived. `brokered.refused` settles when the broker had no tab to give the port to, which is a tab
+that opened while the winner of the election was still starting its worker.
 
-The leader relays its worker's deltas onto the same channel, or a follower's mirror answers the
-first hydrate and then never moves again:
+A dedicated worker dies with the document that created it, so when that tab goes, every other tab's
+port breaks. The tab at the head of the lock queue learns of it from the Web Lock, which wakes one
+waiter and tells nobody else; the rest learn of it from the broker, which passes the successor's
+`provide()` on to every other connection as `onProvider`. That message asks a tab to reconnect and
+can do nothing else: leadership is concluded from the lock alone, so a spurious one costs a
+re-hydrate rather than a second worker on the access handle. `WeftClientMirror.attach` points the
+mirror at a new connection, reloads the rows, and registers every statement the page is reading all
+over again. A request in flight at that moment rejects: the tab cannot know whether the write
+landed, and reporting success would be worse than reporting nothing. Nothing is applied
+optimistically on the page and the database is durable, so the re-hydrate shows whatever committed.
 
-```ts title="src/leader.ts"
-// on the leader, with the responder from the React guide as `server`
-const offRelay = transport.onPush((push) => {
-  server.relayPush(push);
-});
-```
-
-A follower whose leader dies stops receiving deltas. Its mirror freezes at the rows it last held
-and raises no error, and `BroadcastDbProxy.request` has no deadline, so a request in flight when
-the leader went away never settles.
-
-Dispose the mirror and the proxy from a `pagehide` handler. A `BroadcastChannel` has no liveness
-signal, so a tab that goes away without handing its registrations back leaves each statement it
-watched registered in the worker, and the worker re-runs those statements after every mutation any
+Send `{ type: "disconnect" }` and dispose the mirror from a `pagehide` handler. A `MessagePort` has
+no liveness signal the worker can rely on, so a tab that goes away without saying so leaves each
+statement it watched registered, and the worker re-runs those statements after every mutation any
 tab makes for the rest of the session.

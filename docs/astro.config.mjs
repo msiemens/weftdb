@@ -6,6 +6,7 @@ import starlight from "@astrojs/starlight";
 import { loomDark, loomLight } from "./src/styles/code-theme.js";
 import { rehypeTableScroll, rehypeWordmark } from "./src/lib/rehype-wordmark.mjs";
 import { rehypeGlossary } from "./src/lib/rehype-glossary.mjs";
+import { remarkMermaid } from "./src/lib/remark-mermaid.mjs";
 import { expressiveCodePrompt } from "./src/lib/expressive-code-prompt.mjs";
 import { DEMOS, DEMO_API_BASE, DEMO_RELAY_PORT } from "./src/demos/registry.ts";
 
@@ -35,9 +36,16 @@ const demoProxy = {
 // URLs and the sitemap, and a wrong one is worse than none.
 export default defineConfig({
   vite: { server: { proxy: demoProxy } },
-  // `rehypeGlossary` runs before `rehypeWordmark` so the wordmark is never split across an
-  // `abbr` boundary, and before `rehypeTableScroll` because it has no interest in tables.
-  markdown: { rehypePlugins: [rehypeGlossary, rehypeWordmark, rehypeTableScroll] },
+  markdown: {
+    // `remarkMermaid` is a Markdown-stage plugin because it has to claim a ```mermaid fence before
+    // Expressive Code turns it into highlighted markup; user plugins run before an integration's,
+    // which is what makes that work. It also puts the diagram's source in an attribute, so nothing
+    // below can reach into it — see the plugin for why that matters.
+    remarkPlugins: [remarkMermaid],
+    // `rehypeGlossary` runs before `rehypeWordmark` so the wordmark is never split across an
+    // `abbr` boundary, and before `rehypeTableScroll` because it has no interest in tables.
+    rehypePlugins: [rehypeGlossary, rehypeWordmark, rehypeTableScroll],
+  },
   integrations: [
     react(),
     starlight({
@@ -52,6 +60,7 @@ export default defineConfig({
       // implicit precedence from being the only thing holding the home page up.
       components: {
         SiteTitle: "./src/components/SiteTitle.astro",
+        Head: "./src/components/Head.astro",
       },
       customCss: ["./src/styles/loom.css", "./src/styles/starlight-loom.css"],
       // `social` and `editLink` are left out for the same reason as `site`: the repository has

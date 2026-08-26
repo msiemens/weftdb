@@ -3,9 +3,9 @@
 // the commit the durable path pays per mutation. The transport cases here are a *control*, not a
 // prediction — Node's structured clone and its worker scheduling are a different implementation
 // from a browser's, and the browser harness is what says what a tab actually pays.
-import { MessageChannel, Worker, BroadcastChannel, type MessagePort } from "node:worker_threads";
+import { MessageChannel, Worker, type MessagePort } from "node:worker_threads";
 import { SqliteClientStore } from "weftdb/client/sqlite";
-import type { ProxyRequest, ProxyResponse, QueryDelta, WorkerRequest, WorkerResponse } from "weftdb/client";
+import type { QueryDelta, WorkerRequest, WorkerResponse } from "weftdb/client";
 import { openSqliteExecutor } from "weftdb/server/node-sqlite";
 import {
   TITLE,
@@ -52,7 +52,7 @@ export const workerBoundary: BenchGroup = {
     return [
       ...(await messageChannelCases(config)),
       await realWorkerCase(config),
-      await broadcastCase(config),
+      await brokeredPortCase(config),
       ...sqliteCommitCases(config, directory),
     ];
   },
@@ -125,67 +125,51 @@ async function realWorkerCase(config: BenchConfig): Promise<CaseResult> {
   }
 }
 
-/** The worker end of the protocol: answer every request, do nothing else. */
+/**
+ * The worker end of the protocol: answer every request, and serve a port that arrives the way a
+ * second tab's does. Everything else is left out — the number is the hop, not the query.
+ */
 const WORKER_SOURCE = [
   'const { parentPort } = require("node:worker_threads");',
-  'parentPort.on("message", (request) => parentPort.postMessage({ id: request.id, ok: true, value: null }));',
+  "const answer = (port, request) => port.postMessage({ id: request.id, ok: true, value: null });",
+  "const serve = (message, port) => {",
+  '  if (message && message.weft === "connect") {',
+  "    const opened = message.port;",
+  '    opened.on("message", (request) => serve(request, opened));',
+  "    return;",
+  "  }",
+  "  answer(port, message);",
+  "};",
+  'parentPort.on("message", (message) => serve(message, parentPort));',
 ].join("\n");
 
 /**
- * What a follower tab pays to reach the leader's database: the request and its answer both go
- * through a BroadcastChannel, addressed by client id because every tab on the channel hears both.
+ * What a tab that does not hold the worker pays to reach it: nothing extra.
+ *
+ * That is the measurement. A second tab is given a `MessagePort` straight to the one worker rather
+ * than proxying its traffic through the tab that made it, so its request crosses one boundary — the
+ * same one the owning tab's crosses. Compared against `boundary.worker.empty`, this says whether
+ * being the second tab costs anything at all.
  */
-async function broadcastCase(config: BenchConfig): Promise<CaseResult> {
-  const name = `weftdb-bench-${crypto.randomUUID()}`;
-  const follower = new BroadcastChannel(name);
-  const leader = new BroadcastChannel(name);
+async function brokeredPortCase(config: BenchConfig): Promise<CaseResult> {
+  const worker = new Worker(WORKER_SOURCE, { eval: true });
+  const channel = new MessageChannel();
   try {
-    const client = crypto.randomUUID();
-    leader.onmessage = (event): void => {
-      const asked = event.data as ProxyRequest;
-      const envelope: ProxyResponse = {
-        client: asked.client,
-        response: { id: asked.request.id, ok: true, value: null },
-      };
-      leader.postMessage(envelope);
-    };
-
-    let id = 0;
-    let settle: ((response: WorkerResponse) => void) | undefined;
-    follower.onmessage = (event): void => {
-      const answer = event.data as ProxyResponse;
-      if (answer.client !== client) return;
-      const resolve = settle;
-      settle = undefined;
-      resolve?.(answer.response);
-    };
-
-    const samples = await repeatAsync(async () => {
-      id += 1;
-      const answered = new Promise<WorkerResponse>((resolve) => {
-        settle = resolve;
-      });
-      const request: ProxyRequest = { client, request: EMPTY_REQUEST(id) };
-      const start = performance.now();
-      follower.postMessage(request);
-      const response = await answered;
-      const elapsed = performance.now() - start;
-      assertAnswered(response, id);
-      return elapsed;
-    }, config.latencyBudget);
-
+    // The handover, exactly as the leader tab performs it: the port is transferred into the worker,
+    // and from here on this end talks to the worker with nobody in between.
+    worker.postMessage({ weft: "connect", port: channel.port2 }, [channel.port2]);
     return duration(
       {
-        id: "boundary.broadcast.roundtrip",
+        id: "boundary.brokered.roundtrip",
         group: GROUP,
-        label: "Request/response through a BroadcastChannel proxy",
-        note: `what a follower tab pays to reach the leader's database: two BroadcastChannel deliveries per query, both ends on this thread; ${NOT_A_BROWSER}`,
+        label: "Request/response from a tab that was handed a port to the worker",
+        note: `a second tab's own MessagePort into the one worker thread, transferred to it through the broker — compare with boundary.worker.empty, which is what the tab that made the worker pays; ${NOT_A_BROWSER}`,
       },
-      samples,
+      await askRepeatedly(config, channel.port1),
     );
   } finally {
-    follower.close();
-    leader.close();
+    channel.port1.close();
+    await worker.terminate();
   }
 }
 

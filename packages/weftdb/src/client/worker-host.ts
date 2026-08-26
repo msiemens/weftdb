@@ -1,4 +1,4 @@
-// The worker half of the page-to-worker bridge. `OpfsWorkerTransport` has always been a sender
+// The worker half of the page-to-worker bridge. `WorkerPortTransport` has always been a sender
 // with nothing on the other end; this is the other end.
 //
 // The whole client runs here. That is forced rather than chosen: `SqlExecutor` is synchronous, the
@@ -33,17 +33,32 @@ import type { SocketTransport } from "./socket-transport.ts";
 // client entry point is kept clear of that. The caller constructs the store.
 import type { SqliteClientStore } from "./sqlite.ts";
 import type { ClientPersistence, LocalRow, WeftClient } from "./index.ts";
-import type { WireRow, WorkerDelta, WorkerMessage, WorkerMutation, WorkerRequest } from "./worker.ts";
+import {
+  isWeftWorkerConnect,
+  type WeftDurability,
+  type WeftWorkerOpened,
+  type WireRow,
+  type WorkerDelta,
+  type WorkerMessage,
+  type WorkerMutation,
+  type WorkerRequest,
+} from "./worker.ts";
 
 /**
- * The worker's own side of the port. In a dedicated worker this is `self`; in a test it is one end
- * of a `MessageChannel`. It is the mirror image of `WorkerLike`: it sends `WorkerMessage` — replies
- * and unsolicited pushes alike — and receives `WorkerRequest`.
+ * The worker's own side of a port. In a dedicated worker the first one is `self`; every later one
+ * is a `MessagePort` another tab made and had delivered here. It is the mirror image of
+ * `WorkerLike`: it sends `WorkerMessage` — replies and unsolicited pushes alike — and receives
+ * `WorkerRequest`.
+ *
+ * `start` is optional because only a `MessagePort` has one, and a port reached through
+ * `addEventListener` delivers nothing until it is started. There is deliberately no `close`: the
+ * worker's own global has one, and it terminates the worker.
  */
 export interface WorkerHostPortLike {
   postMessage(message: WorkerMessage): void;
   addEventListener(type: "message", listener: (event: MessageEvent<WorkerRequest>) => void): void;
   removeEventListener(type: "message", listener: (event: MessageEvent<WorkerRequest>) => void): void;
+  start?(): void;
 }
 
 /**
@@ -83,6 +98,15 @@ export interface WeftWorkerHostOptions {
    * than silently accepted, so a page that expected to be syncing hears about it.
    */
   readonly session?: WeftWorkerSessionOptions;
+  /**
+   * Whether the executor above outlives the window. `"durable"` unless said otherwise, because that
+   * is what OPFS gives and what everything above assumes.
+   *
+   * The host takes it rather than working it out, for the same reason it takes the executor: nothing
+   * here knows about OPFS. What it does with it is answer `open` — which is the only way a tab that
+   * was handed a port, rather than the tab that created the worker, can ever learn it.
+   */
+  readonly durability?: WeftDurability;
 }
 
 /**
@@ -93,8 +117,32 @@ export function serveWeftWorker(options: WeftWorkerHostOptions): WeftWorkerHost 
   return new WeftWorkerHost(options);
 }
 
+/**
+ * One connected tab: the port it talks on, the listener attached to that port, and what it has
+ * registered.
+ *
+ * The watches are counted per connection rather than only in aggregate because a port is the only
+ * handle the host has on a tab. A tab that goes away has to have its registrations released, and
+ * "which of the watches were this tab's" is a question nothing else can answer — a cache key is
+ * derived from the statement, so two tabs watching one list are indistinguishable in the aggregate
+ * count.
+ */
+interface HostConnection {
+  readonly port: WorkerHostPortLike;
+  readonly listener: (event: MessageEvent<WorkerRequest>) => void;
+  /** cacheKey -> how many registrations this port is holding. Also what a delta to it carries. */
+  readonly watching: Map<string, number>;
+}
+
+/** What a statement nobody is registered for answers. Shared, because it is never written to. */
+const NO_IDS: readonly string[] = [];
+
 export class WeftWorkerHost {
-  readonly #port: WorkerHostPortLike;
+  /**
+   * Every tab this worker is serving. One in the ordinary single-tab case; one more for each tab
+   * that had a port delivered here — see `connect`.
+   */
+  readonly #connections = new Set<HostConnection>();
   readonly #executor: SqlExecutor;
   readonly #store: SqliteClientStore;
   readonly #select: RowSelect;
@@ -102,13 +150,9 @@ export class WeftWorkerHost {
    * Statements the pages are watching, by the cache key they know them under, with how many of them
    * asked.
    *
-   * Counted because one worker now serves every tab: a follower reaches this host through the
-   * leader's `BroadcastDbProxy`, so two tabs rendering the same list register the same cache key,
-   * and an `unwatch` that simply deleted the entry would stop recomputing a statement the other tab
-   * is still showing. The count is per registration rather than per tab because the proxy does not
-   * name its tabs here — which is fine as long as each tab registers a key once and hands back
-   * exactly what it took, which is what `WeftClientMirror` and `BroadcastDbProxy.dispose` between
-   * them guarantee.
+   * Counted because one worker serves every tab: two tabs rendering the same list register the same
+   * cache key — it is derived from the compiled statement — and an `unwatch` that simply deleted the
+   * entry would stop recomputing a statement the other tab is still showing.
    */
   readonly #watched = new Map<string, { readonly query: ReactiveSqlQuery; refs: number }>();
   /**
@@ -117,6 +161,7 @@ export class WeftWorkerHost {
    */
   readonly #changed = new Set<string>();
   readonly #sessionOptions: WeftWorkerSessionOptions | undefined;
+  readonly #durability: WeftDurability;
   #client: WeftClient | undefined;
   #session: WeftSession | undefined;
   /** `start`'s teardown: stops the poll timer and closes the socket. */
@@ -127,12 +172,17 @@ export class WeftWorkerHost {
   #serving = true;
 
   constructor(options: WeftWorkerHostOptions) {
-    this.#port = options.port;
     this.#executor = options.executor;
     this.#store = options.store;
     this.#sessionOptions = options.session;
+    this.#durability = options.durability ?? "durable";
     this.#select = executorRowSelect(options.executor);
-    this.#port.addEventListener("message", this.#onMessage);
+    this.connect(options.port);
+  }
+
+  /** Whether the database this host serves outlives the window. Every port is told the same thing. */
+  get durability(): WeftDurability {
+    return this.#durability;
   }
 
   /** The session this host is running, if it has been given a token to run one under. */
@@ -145,55 +195,116 @@ export class WeftWorkerHost {
     return this.#client;
   }
 
-  /** Stops answering, and stops the session with it. */
+  /** How many tabs this worker is serving. */
+  get connections(): number {
+    return this.#connections.size;
+  }
+
+  /**
+   * Which statements this worker is still recomputing after every mutation, by cache key.
+   *
+   * For a test to read. It used to be legible from outside — every push carried every watched key —
+   * and now that a push carries only the asking tab's own statements, a registration nobody released
+   * is invisible from any one port. That is the leak worth catching: the worker re-runs a statement
+   * for the rest of the session on behalf of a tab that has gone.
+   */
+  get watching(): readonly string[] {
+    return [...this.#watched.keys()];
+  }
+
+  /**
+   * Serves one more tab on a port of its own.
+   *
+   * This is the whole of what replaced the leader-tab proxy. Only one document may hold the OPFS
+   * synchronous access handle, so only one tab may create this worker — but a `MessagePort` to it
+   * can be handed to any number of others, and once it has been they talk to the database directly
+   * rather than through the tab that made it. The tab that owns the worker forwards each arriving
+   * port here (`postMessage({ weft: "connect", port }, [port])`), and from that moment it is not on
+   * the other tabs' data path at all.
+   *
+   * A port is started before it is listened on, because a `MessagePort` reached through
+   * `addEventListener` queues what arrives and delivers none of it until `start`.
+   */
+  connect(port: WorkerHostPortLike): void {
+    if (!this.#serving) return;
+    const listener = (event: MessageEvent<WorkerRequest>): void => {
+      this.#onMessage(connection, event);
+    };
+    const connection: HostConnection = { port, listener, watching: new Map() };
+    this.#connections.add(connection);
+    port.addEventListener("message", listener);
+    port.start?.();
+  }
+
+  /** Stops answering every tab, and stops the session with it. */
   stop(): void {
     this.#serving = false;
     this.#endSession();
-    this.#port.removeEventListener("message", this.#onMessage);
+    for (const connection of [...this.#connections]) this.#drop(connection);
   }
 
-  readonly #onMessage = (event: MessageEvent<WorkerRequest>): void => {
+  #onMessage(connection: HostConnection, event: MessageEvent<WorkerRequest>): void {
     if (!this.#serving) return;
-    const request = event.data;
+    const message: unknown = event.data;
+    // A port for another tab, arriving on this one. Checked before the correlation id, because it
+    // carries none: it is not a request and there is nothing to answer.
+    if (isWeftWorkerConnect(message)) {
+      const port = asHostPort(message.port);
+      if (port !== undefined) this.connect(port);
+      return;
+    }
     // Anything without a correlation id is not a request. The page's mirror listens on this same
     // port for pushes, and in a `MessageChannel` test both halves can see each other's traffic.
-    if (typeof request !== "object" || request === null || typeof request.id !== "number") return;
+    if (typeof message !== "object" || message === null || typeof (message as WorkerRequest).id !== "number") return;
+    const request = message as WorkerRequest;
     // Through a promise whether or not the handler returned one: `sync` answers when the sync it
     // ran has finished, and a page that awaited it would otherwise be told "done" while the relay
     // was still being talked to.
     void Promise.resolve()
-      .then(() => this.#handle(request))
+      .then(() => this.#handle(connection, request))
       .then(
         (value) => {
-          this.#post({ id: request.id, ok: true, value });
+          // To the port the request came in on, and to no other. Every tab's requests are numbered
+          // from one in the tab that issued them, so an answer posted to all of them settles
+          // whichever request each tab happens to have outstanding under that number — one tab's
+          // row list handed to another, with nothing anywhere reporting a fault.
+          this.#post(connection, { id: request.id, ok: true, value });
         },
         (error: unknown) => {
           // A rejection crosses as text: an `Error` does not survive a structured clone with its
           // prototype intact, and dropping it would hang the page on a request already given up on.
-          this.#post({ id: request.id, ok: false, error: error instanceof Error ? error.message : String(error) });
+          this.#post(connection, {
+            id: request.id,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
         },
       );
-  };
+  }
 
   /** Answers, or a promise of one: `sync` settles when the sync it ran has finished. */
-  #handle(request: WorkerRequest): unknown {
+  #handle(connection: HostConnection, request: WorkerRequest): unknown {
     switch (request.type) {
       case "open":
         // The database was opened before this host was constructed — the executor is an option —
-        // so this is an acknowledgement that the worker is up, not an instruction.
-        return null;
+        // so this is an acknowledgement that the worker is up, not an instruction. What it carries
+        // back is what a tab holding only a port cannot find out any other way: the worker's own
+        // announcement went to the tab that created it, and this tab was not that tab.
+        return this.#opened();
       case "close":
         return this.#close();
+      case "disconnect":
+        return this.#disconnect(connection);
       case "execute":
         return this.#execute(request.query);
       case "hydrate":
-        return this.#hydrate(request.scopeId, request.deviceId);
+        return this.#hydrate(connection, request.scopeId, request.deviceId);
       case "mutate":
         return this.#mutate(request.mutation);
       case "watch":
-        return this.#watch(request.cacheKey, request.tableName, request.query);
+        return this.#watch(connection, request.cacheKey, request.tableName, request.query);
       case "unwatch":
-        this.#unwatch(request.cacheKey);
+        this.#unwatch(connection, request.cacheKey);
         return null;
       case "auth":
         this.#auth(request.token);
@@ -204,6 +315,36 @@ export class WeftWorkerHost {
         this.#requireSession().discardQuarantine();
         return null;
     }
+  }
+
+  #opened(): WeftWorkerOpened {
+    return { durability: this.#durability };
+  }
+
+  /**
+   * A tab saying it has gone. Its registrations are released and its port is dropped.
+   *
+   * Answered rather than silently acted on, and the answer goes out before the port is dropped, so
+   * a tab that awaited its own goodbye is told rather than left waiting. See `#post`, which posts to
+   * the connection it is given whether or not that connection is still in the set.
+   */
+  #disconnect(connection: HostConnection): null {
+    if (!this.#connections.has(connection)) return null;
+    for (const [cacheKey, count] of connection.watching) {
+      // Once per registration, because the aggregate count is per registration: a tab that watched
+      // a statement twice holds two references, and releasing one would leave the worker
+      // recomputing a statement nobody reads for the rest of the session.
+      for (let index = 0; index < count; index += 1) this.#release(cacheKey);
+    }
+    this.#drop(connection);
+    return null;
+  }
+
+  /** Stops listening on a port and forgets it. The port itself is the page's to close. */
+  #drop(connection: HostConnection): void {
+    this.#connections.delete(connection);
+    connection.watching.clear();
+    connection.port.removeEventListener("message", connection.listener);
   }
 
   /**
@@ -270,7 +411,9 @@ export class WeftWorkerHost {
 
   #postStatus(status: SessionStatus): void {
     this.#lastStatus = status;
-    this.#post({ push: "status", status });
+    // Every tab, for the same reason a delta goes to every tab: one session runs here and what it
+    // is doing is true of the device rather than of whichever tab last asked something.
+    this.#broadcast({ push: "status", status });
   }
 
   /**
@@ -297,7 +440,7 @@ export class WeftWorkerHost {
     return session;
   }
 
-  #hydrate(scopeId: string, deviceId: string): WorkerDelta {
+  #hydrate(connection: HostConnection, scopeId: string, deviceId: string): WorkerDelta {
     const client = this.#store.hydrate(toScopeId(scopeId), toDeviceId(deviceId));
     client.persistence = this.#recorder(client.persistence);
     // A hydrate replaces the client, and a session drives the one it was built with. Ending the
@@ -308,7 +451,7 @@ export class WeftWorkerHost {
     this.#startSession();
     // Every row this scope holds, in the one delta shape a push uses, so the page has a single
     // path for "rows arrived" and `_weft_rev` cannot be carried differently by the two.
-    return this.#delta([...client.rows.keys()]);
+    return this.#delta(connection, [...client.rows.keys()]);
   }
 
   /**
@@ -368,7 +511,7 @@ export class WeftWorkerHost {
     }
   }
 
-  #watch(cacheKey: string, tableName: string, query: CompiledQuery): readonly string[] {
+  #watch(connection: HostConnection, cacheKey: string, tableName: string, query: CompiledQuery): readonly string[] {
     const existing = this.#watched.get(cacheKey);
     // A second tab watching a list the first tab already watches. The compiled statement is the
     // same — the cache key is derived from it — so the registration is shared rather than rebuilt,
@@ -379,12 +522,28 @@ export class WeftWorkerHost {
       // `scope_id`, and one database file holds every scope this device is signed into.
       this.#watched.set(cacheKey, { query: reactiveSqlQuery({ tableName: toTableName(tableName), query }), refs: 1 });
     }
+    connection.watching.set(cacheKey, (connection.watching.get(cacheKey) ?? 0) + 1);
     // Answered with the ids straight away, so a page that has just subscribed does not have to
     // wait for something else to change before its list fills in.
     return this.#ids(cacheKey);
   }
 
-  #unwatch(cacheKey: string): void {
+  /**
+   * Hands one registration back, on behalf of the tab that took it.
+   *
+   * A port may only release what it is holding. Without that check a tab could decrement a
+   * registration another tab made — by unwatching twice, or by unwatching a cache key it never
+   * asked for — and retire a statement the other tab is still rendering from.
+   */
+  #unwatch(connection: HostConnection, cacheKey: string): void {
+    const held = connection.watching.get(cacheKey) ?? 0;
+    if (held === 0) return;
+    if (held === 1) connection.watching.delete(cacheKey);
+    else connection.watching.set(cacheKey, held - 1);
+    this.#release(cacheKey);
+  }
+
+  #release(cacheKey: string): void {
     const entry = this.#watched.get(cacheKey);
     if (entry === undefined) return;
     entry.refs -= 1;
@@ -402,6 +561,9 @@ export class WeftWorkerHost {
   #close(): null {
     this.#endSession();
     this.#watched.clear();
+    // The per-tab counts go with the registry they were counting into. Left standing, a later
+    // disconnect would release references against a registry that had already been emptied.
+    for (const connection of this.#connections) connection.watching.clear();
     this.#client = undefined;
     // Only if the executor has a handle to give back. `SqlExecutor` does not declare one — an
     // in-memory database has nothing to close — but the OPFS one holds a sync access handle, and
@@ -410,14 +572,56 @@ export class WeftWorkerHost {
     return null;
   }
 
-  /** Posts what has moved since the last push, along with what every watched statement now says. */
+  /**
+   * Posts what has moved since the last push, and tells each tab what *its own* statements now say.
+   *
+   * The rows go to everybody. A row belongs to the scope rather than to whichever tab typed into
+   * it, so a push sent only to the tab that mutated is a page whose rows freeze the moment another
+   * tab is the one typing.
+   *
+   * The results do not. A tab rendering one list has no use for the lists every other tab is
+   * rendering, and sending them anyway wakes it — the mirror notifies its engine on every delta —
+   * so a busy neighbour costs this tab a re-scan of its own subscriptions for nothing. The host
+   * knows which port asked for what (`HostConnection.watching`), so it can simply not send them.
+   *
+   * Each statement is still computed exactly once. Two tabs rendering one list share a registration,
+   * because the cache key is derived from the compiled statement, so the work is done here against
+   * `#watched` and only the delivery is per port.
+   */
   #push(): void {
     const keys = [...this.#changed];
     this.#changed.clear();
-    this.#post({ push: "delta", ...this.#delta(keys) });
+    const moved = this.#moved(keys);
+    const answers = new Map<string, readonly string[]>();
+    for (const cacheKey of this.#watched.keys()) answers.set(cacheKey, this.#ids(cacheKey));
+    // Over a copy, for the reason `#broadcast` takes one: posting to a port is what makes a tab
+    // notice its state has moved, and a tab is allowed to answer that by disconnecting.
+    for (const connection of [...this.#connections]) {
+      this.#post(connection, {
+        push: "delta",
+        ...moved,
+        results: [...connection.watching.keys()].map(
+          (cacheKey) => [cacheKey, answers.get(cacheKey) ?? NO_IDS] as const,
+        ),
+      });
+    }
   }
 
-  #delta(keys: readonly string[]): WorkerDelta {
+  /**
+   * The delta one connection is owed: the rows that moved, plus what the statements *that*
+   * connection registered answer now.
+   *
+   * Used for a hydrate's reply, which is addressed to one port like any other reply.
+   */
+  #delta(connection: HostConnection, keys: readonly string[]): WorkerDelta {
+    return {
+      ...this.#moved(keys),
+      results: [...connection.watching.keys()].map((cacheKey) => [cacheKey, this.#ids(cacheKey)] as const),
+    };
+  }
+
+  /** The row half of a delta, which is the same for every tab of the scope. */
+  #moved(keys: readonly string[]): { readonly rows: readonly WireRow[]; readonly removed: readonly string[] } {
     const client = this.#requireClient();
     const rows: WireRow[] = [];
     const removed: string[] = [];
@@ -429,15 +633,7 @@ export class WeftWorkerHost {
       if (row === undefined) removed.push(key);
       else rows.push(toWireRow(row));
     }
-    return {
-      rows,
-      removed,
-      // Every watched key, not only the ones the tab that caused this asked for — this host has one
-      // registry and every tab's statements are in it. That is what makes one relayed push enough
-      // for all of them: each mirror keeps the keys it is watching and drops the rest, so a leader
-      // does not have to work out which follower cares about what.
-      results: [...this.#watched.keys()].map((cacheKey) => [cacheKey, this.#ids(cacheKey)] as const),
-    };
+    return { rows, removed };
   }
 
   #ids(cacheKey: string): readonly string[] {
@@ -445,9 +641,20 @@ export class WeftWorkerHost {
     return entry === undefined ? [] : this.#select(entry.query);
   }
 
-  #post(message: WorkerMessage): void {
+  /**
+   * Posts to one tab. Takes the connection rather than looking one up, and does not require it to
+   * still be in the set: `#disconnect` answers the request that retired it.
+   */
+  #post(connection: HostConnection, message: WorkerMessage): void {
     if (!this.#serving) return;
-    this.#port.postMessage(message);
+    connection.port.postMessage(message);
+  }
+
+  #broadcast(message: WorkerMessage): void {
+    if (!this.#serving) return;
+    // Over a copy: posting to a port is what makes a tab notice its state has moved, and a tab is
+    // allowed to answer that by disconnecting, which would otherwise skip whoever came after it.
+    for (const connection of [...this.#connections]) connection.port.postMessage(message);
   }
 
   #requireClient(): WeftClient {
@@ -455,6 +662,22 @@ export class WeftWorkerHost {
     if (client === undefined) throw new Error("the worker has not hydrated a client yet");
     return client;
   }
+}
+
+/**
+ * A transferred port, if what arrived is one.
+ *
+ * Checked rather than cast, because the message crossed a structured clone from another document
+ * and the only thing the tag proves is what that document called it. A value that is not a port
+ * would otherwise be added to the set and every push would throw on it.
+ */
+function asHostPort(value: unknown): WorkerHostPortLike | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const candidate = value as Partial<WorkerHostPortLike>;
+  if (typeof candidate.postMessage !== "function") return undefined;
+  if (typeof candidate.addEventListener !== "function") return undefined;
+  if (typeof candidate.removeEventListener !== "function") return undefined;
+  return value as WorkerHostPortLike;
 }
 
 function toWireRow(row: LocalRow): WireRow {

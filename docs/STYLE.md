@@ -188,6 +188,19 @@ use H4 or deeper; if a page needs one, split the page.
   ``That prints `Write the quick start`.`` over a frame containing four words.
 - Sample identifiers use the same names across pages. Reuse `tasks`, `todos`, `user-1`, `laptop`.
 
+### Diagrams
+
+A `mermaid` fence renders as a diagram. Use one where the subject is a relationship between parts or
+an exchange between them over time, and prose would be a list of edges. A diagram that restates a
+paragraph earns nothing.
+
+- Concept pages only. A guide showing a procedure uses an ordered list.
+- Label nodes with the identifier the reader will meet in source: `WeftClientMirror`, not `Mirror`.
+- Node and note text is prose, and section 2 applies to it. No em dashes, no rhetorical contrast.
+- A note in a sequence diagram states what happens at that step. It does not argue for the design.
+- The diagram is not the explanation. The paragraph after it says what the reader should take from
+  it, and holds every fact the page relies on later.
+
 ## 8. Terminology
 
 ### Introduce a term before using it

@@ -155,66 +155,36 @@ on drop. Otherwise a remote reorder could resort the row out from under the poin
 
 ## Running across multiple tabs
 
-An on-device database opened through the WebAssembly SQLite executor holds one OPFS synchronous
-access handle, open in one tab at a time. `openWeftDatabase` settles that for an application:
-it elects the tab, builds whichever half the tab needs, and reports which one it got as `role`.
-Read that to show a banner, rather than a request that a follower may be waiting on
-([Storage on the device](/guides/device-storage/)).
+One tab of an origin holds the database and every other tab reaches it over a `MessagePort`.
+`openWeftDatabase` settles which tab that is and reconnects when it changes, so a component reads
+and writes the same way in both. [Multi-tab coordination](/concepts/multi-tab/) covers the election,
+the port broker, and succession.
 
-The rest of this section is what it does, for an application assembling the pieces itself.
+Render `weft.role` to show which part this tab is playing. Pair it with `weft.subscribeRole`, which
+fires when a tab is granted the lock:
 
-`MultiTabCoordinator.elect()` resolves the exclusivity with a Web Lock: the tab that acquires it
-becomes `leader`, and every other tab becomes `follower`. A tab in a browser without Web Locks is
-`degraded`, and so is a leader after it calls `close()`.
+```tsx title="src/tab-banner.tsx"
+import { useSyncExternalStore } from "react";
+import { weft } from "./store.ts";
 
-A Web Lock is held for exactly as long as the callback's promise is pending, so the leader's
-callback returns one that stays pending until `close()`. A callback that returned straight away
-would hand the lock back and leave each tab in turn believing it leads:
-
-```ts
-// inside MultiTabCoordinator.elect
-locks.request(`weft:${this.scopeId}:opfs`, { ifAvailable: true }, (lock) => {
-  if (lock === null) {
-    this.role = "follower";
-    resolveRole(this.role);
-    return undefined;
-  }
-  this.role = "leader";
-  resolveRole(this.role);
-  return new Promise<void>((releaseLock) => {
-    this.#release = releaseLock;
-  });
-});
+export function TabBanner() {
+  const role = useSyncExternalStore(
+    (listener) => weft.subscribeRole(listener),
+    () => weft.role,
+  );
+  if (role === "leader") return null;
+  return <p>Another tab of this browser holds the database.</p>;
+}
 ```
 
-A follower does not open the database itself. `BroadcastDbProxy` forwards its requests over a
-`BroadcastChannel`, and `serveBroadcastDbProxy` answers them on the leader:
+`role` is `leader` in the tab that created the worker, `follower` in every other tab, and `degraded`
+in a browser without Web Locks. Drive a banner from it rather than from a request that a follower
+may still be waiting on.
 
-```ts
-// on the leader, after elect() has returned "leader"
-const server = serveBroadcastDbProxy({
-  channel: new BroadcastChannel(`weft:${scopeId}:db`),
-  target: transport,
-  isLeader: () => coordinator.role === "leader",
-});
-```
-
-`target` is anything with a `request` method, which `OpfsWorkerTransport` already has. A follower
-speaks the whole worker protocol through it, so hydrating, mutating, and watching all cross the
-channel. `isLeader` is consulted once per request, so a tab that has lost the lock stops answering
-before its successor starts. Calling `server.stop()` detaches the responder, and a reply produced
-after that is dropped rather than posted.
-
-The leader also feeds its worker's unsolicited deltas to `server.relayPush`, or a follower's rows
-never move after the first load.
-
-Give the proxy and the responder the same channel name. `MultiTabCoordinator` opens a channel of
-its own and never posts on it, so name a channel yourself and pass it to both.
-
-`BroadcastDbProxy.request` waits without a deadline. A follower whose leader dies mid-request, or
-that asks before any leader is serving, waits until the proxy is disposed. Drive a banner from
-`role` rather than from a request that has not come back, and re-run `elect()` when a follower
-needs to find out that leadership has moved.
+When leadership moves, the mirror reconnects, re-hydrates, and registers every watched statement
+again, so each `use<Collection>Query` re-renders with the rows the new worker reports. A request in
+flight when the previous worker died rejects, which reaches `onError` rather than leaving a
+mutator's promise pending.
 
 The demo sidesteps this rather than exercising it: each tab gets its own device id and its own
 `localStorage`-backed store, so tabs sync as separate devices through the relay instead of sharing

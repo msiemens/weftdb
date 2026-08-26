@@ -43,7 +43,7 @@ function wholeDatasetBudget(size: number): Budget {
 // The worker, and one request at a time over it.
 
 /**
- * The page's half of the protocol, shaped like `weftdb/client`'s `OpfsWorkerTransport`: a request
+ * The page's half of the protocol, shaped like `weftdb/client`'s `WorkerPortTransport`: a request
  * id per message and a promise per id, which is what lets a burst have twenty in flight at once.
  */
 class BenchWorker {

@@ -922,8 +922,6 @@ export { WeftSession } from "./session.ts";
 export type { BroadcastChannelLike, SessionOptions, SessionStatus, SocketHandlers } from "./session.ts";
 export { serializeClient, WebStorageClientStore } from "./web-storage.ts";
 export type { StorageLike, StoredClient, StoredValue } from "./web-storage.ts";
-export { EphemeralClientStore } from "./ephemeral.ts";
-export type { EphemeralClientStoreOptions } from "./ephemeral.ts";
 export {
   executorRowSelect,
   queryKey,
@@ -954,9 +952,19 @@ export { AuthorizerDependencyRecorder, compileQuery, dependency, invalidatesQuer
 export type { CompiledQuery, QueryBuilderLike, QueryDependency, RegisteredQuery } from "./query.ts";
 export { compileOnlyKysely } from "./kysely.ts";
 export type { ScopedRowQuery } from "./kysely.ts";
-export { isDeltaPush, isWeftWorkerReady, isWorkerPush, OpfsWorkerTransport, withRequestId } from "./worker.ts";
+export {
+  isDeltaPush,
+  isWeftWorkerConnect,
+  isWeftWorkerOpened,
+  isWeftWorkerReady,
+  isWorkerPush,
+  withRequestId,
+  WorkerPortTransport,
+} from "./worker.ts";
 export type {
-  MirrorTransport,
+  WeftDurability,
+  WeftWorkerConnect,
+  WeftWorkerOpened,
   WeftWorkerReady,
   WireRow,
   WorkerDelta,
@@ -975,29 +983,17 @@ export { serveWeftWorker, WeftWorkerHost } from "./worker-host.ts";
 export type { WeftWorkerHostOptions, WorkerHostPortLike } from "./worker-host.ts";
 export { WeftClientMirror } from "./worker-mirror.ts";
 export type { WeftClientMirrorOptions } from "./worker-mirror.ts";
-export { BroadcastDbProxy, MultiTabCoordinator, serveBroadcastDbProxy } from "./multitab.ts";
+export { MultiTabCoordinator } from "./multitab.ts";
 export type {
-  BroadcastDbProxyOptions,
-  BroadcastDbProxyServer,
-  BroadcastDbProxyServerOptions,
-  LeadershipAnnouncement,
   LeadershipListener,
   LockManagerLike,
   LockRequestOptionsLike,
   MultiTabOptions,
-  ProxyPush,
-  ProxyRequest,
-  ProxyResponse,
-  ProxyTarget,
   TabRole,
 } from "./multitab.ts";
+export { isBrokerMessage, serveWeftPortBroker, WeftBrokerClient } from "./broker.ts";
+export type { BrokeredPort, BrokerMessage, BrokerPortLike, WeftPortBroker } from "./broker.ts";
 export { Diff3EditorBuffer } from "./editor.ts";
 export type { BufferedRemoteEdit } from "./editor.ts";
-export { databaseChannelName, deviceIdForScope, openWeftDatabase, WeftOpenError } from "./open.ts";
-export type {
-  OpenRelayOptions,
-  OpenWeftDatabaseOptions,
-  WeftDatabase,
-  WeftOpenFailure,
-  WeftWorkerLike,
-} from "./open.ts";
+export { deviceIdForScope, openWeftDatabase, WeftOpenError } from "./open.ts";
+export type { OpenRelayOptions, OpenWeftDatabaseOptions, WeftDatabase, WeftOpenFailure } from "./open.ts";

@@ -25,10 +25,10 @@ import { defineSchema, S } from "weftdb/schema";
 import {
   compileOnlyKysely,
   isDeltaPush,
-  OpfsWorkerTransport,
   reactiveSqlQuery,
   serveWeftWorker,
   WeftClientMirror,
+  WorkerPortTransport,
   type ReactiveSqlQuery,
   type ScopedRowQuery,
   type WeftWorkerHost,
@@ -239,7 +239,7 @@ test("§8.7 the mirror is a weft source as it stands", () => {
 
 test("§8.7 the worker transport ignores a push rather than mis-correlating it", async () => {
   const worker = new PushingWorker();
-  const transport = new OpfsWorkerTransport(worker);
+  const transport = new WorkerPortTransport(worker);
 
   let settled = false;
   const pending = transport.execute({ sql: "select 1", parameters: [] }).then((value) => {
@@ -267,7 +267,7 @@ class Bridge {
   readonly db = compileOnlyKysely<Database>();
   readonly mirror: WeftClientMirror;
   /** The mirror's transport, owned here rather than by the mirror: a leader tab needs it too. */
-  readonly transport: OpfsWorkerTransport;
+  readonly transport: WorkerPortTransport;
   readonly host: WeftWorkerHost;
   readonly counted: CountingExecutor;
   readonly store: SqliteClientStore;
@@ -291,7 +291,7 @@ class Bridge {
     page.addEventListener("message", (event: MessageEvent<WorkerMessage>) => {
       if ("push" in event.data) this.pushes.push(event.data);
     });
-    this.transport = new OpfsWorkerTransport(page);
+    this.transport = new WorkerPortTransport(page);
     this.mirror = new WeftClientMirror({ transport: this.transport, scopeId: SCOPE, deviceId: DEVICE });
   }
 
@@ -471,7 +471,9 @@ class PortEndpoint<Incoming> {
     this.#port.start();
   }
 
-  postMessage(message: WorkerRequest | WorkerMessage): void {
+  // `unknown` rather than the protocol's own union, because the protocol is no longer all that
+  // crosses these ports: a tab that was handed a connection sends its `MessagePort` through one.
+  postMessage(message: unknown): void {
     this.#port.postMessage(message);
   }
 
