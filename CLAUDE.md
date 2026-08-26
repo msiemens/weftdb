@@ -40,9 +40,37 @@ today and needs to know what is, not what it went through.
 
 **A restatement.** If the comment says what the line below it says, delete the comment.
 
-**The conversation that produced the code.** Never `as requested`, `as discussed`, `per review`,
-`we decided`, `the user wants`, `leaving this for now`, or any other reference to a chat, a ticket,
-or a person. The reader has none of that context and it reads as somebody else's mail.
+**The conversation that produced the code.** The obvious form names itself: `as requested`,
+`as discussed`, `per review`, `we decided`, `the user wants`, `leaving this for now`. Those are easy
+to find and rare.
+
+The common form names nothing and no search finds it: **a comment whose subject is a decision rather
+than the code.** `on purpose`, `deliberately`, `rather than X` where X was never on the table, a
+defence of a choice nobody reading the file would question, a justification for something being
+absent. Each is an answer to a question somebody asked in a conversation, written down where the
+person who asked it is not.
+
+The test: would a reader arriving cold have raised the objection this sentence answers? If not, the
+sentence is arguing with somebody who is not in the room.
+
+Rhetorical contrast is the same fault wearing a grammar. `X, not Y`. `X rather than Y`. `not because
+A but because B`. Each raises an alternative so that it can be dismissed, and the reader was never
+proposing it.
+
+State the positive and its reason. Say `Read off the global because one line of source then serves a
+browser and Node`, and the rejected alternative never has to appear. `The public surface is listed,
+not inherited: a new export reaches consumers only from here` reduces to its second clause, which
+was the only part carrying anything.
+
+An absence needs no comment. A name that is not exported, a case that is not handled, a fallback
+that does not exist — none of these is a puzzle, and pointing at the gap manufactures one.
+
+Where a constraint genuinely forces an unobvious shape, state the constraint.
+`Firefox refuses createSyncAccessHandle() inside a SharedWorkerGlobalScope` is a fact about the
+world. `We went with the lock instead` is a fact about a meeting.
+
+If a task asked you to justify a decision, the justification belongs in the report, not the source.
+Being asked to explain a choice is not licence to explain it in the file.
 
 **Sentences that carry nothing.** Not a phrasing problem and not a corner case. Most first drafts are
 half filler, and the filler reads as prose because it is grammatical and on topic.
@@ -74,8 +102,42 @@ actually get produced, not invented bad ones.
 | `Nothing about it is OPFS, which is what the name it used to have claimed.`                                                                                                                 | `Nothing about it is OPFS, and nothing in it knows what the port is made of.`                                                                                        |
 | `// The socket is already gone, which is the state we were trying to reach.`                                                                                                                | `// The socket is already gone, which is the state this close is reaching for.`                                                                                      |
 
+| `// Below the entry point on purpose: query compilation and the worker's reply shape are internals the package assembles for itself, so they are reached where they are declared.` | Delete it |
+
 Each of the first three explains the present by describing a past the reader never saw. Each is
 strictly worse than the same sentence with the history removed, and none of them needed it.
+
+The last one contains no history, no first person and no named reference to a conversation, so every
+search run over this tree missed it. It was written because a task asked for each export decision to
+be justified, and the justification landed in the file instead of the report. What gives it away is
+that a reader would have to have been asking "why is this not exported?" for it to be worth writing,
+and nobody arriving at that import is asking anything.
+
+## Briefing subagents
+
+**Do not ask an agent to justify its decisions in its report.** A brief that says "say why" produces
+justification-shaped comments in the source, because the agent writes the reasoning while it is
+working and the file is where it is standing. `on purpose`, a contrast defending a choice nobody
+questioned, a comment whose subject is the export surface — each traces back to a brief that asked
+for reasons.
+
+Ask for what happened:
+
+- what changed, by file
+- what was deleted, and the line count
+- which tests were verified to discriminate, and what was broken to prove each one
+- what turned out to be wrong in the spec once they reached it
+- what was left undone
+
+Where a judgement genuinely needs explaining, ask for the alternatives and the evidence, and say in
+the same sentence that it belongs in the report and not in the tree.
+
+Give every agent `node scripts/comment-check.mjs <files>` as a required step, and run it against
+their output before accepting the work. The brief alone does not hold.
+
+Bound every test run an agent makes: `timeout 300 pnpm vitest run <file> --testTimeout=15000`. An
+unsettled promise hangs the runner instead of failing it, and an unbounded run costs minutes before
+anyone learns anything.
 
 ## Tests
 
@@ -108,7 +170,11 @@ pnpm typecheck
 pnpm exec eslint .
 npx prettier --check .
 pnpm --filter weft-docs build
+node scripts/comment-check.mjs --all
 ```
+
+`comment-check.mjs` exits non-zero on its `error` tier. It catches wording and cannot catch a
+sentence that is grammatical, on topic and carries nothing, so a clean report is a floor.
 
 Generated artifacts are committed, so a stale one is a failure. Regenerate the demos whenever schema
 or codegen output moves:

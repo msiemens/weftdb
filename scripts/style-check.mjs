@@ -114,7 +114,14 @@ for (const file of files) {
     })
     .join(" ");
   for (const sentence of prose.split(/(?<=[.?!])\s+/)) {
-    const words = sentence.trim().split(/\s+/).filter(Boolean);
+    // A code span is one thing a reader takes in whatever its length, so `readonly SqlValue[]` is a
+    // word and `PRAGMA cache_size = -65536` is a word. Counting their insides makes a short sentence
+    // read as a long one.
+    const words = sentence
+      .replace(/`[^`]*`/g, "·")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
     if (words.length > 35) {
       hits.push({
         no: "-",
