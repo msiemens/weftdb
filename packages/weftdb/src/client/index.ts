@@ -296,10 +296,6 @@ export class WeftClient {
     this.quarantine.splice(0, this.quarantine.length, ...this.quarantine.filter((op) => op.txnId !== txnId));
     for (const op of retrying) {
       const { rejectedAt: _rejectedAt, reason: _reason, serverValue: _serverValue, ...wireOp } = op;
-      if (wireOp.kind === "set") {
-        const local = this.rows.get(localKey(wireOp.tableName, wireOp.rowId))?.fields.get(wireOp.field);
-        if (local !== undefined) wireOp.value = local;
-      }
       this.pushOutbox(wireOp);
       this.recomputeDirty(wireOp.tableName, wireOp.rowId);
     }
@@ -331,7 +327,6 @@ export class WeftClient {
       let attempts = 0;
       while (this.outbox.length > 0 && attempts < MAX_PUSH_ATTEMPTS) {
         attempts += 1;
-        this.refreshQueuedBases();
         const sent = [...this.outbox];
         if (this.applyPushResult(await transport.push(this.scopeId, sent), sent) === "stop") return;
       }
@@ -567,12 +562,7 @@ export class WeftClient {
     // rejected for, but not to land under something already accepted. Until the acknowledgment
     // was folded in here, the clock only learned of its own writes when it pulled them back,
     // which is after the correction has already been made (§5.5).
-    for (const op of drained) {
-      this.clock.acknowledge(op.hlc);
-      if (op.kind !== "set") continue;
-      if (this.schema.collections[op.tableName]?.fields[op.field]?.merge !== "diff3") continue;
-      this.rows.get(localKey(op.tableName, op.rowId))?.internals.diff3Base.set(op.field, op.value);
-    }
+    for (const op of drained) this.clock.acknowledge(op.hlc);
     for (const ack of acks) {
       for (const rowAck of ack.firstSeenAtByRow) {
         const row = this.rows.get(localKey(rowAck.tableName, rowAck.rowId));
@@ -672,21 +662,6 @@ export class WeftClient {
     this.outbox.push(op);
     this.outboxAttempts.set(opKey(op), 0);
     this.rememberQueued(op);
-  }
-
-  private refreshQueuedBases(): void {
-    const pending = new Map<string, WireValue>();
-    for (const op of this.outbox) {
-      if (op.kind !== "set") continue;
-      const merge = this.schema.collections[op.tableName]?.fields[op.field]?.merge;
-      const key = `${localKey(op.tableName, op.rowId)}\0${op.field}`;
-      if (merge === "diff3" && op.baseHash !== undefined) {
-        const row = this.rows.get(localKey(op.tableName, op.rowId));
-        const base = pending.get(key) ?? row?.internals.diff3Base.get(op.field);
-        if (base !== undefined) op.baseHash = stableHash(base);
-      }
-      pending.set(key, op.value);
-    }
   }
 
   /**
