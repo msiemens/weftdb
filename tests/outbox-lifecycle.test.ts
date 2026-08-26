@@ -201,6 +201,39 @@ test("a pull does not settle a field whose write is sitting in quarantine", asyn
   assert.equal(client.isRowDirty(NOTES, ROW), true, "a row still holding quarantined work read as clean");
 });
 
+test("retrying a quarantined write queues the row's current value", async () => {
+  const server = new WeftServer();
+  const client = device("tab-1");
+
+  await client.create(NOTES, ROW, values({ title: "first" }), txnId("create"));
+  await client.applySnapshot(server.snapshot(SCOPE));
+  await client.update(NOTES, ROW, values({ title: "second" }), txnId("second"));
+  await client.syncWith(inProcessTransport(server), HASH);
+
+  await client.retryQuarantinedTxn(txnId("create"));
+  await client.update(NOTES, ROW, values({ title: "third" }), txnId("third"));
+  client.outbox.push(...client.outbox.splice(0, 1));
+  await client.syncWith(inProcessTransport(server), HASH);
+
+  assert.equal(client.getRow(NOTES, ROW)?.fields.get(TITLE), "third", "the later local edit never landed");
+  assert.equal(
+    client.listQuarantine().some((op) => op.txnId === txnId("second")),
+    true,
+    "the older edit was not left for repair",
+  );
+
+  await client.retryQuarantinedTxn(txnId("second"));
+
+  assert.equal(client.outbox.length, 1, "the repaired write did not return to the outbox");
+  assert.equal(
+    client.getRow(NOTES, ROW)?.fields.get(TITLE),
+    "third",
+    "retrying the older write rewrote the row away from what the device still shows",
+  );
+  assert.equal(client.outbox[0]?.kind, "set");
+  assert.equal(client.outbox[0]?.kind === "set" ? client.outbox[0].value : undefined, "third");
+});
+
 test("a quarantined write does not withhold a field from the next life of its row", async () => {
   // The other edge of the rule above. A quarantined write protects the value it left in the row,
   // and a row that has been deleted and had its id used again does not hold that value any more —

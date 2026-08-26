@@ -67,6 +67,30 @@ test("keystrokes queued into a diff3 field before a sync all push", async () => 
   assert.equal(client.getRow(TODOS, ROW)?.fields.get(NOTES), "hello", "the local value was rewritten backwards");
 });
 
+test("the first diff3 edit after a create sync carries the accepted create as its base", async () => {
+  const { server, client } = await seeded();
+
+  await client.update(TODOS, ROW, values({ notes: "revised" }), txnId("edit"));
+  await client.syncWith(inProcessTransport(server), HASH);
+
+  assert.equal(client.listQuarantine().length, 0, "the device quarantined its own first prose edit");
+  assert.equal(client.outbox.length, 0, "the edit never drained");
+  assert.equal(serverValue(server, NOTES), "revised");
+  assert.equal(client.getRow(TODOS, ROW)?.fields.get(NOTES), "revised");
+});
+
+test("a queued diff3 edit keeps its base when a local delete follows it", async () => {
+  const { server, client } = await seeded();
+
+  await client.update(TODOS, ROW, values({ notes: "revised" }), txnId("edit"));
+  await client.delete(TODOS, ROW, txnId("delete"));
+  await client.syncWith(inProcessTransport(server), HASH);
+
+  assert.equal(client.listQuarantine().length, 0, "the edit was quarantined before the delete landed");
+  assert.equal(client.outbox.length, 0, "the edit and delete did not drain");
+  assert.equal(serverValue(server, NOTES), "revised");
+});
+
 test("one device's edits to a diff3 field converge on what it last typed", async () => {
   await fc.assert(
     fc.asyncProperty(
