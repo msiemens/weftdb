@@ -203,9 +203,8 @@ export interface WorkerLike {
   postMessage(message: WorkerRequest): void;
   addEventListener(type: "message", listener: (event: MessageEvent<WorkerMessage>) => void): void;
   /**
-   * The far end of this port has gone, which is the only signal a page gets that the browser
-   * stopped its `SharedWorker`. A `MessagePort` fires it in a browser and under
-   * `node:worker_threads` alike.
+   * The far end of this port has gone. `node:worker_threads` raises it; no browser raises it on a
+   * `MessagePort` yet, which is the gap `REQUEST_DEADLINE_MS` covers.
    */
   addEventListener(type: "close", listener: () => void): void;
   removeEventListener(type: "message", listener: (event: MessageEvent<WorkerMessage>) => void): void;
@@ -214,6 +213,24 @@ export interface WorkerLike {
 }
 
 export type WorkerPushHandler = (push: WorkerPush) => void;
+
+export interface WorkerPortTransportOptions {
+  /** How long a request waits before the worker counts as gone. */
+  readonly deadlineMs?: number | undefined;
+}
+
+/**
+ * How long a request waits for the worker before the page treats the worker as gone.
+ *
+ * A silence is what stands in for the port's `close` event, which no browser fires: Chrome 151 and
+ * Firefox 152 both answer `"onclose" in new MessageChannel().port1` with `false`, and closing one
+ * end of a channel raises nothing on the other. Without this a page whose `SharedWorker` the
+ * browser stopped waits for ever on every write it makes.
+ *
+ * A running worker answers in milliseconds and a stopped one answers never, so this has only to
+ * clear the slowest true answer — a hydrate of a large database against a cold WebAssembly module.
+ */
+const REQUEST_DEADLINE_MS = 20_000;
 
 /**
  * A correlated request/response transport over a port that speaks the worker protocol: it numbers
@@ -228,13 +245,22 @@ export class WorkerPortTransport {
   #nextId = 1;
   readonly #pending = new Map<
     number,
-    { readonly resolve: (value: unknown) => void; readonly reject: (error: Error) => void }
+    {
+      readonly resolve: (value: unknown) => void;
+      readonly reject: (error: Error) => void;
+      readonly deadline: ReturnType<typeof setTimeout>;
+    }
   >();
   readonly #pushHandlers = new Set<WorkerPushHandler>();
+  readonly #closedHandlers = new Set<() => void>();
+  readonly #deadlineMs: number;
+  #closed = false;
 
-  constructor(worker: WorkerLike) {
+  constructor(worker: WorkerLike, options: WorkerPortTransportOptions = {}) {
     this.#worker = worker;
+    this.#deadlineMs = options.deadlineMs ?? REQUEST_DEADLINE_MS;
     this.#worker.addEventListener("message", this.#onMessage);
+    this.#worker.addEventListener("close", this.#announceClosed);
     // A `MessagePort` reached through `addEventListener` queues what arrives and delivers none of
     // it until it is started, so a tab would post a hydrate and wait for an answer already sitting
     // in its own queue.
@@ -258,14 +284,15 @@ export class WorkerPortTransport {
     const id = this.#nextId;
     this.#nextId += 1;
     return new Promise((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      const deadline = setTimeout(() => this.#giveUpOn(id), this.#deadlineMs);
+      this.#pending.set(id, { resolve, reject, deadline });
       this.#worker.postMessage(withRequestId(id, message));
     });
   }
 
-  /** Fires once the port's far end has gone, which is the page's only notice that the worker did. */
+  /** Fires once the worker at the far end has gone, however the page came to know it. */
   onClosed(handler: () => void): void {
-    this.#worker.addEventListener("close", handler);
+    this.#closedHandlers.add(handler);
   }
 
   /**
@@ -292,11 +319,37 @@ export class WorkerPortTransport {
    */
   dispose(reason = "worker transport disposed"): void {
     this.#worker.removeEventListener("message", this.#onMessage);
-    for (const pending of this.#pending.values()) pending.reject(new Error(reason));
+    for (const pending of this.#pending.values()) {
+      clearTimeout(pending.deadline);
+      pending.reject(new Error(reason));
+    }
     this.#pending.clear();
     this.#pushHandlers.clear();
+    this.#closedHandlers.clear();
     this.#worker.close?.();
   }
+
+  /**
+   * Gives up on one request, and takes the silence as the worker having gone.
+   *
+   * Reconnecting builds a `SharedWorker` at the same URL, which joins one that is running as
+   * readily as it wakes one that is not, so a worker that was only slow costs a reconnect and
+   * nothing besides. Its answer arrives for an id nothing is waiting on and is dropped.
+   */
+  #giveUpOn(id: number): void {
+    const pending = this.#pending.get(id);
+    if (pending === undefined) return;
+    this.#pending.delete(id);
+    pending.reject(new Error(`the worker did not answer in ${String(this.#deadlineMs)}ms`));
+    this.#announceClosed();
+  }
+
+  /** Once per transport: every request outstanding when a worker goes times out separately. */
+  readonly #announceClosed = (): void => {
+    if (this.#closed) return;
+    this.#closed = true;
+    for (const handler of [...this.#closedHandlers]) handler();
+  };
 
   readonly #onMessage = (event: MessageEvent<WorkerMessage>): void => {
     const message = event.data;
@@ -312,6 +365,7 @@ export class WorkerPortTransport {
     const pending = this.#pending.get(message.id);
     if (pending === undefined) return;
     this.#pending.delete(message.id);
+    clearTimeout(pending.deadline);
     if (message.ok) pending.resolve(message.value);
     else pending.reject(new Error(message.error));
   };

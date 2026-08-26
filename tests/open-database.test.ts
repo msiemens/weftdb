@@ -225,6 +225,43 @@ test("§8.7 a request in flight when the worker goes away rejects, and the re-hy
     assert.deepEqual(rowsOf(weft, "scope-1").map(title), ["committed"]);
   }));
 
+test("§8.7 a worker that stops without closing its port is noticed, and the tab reconnects", async () =>
+  withBrowser(async (browser) => {
+    // What a browser actually does. `close` on a `MessagePort` is specified and unimplemented —
+    // Chrome 151 and Firefox 152 both answer `"onclose" in new MessageChannel().port1` with
+    // `false` — so a page whose `SharedWorker` was stopped is told nothing at all, and a request
+    // that never comes back is the only evidence it has.
+    const weft = await browser.open("scope-1", { token: () => "token", workerDeadlineMs: 150 });
+    await weft.source.watch(todosOrdered("scope-1"));
+    await weft.source.create(TODOS, rowId("todo-1"), values("committed", 1), txnId("txn-1"));
+    await settle(() => weft.source.rows.size === 1);
+
+    await browser.stopSilently();
+
+    // Nothing was in flight, so the deadline has to be reached by a request made after the worker
+    // went: a page whose worker dies while it is idle learns of it when the person next does
+    // something.
+    const writing = weft.source.create(TODOS, rowId("todo-2"), values("after", 2), txnId("txn-2")).then(
+      () => "resolved",
+      () => "rejected",
+    );
+    assert.equal(await writing, "rejected", "a write into a worker that had gone was reported as landing");
+
+    // And the tab reconnects, so the write the person makes next lands. Retried because the
+    // reconnect is asynchronous: an attempt made straight after the rejection can still meet the
+    // transport that is on its way out.
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      try {
+        await weft.source.create(TODOS, rowId("todo-3"), values("after", 3), txnId("txn-3"));
+        break;
+      } catch {
+        await delay(25);
+      }
+    }
+    await waitFor(() => rowsOf(weft, "scope-1").length === 2, "the tab never reconnected");
+    assert.deepEqual(rowsOf(weft, "scope-1").map(title).sort(), ["after", "committed"]);
+  }));
+
 /**
  * One browser: one `localStorage`, one origin's storage, and one `SharedWorker` at a time serving
  * whatever tabs a test opens against them.
@@ -257,10 +294,12 @@ class Browser {
       readonly namespace?: string;
       readonly schema?: SchemaDefinition;
       readonly token?: () => string | null;
+      readonly workerDeadlineMs?: number;
     } = {},
   ): Promise<WeftDatabase> {
     const weft = await openWeftDatabase({
       schema: overrides.schema ?? schema,
+      ...(overrides.workerDeadlineMs === undefined ? {} : { workerDeadlineMs: overrides.workerDeadlineMs }),
       scopeId,
       // Never dereferenced: `connect` is what turns this into a connection, and under Node that is a
       // `MessageChannel` with the shipped storage worker on the far end.
@@ -290,6 +329,17 @@ class Browser {
   async stop(): Promise<void> {
     await this.#worker.stop();
     for (const channel of this.#ports) channel.port2.close();
+    this.#ports.length = 0;
+    this.#worker = this.#serve();
+  }
+
+  /**
+   * The same, as a browser performs it: the worker stops answering and every port it left behind
+   * stays open. No browser raises `close` on a `MessagePort`, so silence is the whole of the
+   * notice a page gets.
+   */
+  async stopSilently(): Promise<void> {
+    await this.#worker.stop();
     this.#ports.length = 0;
     this.#worker = this.#serve();
   }

@@ -536,12 +536,14 @@ class PushingWorker {
     // Requests are answered by hand, from the test.
   }
 
+  // Kept by type: the transport listens for `close` as well as `message`, and one field for both
+  // leaves the responses going to whichever was registered last.
   addEventListener(type: "message" | "close", listener: (event: MessageEvent<WorkerMessage>) => void): void {
-    this.#listener = listener;
+    if (type === "message") this.#listener = listener;
   }
 
   removeEventListener(type: "message" | "close", listener: (event: MessageEvent<WorkerMessage>) => void): void {
-    if (this.#listener === listener) this.#listener = undefined;
+    if (type === "message" && this.#listener === listener) this.#listener = undefined;
   }
 
   push(message: WorkerPush): void {

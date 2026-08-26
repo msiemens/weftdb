@@ -87,11 +87,13 @@ class LoopbackWorker {
     else queueMicrotask(answer);
   }
 
+  // Kept by type: the transport listens for `close` as well as `message`, and one field for both
+  // leaves the responses going to whichever was registered last.
   addEventListener(type: "message" | "close", listener: (event: MessageEvent<WorkerResponse>) => void): void {
-    this.#listener = listener;
+    if (type === "message") this.#listener = listener;
   }
 
   removeEventListener(type: "message" | "close", listener: (event: MessageEvent<WorkerResponse>) => void): void {
-    if (this.#listener === listener) this.#listener = undefined;
+    if (type === "message" && this.#listener === listener) this.#listener = undefined;
   }
 }

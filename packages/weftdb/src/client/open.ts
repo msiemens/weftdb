@@ -91,6 +91,12 @@ export interface OpenWeftDatabaseOptions {
    * the process boundary taken out.
    */
   readonly connect?: (url: URL | string) => WorkerLike;
+  /**
+   * How long a request waits for the worker before this tab treats the worker as gone and
+   * reconnects. Raise it where a device is expected to hold a database large enough that a cold
+   * hydrate runs longer than the default.
+   */
+  readonly workerDeadlineMs?: number;
 }
 
 /** What an application is left holding. Everything else is the library's. */
@@ -233,9 +239,9 @@ class DatabaseTab {
     // back.
     const token = this.#options.relay?.token;
     if (token !== undefined) await this.setToken(token());
-    // A `SharedWorker` the browser stopped takes every port with it, and the page hears about it as
-    // a port that has closed. Reconnecting is constructing one at the same URL again, which either
-    // wakes the stopped worker or joins the one that is already running.
+    // A `SharedWorker` the browser stopped takes every port with it, and the page learns of it from
+    // a port that closes or from a request that goes unanswered. Reconnecting is constructing one at
+    // the same URL again, which either wakes the stopped worker or joins the one already running.
     transport.onClosed(() => {
       this.#reconnecting = this.#reconnecting.then(() => this.#reconnect());
     });
@@ -313,7 +319,8 @@ class DatabaseTab {
 
   #connect(): WorkerPortTransport {
     const port = (this.#options.connect ?? defaultConnect)(this.#options.worker);
-    const transport = new WorkerPortTransport(port);
+    const deadlineMs = this.#options.workerDeadlineMs;
+    const transport = new WorkerPortTransport(port, ...(deadlineMs === undefined ? [] : [{ deadlineMs }]));
     this.#transport = transport;
     return transport;
   }
