@@ -26,7 +26,11 @@ reports/
 spec/WeftSync_TTrace_*
 spec/states/
 
+# Working documents, kept out of history on purpose: the implementation checklist, and the
+# investigations behind decisions that ended up in it. They are written against one commit and
+# never updated, so tracking them would put prose that rots next to code that does not.
 TODO.md
+notes/
 
 # Written by the Stryker vitest runner, one per worker
 stryker-setup-*.js
