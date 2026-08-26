@@ -615,13 +615,23 @@ test("a large answer does not hold up everything behind it", async (t) => {
   );
   await seed.syncWith(writer, HASH);
 
+  // Queued before the snapshot is asked for, so the only work left inside the window this test
+  // measures is the push that wakes the other socket. A device that also had to apply the edit
+  // locally could take longer than the answer takes to drain, and then there is no window at all.
+  await seed.update(TODOS, rowId("todo-1"), values({ title: "changed" }), txnId("edit"));
+
   // A raw socket, so the order messages arrive in is visible.
   const socket = new WebSocket(running.socketUrl, ["weft.v1", "weft.token.token-beta"]);
   const order: string[] = [];
+  let sawFirstChunk = (): void => undefined;
+  const firstChunk = new Promise<void>((resolve) => {
+    sawFirstChunk = resolve;
+  });
   const sawWakeDuringSnapshot = new Promise<boolean>((resolve) => {
     socket.addEventListener("message", (event) => {
       const message = JSON.parse(String(event.data)) as { readonly type?: string; readonly last?: boolean };
       order.push(message.type ?? "?");
+      if (message.type === "chunk") sawFirstChunk();
       // A wake-up landing while chunks are still coming is the whole point.
       if (message.type === "advanced") resolve(order.filter((kind) => kind === "chunk").length > 0);
       if (message.type === "chunk" && message.last === true) resolve(false);
@@ -630,8 +640,9 @@ test("a large answer does not hold up everything behind it", async (t) => {
 
   await new Promise<void>((resolve) => socket.addEventListener("open", () => resolve()));
   socket.send(JSON.stringify({ id: "snapshot-1", op: "snapshot" }));
-  // Something else happens while that answer is going out.
-  await seed.update(TODOS, rowId("todo-1"), values({ title: "changed" }), txnId("edit"));
+  // Held until the answer has started, because a wake that arrives before the first chunk proves
+  // nothing about whether one can arrive between two of them.
+  await firstChunk;
   await seed.syncWith(writer, HASH);
 
   assert.equal(await sawWakeDuringSnapshot, true, "the wake-up queued behind the whole snapshot");
