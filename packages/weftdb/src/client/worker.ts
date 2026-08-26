@@ -288,7 +288,7 @@ export type WorkerPushHandler = (push: WorkerPush) => void;
  * each request, settles the reply that carries the same number, and hands the pushes that carry
  * none to whoever subscribed.
  *
- * Nothing about it is OPFS, which is what the name it used to have claimed. The port underneath is
+ * Nothing about it is OPFS, and nothing in it knows what the port is made of. The port underneath is
  * a dedicated `Worker` in the tab that made one and a bare `MessagePort` to that worker in every
  * other tab, and this class cannot tell the two apart — which is precisely what lets one mirror run
  * in either kind of tab without knowing which it is in.

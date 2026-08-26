@@ -25,13 +25,16 @@ import {
   newProjectId,
   nextStatus,
   projects_issuesRelation,
+  STATUSES,
   useComments,
   useIssues,
+  useIssuesQuery,
   useProjects,
   type CommentView,
   type IssueStore,
   type IssueView,
   type ProjectView,
+  type Status,
   type StoreStatus,
 } from "./store.ts";
 
@@ -78,11 +81,20 @@ export function App({ store }: { readonly store: IssueStore }): ReactNode {
   const joins = joinsOver(projects, issues, comments);
 
   const [filter, setFilter] = useState<string | undefined>(undefined);
+  const [only, setOnly] = useState<Status | undefined>(undefined);
   const [openIssue, setOpenIssue] = useState<string | undefined>(undefined);
   // A project or an issue can be deleted from another tab while it is on screen here, so both
   // selections are checked against the rows that actually arrived rather than trusted.
   const project = projects.find((row) => row.id === filter);
-  const shown = project === undefined ? issues : joins.issuesOfProject(project);
+  // The list itself, narrowed where the rows are: `useIssuesQuery` compiles the project and the
+  // status into one statement and the storage worker runs it against SQLite, so what crosses the
+  // port is the rows on screen rather than every issue in the scope with the rest thrown away here.
+  // The joins above still read the whole collection, because a rail count and a project tag are
+  // about the tracker rather than about the slice being looked at.
+  const shown = useIssuesQuery(store.source, (statement) => {
+    const scoped = filter === undefined ? statement : statement.where("project_id", "=", filter);
+    return (only === undefined ? scoped : scoped.where("status", "=", only)).orderBy("rank");
+  }).map((row) => store.issueView(row));
   const issue = shown.find((row) => row.id === openIssue);
 
   return (
@@ -92,7 +104,15 @@ export function App({ store }: { readonly store: IssueStore }): ReactNode {
         <Quarantine store={store} count={status.quarantined} reasons={status.quarantineReasons} />
       ) : null}
       <div className="board">
-        <Rail store={store} projects={projects} joins={joins} selected={project?.id} onSelect={setFilter} />
+        <Rail
+          store={store}
+          projects={projects}
+          joins={joins}
+          selected={project?.id}
+          onSelect={setFilter}
+          only={only}
+          onOnly={setOnly}
+        />
         <section className="list">
           <IssueComposer store={store} projects={projects} selected={project?.id} />
           <ol className="issues">
@@ -103,8 +123,7 @@ export function App({ store }: { readonly store: IssueStore }): ReactNode {
                 issue={row}
                 joins={joins}
                 index={index}
-                total={shown.length}
-                project={project?.id}
+                rows={shown}
                 open={row.id === openIssue}
                 onOpen={() => setOpenIssue(row.id === openIssue ? undefined : row.id)}
               />
@@ -217,19 +236,30 @@ function Quarantine({
   );
 }
 
-/** The projects rail. Each entry carries the count its `hasMany` resolves to. */
+/**
+ * The projects rail, and the status the list is narrowed to.
+ *
+ * Each project entry carries the count its `hasMany` resolves to, over every issue in the tracker
+ * rather than over the slice on screen: the count says how much is in a project, and it would be
+ * a strange thing for it to change because somebody chose to look only at what is closed. The
+ * status below it is a bound parameter of the list's statement — see `App`.
+ */
 function Rail({
   store,
   projects,
   joins,
   selected,
   onSelect,
+  only,
+  onOnly,
 }: {
   readonly store: IssueStore;
   readonly projects: readonly ProjectView[];
   readonly joins: Joins;
   readonly selected: string | undefined;
   readonly onSelect: (id: string | undefined) => void;
+  readonly only: Status | undefined;
+  readonly onOnly: (status: Status | undefined) => void;
 }): ReactNode {
   const [name, setName] = useState("");
   const add = (): void => {
@@ -290,6 +320,16 @@ function Rail({
           Add
         </button>
       </div>
+      <h2>Status</h2>
+      <ul className="projects">
+        {[undefined, ...STATUSES].map((status) => (
+          <li key={status ?? "any"}>
+            <button type="button" className={status === only ? "project on" : "project"} onClick={() => onOnly(status)}>
+              <span className="project-name">{status ?? "Any status"}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
     </aside>
   );
 }
@@ -357,8 +397,7 @@ function IssueRow({
   issue,
   joins,
   index,
-  total,
-  project,
+  rows,
   open,
   onOpen,
 }: {
@@ -366,8 +405,8 @@ function IssueRow({
   readonly issue: IssueView;
   readonly joins: Joins;
   readonly index: number;
-  readonly total: number;
-  readonly project: string | undefined;
+  /** The list this row is in, which is what the arrows move it within. */
+  readonly rows: readonly IssueView[];
   readonly open: boolean;
   readonly onOpen: () => void;
 }): ReactNode {
@@ -406,15 +445,15 @@ function IssueRow({
             type="button"
             aria-label={`Move ${issue.title} up`}
             disabled={index === 0}
-            onClick={() => store.moveIssue(project, index, "up")}
+            onClick={() => store.moveIssue(rows, index, "up")}
           >
             ↑
           </button>
           <button
             type="button"
             aria-label={`Move ${issue.title} down`}
-            disabled={index === total - 1}
-            onClick={() => store.moveIssue(project, index, "down")}
+            disabled={index === rows.length - 1}
+            onClick={() => store.moveIssue(rows, index, "down")}
           >
             ↓
           </button>
@@ -567,7 +606,7 @@ function CommentComposer({ store, issue }: { readonly store: IssueStore; readonl
       body: trimmed,
       rank: store.nextCommentRank(issue.id),
       author__label: store.identity.label,
-      author__device: store.identity.deviceId,
+      author__device: store.deviceId,
     });
     setBody("");
   };

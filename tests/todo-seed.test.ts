@@ -4,75 +4,52 @@
 // visitor left it.
 import assert from "node:assert/strict";
 import { test } from "vitest";
-import { httpTransport, WebStorageClientStore, type FetchLike, type StorageLike } from "weftdb/client";
-import { WeftServer } from "weftdb/server";
-import { createRelayHandler } from "weftdb/server/relay";
-import { demoVerifier } from "weftdb-demo-shared/auth";
-import { tabIdentity } from "weftdb-demo-shared/identity";
+import { TodoStore } from "weftdb-demo-todo";
 import { schema } from "weftdb-demo-todo/schema";
 import { DEMO } from "weftdb-demo-todo/scope";
-import { TodoStore } from "weftdb-demo-todo";
-
-/** Storage that behaves like the browser's: string in, string out, nothing shared by accident. */
-function memoryStorage(): StorageLike {
-  const entries = new Map<string, string>();
-  return {
-    getItem: (key) => entries.get(key) ?? null,
-    setItem: (key, value) => void entries.set(key, String(value)),
-    removeItem: (key) => void entries.delete(key),
-  };
-}
+import { DemoBrowser, drain } from "./demo-fixtures.ts";
 
 /**
  * One browser against one relay. Local storage is shared, session storage is per tab, so reusing
  * a name is a reload of that tab and a new name is a new device on the same visitor's scope.
  */
-function openBrowser(): (name: string) => TodoStore {
-  const server = new WeftServer();
-  const handler = createRelayHandler({ server, verifier: demoVerifier });
-  const fetchLike: FetchLike = async (input, init) =>
-    handler(new Request(`http://relay${input.replace(/^\/api/u, "")}`, init));
-  const local = memoryStorage();
-  const sessions = new Map<string, StorageLike>();
-
-  return (name) => {
-    const session = sessions.get(name) ?? memoryStorage();
-    sessions.set(name, session);
-    const identity = tabIdentity(session, local, { demo: DEMO });
-    const persistence = new WebStorageClientStore(local, schema, "weft-demo");
-    return new TodoStore({
-      identity,
-      client: persistence.hydrate(identity.scopeId, identity.deviceId),
-      transport: httpTransport({ baseUrl: "/api", token: identity.token, fetch: fetchLike }),
-      seedStorage: local,
-    });
-  };
+function openBrowser(): DemoBrowser {
+  return new DemoBrowser({ schema, demo: DEMO });
 }
 
 /**
- * Starts a tab, runs it until its outbox is empty, stops it, and hands back the titles it is
- * showing in rank order. `start` puts a sync in flight of its own, and a second call while one is
- * running queues behind it rather than doing the work, so the loop gives that one a turn first.
+ * Opens a tab, runs it until its outbox is empty, closes it, and hands back the titles it was
+ * showing in rank order.
+ *
+ * Every write crosses a port twice — the mutator posts and the worker echoes — so what a list holds
+ * a tick after `start` is not what it holds once the echoes have landed. Draining the outbox is the
+ * one condition that covers both: nothing is pending until every mutation has been applied in the
+ * worker, and nothing is unsent once the relay has taken them.
  */
-async function titles(store: TodoStore): Promise<readonly string[]> {
+async function titles(browser: DemoBrowser, name: string): Promise<readonly string[]> {
+  const store = await TodoStore.open(browser.window(name), browser.overrides());
   const stop = store.start();
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await store.sync();
-    if (store.status().pending === 0) break;
+  try {
+    await drain(store);
+    return store.rows().map((row) => row.title);
+  } finally {
+    stop();
+    await store.dispose();
   }
-  stop();
-  return store.rows().map((row) => row.title);
 }
 
-test("a first visit arrives at a list, with a done row and notes to merge", async () => {
-  const open = openBrowser();
-  const tab = open("one");
-  const list = await titles(tab);
+test("a first visit arrives at a list, with a done row and notes to merge", async (t) => {
+  const browser = openBrowser();
+  t.onTestFinished(() => browser.close());
+  const store = await TodoStore.open(browser.window("one"), browser.overrides());
+  t.onTestFinished(() => store.dispose());
+  const stop = store.start();
+  t.onTestFinished(stop);
+  await drain(store);
 
-  assert.ok(list.length > 0, "a first visit has nothing to look at");
-  assert.ok(list.every((title) => title !== ""));
-  const rows = tab.rows();
+  const rows = store.rows();
+  assert.ok(rows.length > 0, "a first visit has nothing to look at");
+  assert.ok(rows.every((row) => row.title !== ""));
   assert.ok(
     rows.some((row) => row.done),
     "no row shows what a done row looks like",
@@ -86,32 +63,39 @@ test("a first visit arrives at a list, with a done row and notes to merge", asyn
   assert.equal(rows.filter((row) => row.dirty).length, 0);
 });
 
-test("a reload does not write the list a second time", async () => {
-  const open = openBrowser();
-  const first = await titles(open("one"));
-  const second = await titles(open("one"));
+test("a reload does not write the list a second time", async (t) => {
+  const browser = openBrowser();
+  t.onTestFinished(() => browser.close());
+  const first = await titles(browser, "one");
+  const second = await titles(browser, "one");
 
   assert.deepEqual(second, first);
 });
 
-test("a second tab is a second device on one list, not a second copy of it", async () => {
-  const open = openBrowser();
-  const first = open("one");
-  const list = await titles(first);
+test("a second tab is a second device on one list, not a second copy of it", async (t) => {
+  const browser = openBrowser();
+  t.onTestFinished(() => browser.close());
+  const list = await titles(browser, "one");
 
-  const second = open("two");
-  assert.deepEqual(await titles(second), list);
+  assert.deepEqual(await titles(browser, "two"), list);
   // And nothing the second tab did comes back to the first.
-  assert.deepEqual(await titles(first), list);
+  assert.deepEqual(await titles(browser, "one"), list);
 });
 
-test("emptying the list empties it, on this tab and the next", async () => {
-  const open = openBrowser();
-  const tab = open("one");
-  assert.ok((await titles(tab)).length > 0);
-  for (const row of tab.rows()) tab.todos.delete(row.id);
-  assert.deepEqual(await titles(tab), []);
+test("emptying the list empties it, on this tab and the next", async (t) => {
+  const browser = openBrowser();
+  t.onTestFinished(() => browser.close());
+  const store = await TodoStore.open(browser.window("one"), browser.overrides());
+  const stop = store.start();
+  await drain(store);
+  assert.ok(store.rows().length > 0);
 
-  assert.deepEqual(await titles(open("one")), []);
-  assert.deepEqual(await titles(open("two")), []);
+  for (const row of store.rows()) store.todos.delete(row.id);
+  await drain(store);
+  assert.deepEqual(store.rows(), []);
+  stop();
+  await store.dispose();
+
+  assert.deepEqual(await titles(browser, "one"), []);
+  assert.deepEqual(await titles(browser, "two"), []);
 });

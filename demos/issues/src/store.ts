@@ -1,26 +1,27 @@
 // What is left of an application's data layer once the library and codegen have taken their
 // halves. Rows, decoding, mutators, hooks, reordering and the relationship accessors come from
-// `src/generated`, which `weft generate` writes from the schema; syncing, connectivity and status
-// come from `WeftSession`. What is genuinely this application's is here: which storage it uses,
-// who this tab is, and how a row looks once the client's own knowledge is added to it.
-import { hasConflictMarkers, rankBetween, rankString, rowId, type RowId, type TableName } from "weftdb/core";
+// `src/generated`, which `weft generate` writes from the schema; the database, the worker that
+// holds it and the sync session all come from `openWeftDatabase`. What is genuinely this
+// application's is here: which scope this visitor is on, how a row looks once the client's own
+// knowledge is added to it, and the tracker a first visit arrives at.
 import {
-  connectSocketTransport,
-  httpTransport,
-  SubscriptionEngine,
-  WebStorageClientStore,
-  WeftSession,
-  type AsyncSyncTransport,
-  type BroadcastChannelLike,
-  type SessionStatus,
-  type StorageLike,
-  type WeftClient,
-} from "weftdb/client";
-import { schemaHash } from "weftdb/schema";
-import { rowMapSource } from "weftdb-react";
+  deviceId as toDeviceId,
+  hasConflictMarkers,
+  rankBetween,
+  rankString,
+  rowId,
+  type DeviceId,
+  type RowId,
+  type TableName,
+} from "weftdb/core";
+import type { SessionStatus, StorageLike, WeftClientMirror } from "weftdb/client";
+import { openDemoDatabase, DemoSync, type DemoDatabase, type DemoOpenOverrides } from "weftdb-demo-shared/open";
 import { tabIdentity, type TabIdentity } from "weftdb-demo-shared/identity";
 import { schema } from "./schema.ts";
 import { DEMO } from "./scope.ts";
+import brokerUrl from "./broker.ts?sharedworker&url";
+import relayWorkerUrl from "./relay-worker.ts?sharedworker&url";
+import storageWorkerUrl from "./storage-worker.ts?worker&url";
 import {
   commentsMutators,
   commentsQuery,
@@ -43,7 +44,6 @@ import {
   type IssuesRow,
   type ProjectsMutators,
   type ProjectsRow,
-  type WeftSource,
 } from "./generated/bindings.ts";
 import { mapCommentsRow } from "./generated/nested-mappers.ts";
 
@@ -53,6 +53,7 @@ export {
   projectsQuery,
   useComments,
   useIssues,
+  useIssuesQuery,
   useProjects,
 } from "./generated/bindings.ts";
 export type { CommentsRow, IssuesRow, ProjectsRow } from "./generated/bindings.ts";
@@ -62,9 +63,6 @@ export {
   issues_projectRelation,
   projects_issuesRelation,
 } from "./generated/relationships.ts";
-export type { BroadcastChannelLike } from "weftdb/client";
-
-const HASH = schemaHash(schema);
 
 /**
  * The statuses an issue moves between, in the order the button cycles them. `status` is an
@@ -114,13 +112,7 @@ export type StoreStatus = SessionStatus;
 
 export interface IssueStoreOptions {
   readonly identity: TabIdentity;
-  readonly client: WeftClient;
-  /** Used whenever the socket is not up — the same session, over HTTP. */
-  readonly transport: AsyncSyncTransport;
-  readonly channel?: BroadcastChannelLike | undefined;
-  /** Where the relay's sync socket is. Omitted means HTTP and a poll, which still works. */
-  readonly socketUrl?: string | undefined;
-  readonly now?: (() => number) | undefined;
+  readonly database: DemoDatabase;
 }
 
 export interface WindowLike {
@@ -130,69 +122,55 @@ export interface WindowLike {
 
 export class IssueStore {
   readonly identity: TabIdentity;
-  readonly client: WeftClient;
-  readonly engine = new SubscriptionEngine();
+  readonly database: DemoDatabase;
   /**
-   * What the React hooks read from. Storage here is `localStorage`, so there is no SQLite for a
-   * statement-backed read to run against and `use<Collection>Query` raises rather than quietly
-   * matching nothing. Held rather than rebuilt per read, so a component's subscription survives
-   * a render.
+   * What the React hooks read from and what the mutators write through: the mirror of the client
+   * the storage worker holds. It is a `WeftSource`, so `use<Collection>` and `use<Collection>Query`
+   * both work over it — the second because there is a real SQLite on the other side of the port for
+   * a compiled statement to run against.
    */
-  readonly source: WeftSource;
+  readonly source: WeftClientMirror;
+  /** This tab as the relay knows it, minted by `openWeftDatabase` under this tab's namespace. */
+  readonly deviceId: DeviceId;
   readonly projects: ProjectsMutators;
   readonly issues: IssuesMutators;
   readonly comments: CommentsMutators;
-  readonly session: WeftSession;
+  /** The status pills, the online toggle, and the two verbs the header's buttons call. */
+  readonly connection: DemoSync;
 
   constructor(options: IssueStoreOptions) {
     this.identity = options.identity;
-    this.client = options.client;
-    this.source = rowMapSource({ engine: this.engine, rows: options.client.rows }, options.client.scopeId);
-    this.session = new WeftSession({
-      client: options.client,
-      schemaHash: HASH,
-      transport: options.transport,
-      ...(options.channel === undefined ? {} : { channel: options.channel }),
-      ...(options.now === undefined ? {} : { now: options.now }),
-      // Views read through the engine, so anything that moves the client tells it to look again.
-      onChange: () => this.engine.notify(),
-      ...(options.socketUrl === undefined
-        ? {}
-        : {
-            openSocket: (handlers) =>
-              connectSocketTransport({
-                url: options.socketUrl as string,
-                token: options.identity.token,
-                onWake: () => handlers.onWake(),
-                onBatch: handlers.onBatch,
-                onStatusChange: handlers.onStatusChange,
-                cursor: handlers.cursor,
-              }),
-          }),
-    });
-    const changed = (): void => this.session.changed();
-    this.projects = projectsMutators(options.client, changed);
-    this.issues = issuesMutators(options.client, changed);
-    this.comments = commentsMutators(options.client, changed);
+    this.database = options.database;
+    this.source = options.database.weft.source;
+    this.deviceId = toDeviceId(this.source.deviceId);
+    this.connection = new DemoSync(options.database);
+    // No `notify` callback: the worker's echo wakes the subscriptions when the change arrives, and
+    // a callback fired when the mutator returned would wake them before there was anything new.
+    this.projects = projectsMutators(this.source);
+    this.issues = issuesMutators(this.source);
+    this.comments = commentsMutators(this.source);
   }
 
-  /** Opens the state this tab left behind, or a fresh client on a first visit. */
-  static open(window: WindowLike): IssueStore {
-    // The scope comes from local storage, so every tab of this browser opens the same tracker
-    // while another visitor opens their own. The device comes from session storage, so each tab
-    // is a device of its own.
+  /**
+   * Opens this tab's database and seeds it on a first visit.
+   *
+   * The scope comes from local storage, so every tab of this browser opens the same tracker while
+   * another visitor opens their own. The namespace comes from session storage, so **each tab is a
+   * database of its own** — its own election, its own storage worker, its own OPFS pool and its own
+   * device id — which is what makes a second tab a second device rather than a second view.
+   */
+  static async open(window: WindowLike, overrides?: DemoOpenOverrides): Promise<IssueStore> {
     const identity = tabIdentity(window.sessionStorage, window.localStorage, { demo: DEMO });
-    const persistence = new WebStorageClientStore(window.localStorage, schema, `weftdb-demo/${DEMO}`);
-    const store = new IssueStore({
-      identity,
-      client: persistence.hydrate(identity.scopeId, identity.deviceId),
-      transport: httpTransport({ baseUrl: "/api", token: identity.token }),
-      // Same origin as the page, so the dev server's proxy carries the upgrade too.
-      socketUrl: `${location.origin.replace(/^http/u, "ws")}/api/sync`,
-      // Named for the scope, so two demos in two tabs do not wake each other's sessions.
-      channel:
-        typeof BroadcastChannel === "undefined" ? undefined : new BroadcastChannel(`weftdb-demo/${identity.scopeId}`),
+    const database = await openDemoDatabase({
+      schema,
+      scopeId: identity.scopeId,
+      namespace: `weftdb-demo/${DEMO}/${identity.deviceId}`,
+      worker: storageWorkerUrl,
+      broker: brokerUrl,
+      relayWorker: relayWorkerUrl,
+      ...(overrides === undefined ? {} : { overrides }),
     });
+    const store = new IssueStore({ identity, database });
     store.seed(window.localStorage);
     return store;
   }
@@ -202,9 +180,7 @@ export class IssueStore {
    *
    * The guard is a local-storage key beside the scope's own, which is what makes this once per
    * visitor rather than once per tab: a second tab of the same browser reads the same key, and a
-   * visitor who deletes the seeded rows does not get them back. It runs before `start`, so the
-   * rows go into the outbox and reach the relay in the first sync alongside anything else this
-   * tab does.
+   * visitor who deletes the seeded rows does not get them back.
    *
    * A device that hydrates empty is not evidence of a fresh scope, because every new tab is a new
    * device and hydrates empty until it has synced. The key is what decides; the row count only
@@ -226,12 +202,12 @@ export class IssueStore {
     let issueRank: string | null = null;
     for (const project of SEED) {
       const projectId = newProjectId();
-      projectRank = rankBetween(projectRank === null ? null : rankString(projectRank), null, this.identity.deviceId);
+      projectRank = rankBetween(projectRank === null ? null : rankString(projectRank), null, this.deviceId);
       this.projects.create(projectId, { name: project.name, rank: projectRank });
 
       for (const issue of project.issues) {
         const issueId = newIssueId();
-        issueRank = rankBetween(issueRank === null ? null : rankString(issueRank), null, this.identity.deviceId);
+        issueRank = rankBetween(issueRank === null ? null : rankString(issueRank), null, this.deviceId);
         this.issues.create(issueId, {
           project_id: projectId,
           title: issue.title,
@@ -243,11 +219,7 @@ export class IssueStore {
         // chain is per issue, which is the scope the thread is filtered to.
         let commentRank: string | null = null;
         for (const comment of issue.comments ?? []) {
-          commentRank = rankBetween(
-            commentRank === null ? null : rankString(commentRank),
-            null,
-            this.identity.deviceId,
-          );
+          commentRank = rankBetween(commentRank === null ? null : rankString(commentRank), null, this.deviceId);
           this.comments.create(newCommentId(), {
             issue_id: issueId,
             body: comment.body,
@@ -261,7 +233,7 @@ export class IssueStore {
   }
 
   start(): () => void {
-    return this.session.start();
+    return () => undefined;
   }
 
   /** Adds what only the client knows to a decoded project. */
@@ -289,46 +261,45 @@ export class IssueStore {
 
   /** The projects outside a render, in rank order — for the handlers that mint a new rank. */
   projectRows(): readonly ProjectsRow[] {
-    return this.engine
-      .getSnapshot(projectsQuery("rank"), this.client.rows.values())
+    return this.source.engine
+      .getSnapshot(projectsQuery("rank"), this.source.rows.values())
       .rows.map((row) => decodeProjects(row));
   }
 
-  /** One project's issues outside a render, in rank order. */
-  issueRows(projectId?: string): readonly IssuesRow[] {
-    const rows = this.engine
-      .getSnapshot(issuesQuery("rank"), this.client.rows.values())
+  /** Every issue outside a render, in rank order. */
+  issueRows(): readonly IssuesRow[] {
+    return this.source.engine
+      .getSnapshot(issuesQuery("rank"), this.source.rows.values())
       .rows.map((row) => decodeIssues(row));
-    return projectId === undefined ? rows : rows.filter((row) => row.project_id === projectId);
   }
 
   /** One issue's comments outside a render, in the order the thread reads. */
   commentRows(issueId: string): readonly CommentsRow[] {
-    return this.engine
-      .getSnapshot(commentsQuery("rank"), this.client.rows.values())
+    return this.source.engine
+      .getSnapshot(commentsQuery("rank"), this.source.rows.values())
       .rows.map((row) => decodeComments(row))
       .filter((row) => row.issue_id === issueId);
   }
 
   status(): StoreStatus {
-    return this.session.status();
+    return this.connection.status();
   }
 
   subscribeStatus(listener: () => void): () => void {
-    return this.session.subscribe(listener);
+    return this.connection.subscribe(listener);
   }
 
   get online(): boolean {
-    return this.session.online;
+    return this.connection.online;
   }
 
   setOnline(online: boolean): void {
-    this.session.setOnline(online);
+    this.connection.setOnline(online);
   }
 
   /** A rank that puts a new project at the end of the rail. */
   nextProjectRank(): string {
-    return nextProjectsRank(this.projectRows(), this.identity.deviceId);
+    return nextProjectsRank(this.projectRows(), this.deviceId);
   }
 
   /**
@@ -339,37 +310,42 @@ export class IssueStore {
    * Ranking against all of them keeps a new issue last in its project and last overall.
    */
   nextIssueRank(): string {
-    return nextIssuesRank(this.issueRows(), this.identity.deviceId);
+    return nextIssuesRank(this.issueRows(), this.deviceId);
   }
 
   /** A rank that puts a new comment at the end of its issue's thread. */
   nextCommentRank(issueId: string): string {
     const last = this.commentRows(issueId).at(-1);
-    return rankBetween(last === undefined ? null : rankString(last.rank), null, this.identity.deviceId);
+    return rankBetween(last === undefined ? null : rankString(last.rank), null, this.deviceId);
   }
 
   /**
-   * Moves an issue one place within its own project. Reordering writes one field, the row's new
-   * rank, so two devices reordering at once do not undo each other.
+   * Moves an issue one place within the list it is being shown in.
+   *
+   * The rows are the caller's rather than read back here, because the list on screen is what the
+   * arrows move within: it has been narrowed by the rail's project and by the status filter, and a
+   * move computed against every issue in the scope would land the row between two the person cannot
+   * see. Reordering writes one field, the row's new rank, so two devices reordering at once do not
+   * undo each other.
    */
-  moveIssue(projectId: string | undefined, index: number, direction: "up" | "down"): void {
-    moveIssues(this.issues, this.issueRows(projectId), index, direction, this.identity.deviceId);
+  moveIssue(rows: readonly IssuesRow[], index: number, direction: "up" | "down"): void {
+    moveIssues(this.issues, rows, index, direction, this.deviceId);
   }
 
   discardQuarantine(): void {
-    this.session.discardQuarantine();
+    this.connection.discardQuarantine();
   }
 
   async sync(): Promise<void> {
-    await this.session.sync();
+    await this.connection.sync();
   }
 
-  changed(): void {
-    this.session.changed();
+  async dispose(): Promise<void> {
+    await this.database.dispose();
   }
 
   #dirty(table: TableName, id: string): boolean {
-    return this.client.isRowDirty(table, rowId(id));
+    return this.source.isRowDirty(table, rowId(id));
   }
 }
 

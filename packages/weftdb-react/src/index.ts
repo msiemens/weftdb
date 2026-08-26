@@ -1,4 +1,4 @@
-import { useCallback, useRef, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { hasConflictMarkers } from "weftdb/core";
 import type {
   MaterializedRow,
@@ -110,6 +110,24 @@ export function useWeftSqlSnapshot(source: WeftSource, query: ReactiveSqlQuery):
     () => source.engine.getSqlSnapshot(latest.current, source.select, source.rows),
     [source, cacheKey],
   );
+  // Registers the statement with whatever holds the database, where that is not this thread.
+  //
+  // Without it a worker-backed source has no answer for this statement for as long as the page is
+  // open, because it answers out of what the worker last pushed and the worker was never asked to
+  // run it — a list that renders empty rather than a list that is broken. Called outright rather
+  // than through `?.`: a source whose database is on this thread implements the pair as no-ops, and
+  // a source that implemented neither would be skipped in silence.
+  //
+  // Keyed on the cache key rather than on the query, for the reason above: a generated builder
+  // compiles a fresh statement every render, and re-registering one a pass would have the worker
+  // retiring and re-running it for ever. The registration is handed back on unmount, or the worker
+  // goes on recomputing a statement nobody reads.
+  useEffect(() => {
+    const query = latest.current;
+    const source_ = source;
+    void source_.watch(query);
+    return () => source_.unwatch(query);
+  }, [source, cacheKey]);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 

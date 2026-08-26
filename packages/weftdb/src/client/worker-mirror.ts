@@ -77,6 +77,8 @@ export class WeftClientMirror {
   #offPush: () => void;
   /** What the worker's session last said it was doing, held by identity for `useSyncExternalStore`. */
   #status: SessionStatus | undefined;
+  /** Set by `dispose`, so a request that was in flight when the tab went is not reported as a fault. */
+  #disposed = false;
   readonly #statusListeners = new Set<() => void>();
 
   constructor(options: WeftClientMirrorOptions) {
@@ -92,12 +94,17 @@ export class WeftClientMirror {
    * Which rows a statement matched, in order — read out of what the worker last pushed rather than
    * run here, because the database is on the other thread. Synchronous, which is what
    * `useSyncExternalStore` requires of a snapshot; a statement whose registration has not come back
-   * yet answers with nothing rather than blocking a render on a round trip.
+   * yet answers with no answer rather than blocking a render on a round trip.
+   *
+   * `undefined` is that absence, and it is not `[]`. A statement nobody registered and one whose
+   * first answer is still crossing are both of them the same thing — the worker has not said — while
+   * a statement it ran and that matched nothing answers with an empty list. Reporting both as empty
+   * is what makes a list that will never fill look exactly like a list that is legitimately empty.
    *
    * An arrow property rather than a method, because `SqlQuerySource` holds it as a value and the
    * hooks key their `useCallback` on the source's identity.
    */
-  readonly select: RowSelect = (query) => this.#results.get(query.cacheKey) ?? EMPTY;
+  readonly select: RowSelect = (query) => this.#results.get(query.cacheKey);
 
   /**
    * Points this mirror at another transport and reloads everything through it.
@@ -279,16 +286,35 @@ export class WeftClientMirror {
    * tab's connection with the mirror.
    */
   dispose(): void {
+    this.#disposed = true;
     this.#offPush();
   }
 
+  /**
+   * Asks the worker to run a statement, and settles whichever way it goes.
+   *
+   * It resolves on a refusal rather than rejecting, and reports it through `onError` instead, for
+   * the reason a mutation does: the caller is a component's effect, which has nowhere to put a
+   * rejection and no decision to make about one. A statement the worker refuses — one that does not
+   * constrain `scope_id` is the case that exists — is a fault in the page, and this is where the
+   * page hears about it; every other failure is this tab losing its worker, which the mirror is
+   * already reconnecting from.
+   */
   async #register(query: ReactiveSqlQuery): Promise<void> {
-    const ids = await this.#transport.request({
-      type: "watch",
-      cacheKey: query.cacheKey,
-      tableName: query.tableName,
-      query: query.compiled,
-    });
+    let ids: unknown;
+    try {
+      ids = await this.#transport.request({
+        type: "watch",
+        cacheKey: query.cacheKey,
+        tableName: query.tableName,
+        query: query.compiled,
+      });
+    } catch (error) {
+      // A page on its way out is not a fault. `dispose` rejects everything in flight, and a list
+      // that was registering when the tab closed has nobody left to tell.
+      if (!this.#disposed) this.#onError(error instanceof Error ? error : new Error(String(error)));
+      return;
+    }
     // Unwatched while the registration was in flight: the answer is for a statement this page has
     // already stopped caring about, and caching it would resurrect it.
     if (!this.#watched.has(query.cacheKey)) return;
@@ -306,6 +332,9 @@ export class WeftClientMirror {
    */
   #send(body: WorkerRequestBody): void {
     void this.#transport.request(body).catch((error: unknown) => {
+      // Except on the way out, for the reason `#register` gives: a tab that has been disposed of
+      // has no list left to correct and nobody left to tell.
+      if (this.#disposed) return;
       this.#onError(error instanceof Error ? error : new Error(String(error)));
     });
   }
@@ -351,8 +380,6 @@ interface MirrorWatch {
   /** The first caller's round trip, which every later caller for this key awaits instead of its own. */
   ready: Promise<void>;
 }
-
-const EMPTY: readonly RowId[] = [];
 
 function defaultOnError(error: Error): void {
   console.error("weftdb: a mutation the worker was given failed", error);

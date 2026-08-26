@@ -80,6 +80,7 @@ export type {
 } from "weftdb/schema";
 export {
   AuthorizerDependencyRecorder,
+  DEFAULT_NAMESPACE,
   Diff3EditorBuffer,
   MultiTabCoordinator,
   RelayError,
@@ -90,6 +91,7 @@ export {
   SubscriptionEngine,
   TOKEN_PROTOCOL_PREFIX,
   WAKEUP_PROTOCOL,
+  WEFT_NAMESPACE_PARAM,
   WebStorageClientStore,
   WeftBrokerClient,
   WeftClient,

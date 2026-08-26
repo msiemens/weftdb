@@ -18,7 +18,13 @@
 // import "weftdb/client/broker-entry";
 // ```
 //
-// and hands `openWeftDatabase` the URL: `broker: new URL("./broker.ts", import.meta.url)`.
+// and hands `openWeftDatabase` the URL of that module.
+//
+// That import has no bindings, so this is the one file in the package whose whole content is a side
+// effect — which is why `package.json` names it in `sideEffects` rather than declaring the package
+// side-effect-free. A bundler told otherwise drops the import and emits an empty broker: every tab
+// then connects to a `SharedWorker` that answers nothing, and the second tab of the origin waits
+// for a port that is never sent.
 import { serveWeftPortBroker, type BrokerPortLike } from "./broker.ts";
 
 /** `SharedWorkerGlobalScope`, named because this package is typechecked without the DOM library. */

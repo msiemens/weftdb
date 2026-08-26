@@ -8,34 +8,14 @@ import { rehypeTableScroll, rehypeWordmark } from "./src/lib/rehype-wordmark.mjs
 import { rehypeGlossary } from "./src/lib/rehype-glossary.mjs";
 import { remarkMermaid } from "./src/lib/remark-mermaid.mjs";
 import { expressiveCodePrompt } from "./src/lib/expressive-code-prompt.mjs";
-import { DEMOS, DEMO_API_BASE, DEMO_RELAY_PORT } from "./src/demos/registry.ts";
-
-/*
- * The demos talk to a same-origin path so the browser needs no CORS and no second token; in
- * development that path is proxied to the shared relay. `ws: true` carries the sync socket's
- * upgrade through the same route.
- *
- * One entry, however many demos there are: the relay is schema-blind and they are separated by
- * scope, so they share a process.
- *
- * This is a development-server concern only. A built site is static: `astro build` produces HTML
- * and nothing that can proxy, so a deployed demo needs the relay reachable at the same path by
- * whatever serves the files. Without one the page still loads, because local-first means the app
- * works, and two tabs will not see each other.
- */
-const demoProxy = {
-  [DEMO_API_BASE]: {
-    target: `http://127.0.0.1:${DEMO_RELAY_PORT}`,
-    changeOrigin: true,
-    ws: true,
-    rewrite: (/** @type {string} */ path) => path.slice(DEMO_API_BASE.length) || "/",
-  },
-};
+import { DEMOS } from "./src/demos/registry.ts";
 
 // `site` is deliberately unset until there is a domain to put here: Astro uses it for canonical
 // URLs and the sitemap, and a wrong one is worse than none.
 export default defineConfig({
-  vite: { server: { proxy: demoProxy } },
+  // The demos ship three worker modules apiece, and one of them loads SQLite compiled to
+  // WebAssembly through a dynamic import. `es` is the format that has one.
+  vite: { worker: { format: "es" } },
   markdown: {
     // `remarkMermaid` is a Markdown-stage plugin because it has to claim a ```mermaid fence before
     // Expressive Code turns it into highlighted markup; user plugins run before an integration's,

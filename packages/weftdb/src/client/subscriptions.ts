@@ -144,6 +144,9 @@ export class RowIdentityCache {
   }
 }
 
+/** What a statement with no answer yet renders as. One array, so it costs nothing per render. */
+const NO_IDS: readonly RowId[] = [];
+
 /**
  * One engine per client. It caches the last result per query and the identity of each row by
  * id, so pointing two clients at the same engine makes them evict each other's entries on
@@ -184,6 +187,10 @@ export class SubscriptionEngine {
    * renders. Where it is, `executorRowSelect` runs the statement directly. Where it is in a
    * worker, the page reads the ids that worker last pushed. Both are synchronous, which is what
    * `useSyncExternalStore` requires of a snapshot, and neither is visible to a component.
+   *
+   * A statement `select` has no answer for yet snapshots as no rows, because a component has
+   * nowhere to put "pending" and a first paint has to be something. The state is reported by
+   * `select` itself, for a caller that does have somewhere to put it.
    */
   getSqlSnapshot(query: ReactiveSqlQuery, select: RowSelect, rows: ReadonlyMap<string, LocalRow>): QuerySnapshot {
     const cacheKey = `sql\0${query.cacheKey}`;
@@ -196,7 +203,9 @@ export class SubscriptionEngine {
     this.#sqlRuns.set(cacheKey, this.#generation);
 
     const nextRows: MaterializedRow[] = [];
-    for (const id of select(query)) {
+    // No answer yet selects nothing here, which is where the absence stops rather than where it is
+    // erased: `select` still reports it, and this is the one caller that has to render regardless.
+    for (const id of select(query) ?? NO_IDS) {
       const row = rows.get(`${query.tableName}\0${id}`);
       // A row the statement matched that this client does not hold is dropped rather than
       // reported: the database outlives any one hydrate, and a scope holds only its own rows.
@@ -244,12 +253,23 @@ export class SubscriptionEngine {
 }
 
 /**
- * Which rows a query matched, in order. Synchronous, because a snapshot is read during render.
+ * Which rows a query matched, in order, or `undefined` where this source has no answer for it.
+ * Synchronous, because a snapshot is read during render.
+ *
+ * `undefined` is not "no rows". A source that answers out of what another thread last pushed has no
+ * answer for a statement nobody registered, and none for one registered whose first answer has yet
+ * to arrive; both are the same state, and it is not the state of a statement that ran and matched
+ * nothing. Answering both with `[]` makes a list that will never fill indistinguishable from a list
+ * that is legitimately empty, which is a bug with nothing anywhere saying so.
  */
-export type RowSelect = (query: ReactiveSqlQuery) => readonly RowId[];
+export type RowSelect = (query: ReactiveSqlQuery) => readonly RowId[] | undefined;
 
-/** The selection for a database on this thread: run the statement. */
-export function executorRowSelect(executor: SqlExecutor): RowSelect {
+/**
+ * The selection for a database on this thread: run the statement. It answers every statement it is
+ * given, because it runs it on the spot — there is nothing to register and nothing to wait for — so
+ * its result is the narrower one and a caller reading through it never meets the absent answer.
+ */
+export function executorRowSelect(executor: SqlExecutor): (query: ReactiveSqlQuery) => readonly RowId[] {
   return (query) => executor.all(selectMatchingIds(query));
 }
 

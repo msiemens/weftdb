@@ -223,8 +223,49 @@ test("§8.7 a push naming a statement the page never registered is ignored", asy
   await delay(5);
 
   const unknown = bridge.query((statement) => statement.orderBy("rank"));
-  assert.deepEqual(bridge.mirror.select(unknown), [], "the mirror cached a result it was never watching");
+  assert.equal(bridge.mirror.select(unknown), undefined, "the mirror cached a result it was never watching");
   assert.equal(bridge.mirror.rows.size, 0);
+});
+
+test("§8.7 a statement nobody registered is not a statement that matched nothing", async () => {
+  using bridge = Bridge.open();
+  bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
+  await bridge.mirror.hydrate();
+
+  // A statement that would match the seeded row if anyone had asked the worker to run it, and one
+  // the worker did run and that matched nothing. The mirror answers out of what the worker pushed,
+  // so reporting both as an empty list is a list that will never fill wearing the appearance of a
+  // list that is legitimately empty — which is what makes a missing registration invisible.
+  const unregistered = bridge.query((statement) => statement.orderBy("rank"));
+  const matchedNothing = bridge.query((statement) => statement.where("done", "=", true).orderBy("rank"));
+  await bridge.mirror.watch(matchedNothing);
+
+  assert.equal(bridge.mirror.select(unregistered), undefined, "an unregistered statement answered as an empty one");
+  assert.deepEqual(bridge.mirror.select(matchedNothing), [], "a statement that ran and matched nothing had no answer");
+  // And they still paint the same, which is the point: the states differ where something can act on
+  // the difference, not in what a component renders.
+  assert.deepEqual(bridge.ids(unregistered), []);
+  assert.deepEqual(bridge.ids(matchedNothing), []);
+});
+
+test("§8.7 a registration still in flight is not an answer of no rows", async () => {
+  using bridge = Bridge.open();
+  bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
+  await bridge.mirror.hydrate();
+
+  const open = bridge.query((statement) => statement.where("done", "=", false).orderBy("rank"));
+  const ready = bridge.mirror.watch(open);
+  // Registered, but the round trip has not come back. The worker will answer with `todo-1`, so an
+  // empty list here is not this statement's answer — it is the absence of one.
+  assert.equal(
+    bridge.mirror.select(open),
+    undefined,
+    "a statement whose first answer was still crossing looked answered",
+  );
+  assert.deepEqual(bridge.ids(open), [], "a statement whose answer had not arrived rendered rows");
+
+  await ready;
+  assert.deepEqual(bridge.mirror.select(open), ["todo-1"], "the answer never replaced the absence");
 });
 
 test("§8.7 the mirror is a weft source as it stands", () => {

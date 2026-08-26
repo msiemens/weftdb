@@ -26,6 +26,7 @@ import {
   useWeftConflicts,
   useWeftQuery,
   useWeftQuerySnapshot,
+  useWeftSqlRows,
   useWeftSuspenseQuery,
   type WeftSource,
 } from "weftdb-react";
@@ -36,6 +37,8 @@ import {
   type LocalRow,
   type MaterializedRow,
   type QueryKey,
+  type ReactiveSqlQuery,
+  type RowSelect,
 } from "weftdb/client";
 import { TASKS, TITLE } from "./property-model.ts";
 
@@ -290,6 +293,63 @@ test("§8.3 a device with no SQL database says so rather than reading back an em
   assert.throws(() => source.select(query), SqlQueryUnavailableError);
 });
 
+test("§8.3 a statement with no answer yet renders no rows, and fills when the answer arrives", async () => {
+  const row = localRow(rowId("row-1"), "one");
+  const source = new WorkerBackedSource(new Map([[`${TASKS}\0${row.id}`, row]]));
+  const query = tasksQuery();
+
+  function List(): ReactNode {
+    const titles = useWeftSqlRows(source, query, (task) => wireText(task.fields.get(TITLE) ?? ""));
+    return createElement("span", null, titles.join(",") || "empty");
+  }
+
+  const view = await render(createElement(List));
+  // A component has nowhere to put "pending", so a statement the source has no answer for paints
+  // an empty list exactly as one that matched nothing does. What must not happen is the source
+  // forgetting which of the two it is.
+  assert.equal(view.text(), "empty", "a statement with no answer yet did not render as an empty list");
+  assert.equal(source.select(query), undefined, "the source answered as though the statement had run");
+  assert.deepEqual(source.registered, [query.cacheKey], "the statement being read was never registered");
+
+  const { act } = await import("react");
+  await act(async () => {
+    source.answer([row.id]);
+  });
+  assert.equal(view.text(), "one", "the answer never reached the component");
+
+  await view.unmount();
+  assert.deepEqual(source.released, [query.cacheKey], "the registration was never handed back");
+});
+
+test("§8.3 a source that says nothing about registration cannot be read as one that needs none", async () => {
+  const source = new WorkerBackedSource(new Map());
+  // `watch` and `unwatch` are required members. A source that answers out of somewhere else and
+  // implements neither is the whole bug — every statement read through it has no answer for as long
+  // as the page is open — and optional members would make that a `source.watch?.(query)` skipping in
+  // silence. It is a compile error instead.
+  const forgetful = {
+    engine: source.engine,
+    rows: source.rows,
+    scopeId: source.scopeId,
+    select: source.select,
+  };
+  // @ts-expect-error a source that implements no registration is not a WeftSource
+  const _unregistering: WeftSource = forgetful;
+
+  // And nothing reads one by accident at runtime either: the hook calls `watch` outright, so a
+  // source smuggled past the types fails loudly rather than rendering an empty list for ever.
+  function List(): ReactNode {
+    // Through `unknown`, because the types already refuse the direct conversion: this is a source
+    // that could only reach a hook from JavaScript, or from a cast someone wrote to silence them.
+    const titles = useWeftSqlRows(forgetful as unknown as WeftSource, tasksQuery(), (task) => String(task.id));
+    return createElement("span", null, titles.join(","));
+  }
+
+  await assert.rejects(async () => {
+    await render(createElement(List));
+  }, /watch is not a function/u);
+});
+
 /** A suspense source whose promise resolves when the test says so. */
 class SuspendingCache {
   #value: string | undefined;
@@ -347,6 +407,49 @@ class CountingSuspenseCache {
     this.loads += 1;
     return new Promise(() => undefined);
   }
+}
+
+/**
+ * A source shaped like a worker-backed mirror: it holds the rows, and it has no answer for a
+ * statement until it is told one. Nothing here runs SQL, which is the condition the page is in.
+ */
+class WorkerBackedSource implements WeftSource {
+  readonly engine = new SubscriptionEngine();
+  readonly rows: ReadonlyMap<string, LocalRow>;
+  readonly scopeId = scopeId("react-scope");
+  /** The cache keys registered and handed back, in order, as only a source can see them. */
+  readonly registered: string[] = [];
+  readonly released: string[] = [];
+  #answer: readonly RowId[] | undefined;
+
+  constructor(rows: ReadonlyMap<string, LocalRow>) {
+    this.rows = rows;
+  }
+
+  readonly select: RowSelect = () => this.#answer;
+
+  watch(query: ReactiveSqlQuery): Promise<void> {
+    this.registered.push(query.cacheKey);
+    return Promise.resolve();
+  }
+
+  unwatch(query: ReactiveSqlQuery): void {
+    this.released.push(query.cacheKey);
+  }
+
+  /** What a worker pushing this statement's first result does to the page. */
+  answer(ids: readonly RowId[]): void {
+    this.#answer = ids;
+    this.engine.notify();
+  }
+}
+
+function tasksQuery(): ReactiveSqlQuery {
+  const statements = compileOnlyKysely<{ tasks: { id: string; scope_id: string } }>();
+  return reactiveSqlQuery({
+    tableName: TASKS,
+    query: statements.selectFrom("tasks").select("id").where("scope_id", "=", "react-scope"),
+  });
 }
 
 function localRow(id: RowId, title: string, table: TableName = TASKS): LocalRow {

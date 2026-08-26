@@ -17,13 +17,15 @@ reading means `WeftClient.getRow` and `WeftClient.listRows`.
 application imports it from the same file as its row types:
 
 ```ts
-import type { LocalRow, RowSelect, SubscriptionEngine } from "weftdb/client";
+import type { LocalRow, ReactiveSqlQuery, RowSelect, SubscriptionEngine } from "weftdb/client";
 
 export interface WeftSource {
   readonly engine: SubscriptionEngine;
   readonly rows: ReadonlyMap<string, LocalRow>;
   readonly select: RowSelect;
   readonly scopeId: string;
+  watch(query: ReactiveSqlQuery): Promise<void>;
+  unwatch(query: ReactiveSqlQuery): void;
 }
 ```
 
@@ -37,6 +39,18 @@ pushed. A client on the thread that renders is paired with `executorRowSelect(ex
 runs the statement. A device that keeps no SQL database is wrapped in `rowMapSource` from
 `weftdb-react`, whose `select` raises `SqlQueryUnavailableError`. Each answers synchronously,
 which is what a snapshot read during render requires, and a component sees none of the difference.
+
+`select` returns `undefined` for a statement the source has no answer for, which covers a statement
+nobody registered and a statement whose first answer has yet to arrive. A statement that ran and
+matched nothing returns an empty array. Both render as an empty list, and the returned value is
+what tells a caller which of the two it is holding.
+
+`watch` and `unwatch` tell a source whose database is elsewhere that a statement is being read. A
+mirror answers `select` out of what the worker last pushed, so a statement nobody registered has no
+answer for as long as the page is open. `use<Collection>Query` registers in an effect and hands the
+registration back on unmount, and registrations are counted, so two components reading one list are
+one statement in the worker. A source whose database is on the thread that renders implements both
+members as no-ops, because `select` runs the statement there and there is nobody to tell.
 
 :::note
 A browser reaches SQLite through a worker, because the only synchronous handle exists inside one.

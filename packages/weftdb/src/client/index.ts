@@ -983,7 +983,7 @@ export { serveWeftWorker, WeftWorkerHost } from "./worker-host.ts";
 export type { WeftWorkerHostOptions, WorkerHostPortLike } from "./worker-host.ts";
 export { WeftClientMirror } from "./worker-mirror.ts";
 export type { WeftClientMirrorOptions } from "./worker-mirror.ts";
-export { weftDatabaseKey } from "./database-key.ts";
+export { DEFAULT_NAMESPACE, WEFT_NAMESPACE_PARAM, weftDatabaseKey } from "./database-key.ts";
 export { MultiTabCoordinator } from "./multitab.ts";
 export type {
   LeadershipListener,

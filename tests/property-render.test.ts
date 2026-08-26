@@ -12,14 +12,10 @@ import { beforeAll, test } from "vitest";
 import fc from "fast-check";
 import { JSDOM } from "jsdom";
 import { createElement, Profiler, type ReactNode } from "react";
-import { httpTransport, WebStorageClientStore, type FetchLike, type StorageLike } from "weftdb/client";
-import { WeftServer } from "weftdb/server";
-import { createRelayHandler } from "weftdb/server/relay";
-import { demoVerifier } from "weftdb-demo-shared/auth";
-import { tabIdentity } from "weftdb-demo-shared/identity";
 import { schema } from "weftdb-demo-todo/schema";
 import { DEMO } from "weftdb-demo-todo/scope";
-import { TodoStore, type BroadcastChannelLike } from "weftdb-demo-todo";
+import { TodoStore } from "weftdb-demo-todo";
+import { DemoBrowser } from "./demo-fixtures.ts";
 
 const RUNS = Number(process.env["WEFT_RENDER_RUNS"] ?? 25);
 /**
@@ -69,24 +65,10 @@ interface Page {
   unmount(): Promise<void>;
 }
 
-let openPage: (name: string, shared: Shared) => Promise<Page>;
-let newShared: () => Shared;
+let openPage: (name: string, browser: DemoBrowser) => Promise<Page>;
 
-interface Shared {
-  readonly fetch: FetchLike;
-  readonly local: StorageLike;
-  readonly sessions: Map<string, StorageLike>;
-  readonly listeners: Set<() => void>;
-  readonly server: WeftServer;
-}
-
-function memoryStorage(): StorageLike {
-  const entries = new Map<string, string>();
-  return {
-    getItem: (key) => entries.get(key) ?? null,
-    setItem: (key, value) => void entries.set(key, String(value)),
-    removeItem: (key) => void entries.delete(key),
-  };
+function newBrowser(): DemoBrowser {
+  return new DemoBrowser({ schema, demo: DEMO });
 }
 
 beforeAll(async () => {
@@ -104,38 +86,9 @@ beforeAll(async () => {
   const { act } = await import("react");
   const { App } = await import("weftdb-demo-todo/app");
 
-  newShared = () => {
-    const server = new WeftServer();
-    const handler = createRelayHandler({ server, verifier: demoVerifier });
-    return {
-      server,
-      local: memoryStorage(),
-      sessions: new Map<string, StorageLike>(),
-      listeners: new Set<() => void>(),
-      fetch: async (input, init) => handler(new Request(`http://relay${input.replace(/^\/api/u, "")}`, init)),
-    };
-  };
-
-  openPage = async (name, shared) => {
-    const session = shared.sessions.get(name) ?? memoryStorage();
-    shared.sessions.set(name, session);
-    const identity = tabIdentity(session, shared.local, { demo: DEMO });
-    const persistence = new WebStorageClientStore(shared.local, schema, "weft-demo");
-    const channel: BroadcastChannelLike = {
-      postMessage: () => {
-        for (const listener of [...shared.listeners]) listener();
-      },
-      addEventListener: (_type, listener) => {
-        shared.listeners.add(() => listener(new dom.window.MessageEvent("message")));
-      },
-      close: () => undefined,
-    };
-    const store = new TodoStore({
-      identity,
-      client: persistence.hydrate(identity.scopeId, identity.deviceId),
-      transport: httpTransport({ baseUrl: "/api", token: identity.token, fetch: shared.fetch }),
-      channel,
-    });
+  openPage = async (name, browser) => {
+    const { identity, database } = await browser.tab(name);
+    const store = new TodoStore({ identity, database });
 
     const container = dom.window.document.createElement("div");
     dom.window.document.body.append(container);
@@ -188,6 +141,7 @@ beforeAll(async () => {
           root.unmount();
         });
         container.remove();
+        await store.dispose();
       },
       run: async (action) => {
         const list = items();
@@ -262,20 +216,21 @@ beforeAll(async () => {
 });
 
 test("mounting the page costs a bounded number of renders", async () => {
-  const shared = newShared();
-  const page = await openPage("first", shared);
+  const browser = newBrowser();
+  const page = await openPage("first", browser);
   assert.ok(
     page.commits() <= MOUNT_BUDGET,
     `mounting committed ${page.commits()} times, which is not a mount but a loop settling down`,
   );
   await page.unmount();
+  browser.close();
 });
 
 test("no sequence of things a person can do makes the page render without bound", async () => {
   await fc.assert(
     fc.asyncProperty(fc.array(actionArb, { minLength: 1, maxLength: 14 }), async (actions) => {
-      const shared = newShared();
-      const page = await openPage("first", shared);
+      const browser = newBrowser();
+      const page = await openPage("first", browser);
       try {
         const budget = MOUNT_BUDGET + actions.length * COMMITS_PER_ACTION;
         for (const action of actions) {
@@ -289,6 +244,7 @@ test("no sequence of things a person can do makes the page render without bound"
         }
       } finally {
         await page.unmount();
+        browser.close();
       }
     }),
     { numRuns: RUNS, endOnFailure: true },
@@ -300,9 +256,9 @@ test("a second tab does not make the first one render without bound", async () =
   // render evicted the other's cached snapshot. It only appears with two of them open.
   await fc.assert(
     fc.asyncProperty(fc.array(actionArb, { minLength: 1, maxLength: 8 }), async (actions) => {
-      const shared = newShared();
-      const first = await openPage("first", shared);
-      const second = await openPage("second", shared);
+      const browser = newBrowser();
+      const first = await openPage("first", browser);
+      const second = await openPage("second", browser);
       try {
         const budget = MOUNT_BUDGET + (actions.length + 4) * COMMITS_PER_ACTION;
         for (const [index, action] of actions.entries()) {
@@ -322,6 +278,7 @@ test("a second tab does not make the first one render without bound", async () =
       } finally {
         await first.unmount();
         await second.unmount();
+        browser.close();
       }
     }),
     { numRuns: Math.max(6, Math.floor(RUNS / 2)), endOnFailure: true },

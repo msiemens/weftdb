@@ -4,7 +4,7 @@
 // in another without either of them asking for it.
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import {
-  useDevices,
+  useDevicesQuery,
   useMessages,
   type ChatStore,
   type DeviceView,
@@ -18,7 +18,13 @@ export function App({ store }: { readonly store: ChatStore }): ReactNode {
   // schema describes. `created` is stamped when the row is written and never changes, so it is
   // the log's order as well as its timestamp.
   const messages = useMessages(store.source, "created").map((row) => store.view(row));
-  const devices = store.presence(useDevices(store.source, "id"));
+  // A compiled statement rather than the collection sorted afterwards: the strip's order is a
+  // total one over the device id, and SQLite in the storage worker is where that ordering belongs.
+  // The `where` is the guard the sort could not be: a device row whose label has not arrived yet —
+  // a create still crossing, or a partial pull — would otherwise render as a nameless chip.
+  const devices = store.presence(
+    useDevicesQuery(store.source, (statement) => statement.where("label", "!=", "").orderBy("id")),
+  );
   const status = useStatus(store);
 
   return (

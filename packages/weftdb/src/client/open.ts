@@ -341,9 +341,9 @@ export async function openWeftDatabase(options: OpenWeftDatabaseOptions): Promis
  * One tab's whole connection to the database, from the open to the last teardown, across however
  * many workers it talks to on the way.
  *
- * A class rather than the two functions this used to be, because leadership moving turns "which
- * half is this tab" from something settled at the open into something that changes underneath a
- * mirror the application is still holding. Both halves therefore have to be reachable from one
+ * A class rather than a pair of functions, because leadership moving turns "which half is this tab"
+ * from something settled at the open into something that changes underneath a mirror the
+ * application is still holding. Both halves therefore have to be reachable from one
  * object that owns the mirror and outlives either of them.
  */
 class DatabaseTab {

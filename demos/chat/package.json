@@ -12,6 +12,7 @@
     "generate": "node ../../packages/weftdb-cli/src/index.ts generate --schema src/schema.ts --out src/generated"
   },
   "dependencies": {
+    "@sqlite.org/sqlite-wasm": "3.53.0-build1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "weftdb": "workspace:*",

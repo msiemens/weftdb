@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Diff3EditorBuffer } from "weftdb/client";
 import { fieldName, hasConflictMarkers, rowId as toRowId, tableName } from "weftdb/core";
-import { newTodoId, useTodoEvents, useTodos, type StoreStatus, type TodoStore, type TodoView } from "./store.ts";
+import { newTodoId, useTodoEventsQuery, useTodos, type StoreStatus, type TodoStore, type TodoView } from "./store.ts";
 
 export function App({ store }: { readonly store: TodoStore }): ReactNode {
   useEffect(() => store.start(), [store]);
@@ -285,8 +285,18 @@ function Notes({ store, todo }: { readonly store: TodoStore; readonly todo: Todo
   );
 }
 
+/**
+ * The last few things anyone did, newest first.
+ *
+ * A compiled statement rather than the whole collection sliced afterwards: `useTodoEventsQuery`
+ * takes the ordering, the direction and the bound down to SQLite in the storage worker, so what
+ * crosses the port is the eight rows this list renders instead of every event the scope has ever
+ * recorded. The `where` names the kinds this panel is about, which is what the buttons below write.
+ */
 function Activity({ store }: { readonly store: TodoStore }): ReactNode {
-  const entries = useTodoEvents(store.source, "created").slice(-8).reverse();
+  const entries = useTodoEventsQuery(store.source, (statement) =>
+    statement.where("kind", "in", ACTIVITY_KINDS).orderBy("created", "desc").limit(ACTIVITY_ROWS),
+  );
   if (entries.length === 0) return null;
 
   return (
@@ -416,6 +426,9 @@ function GuideBody({ onClose }: { readonly onClose: () => void }): ReactNode {
 
 /** How long the guide's closing animation runs for, in step with the stylesheet. */
 const GUIDE_CLOSE_MS = 130;
+/** What the activity panel shows, and how much of it. Both are bound parameters of one statement. */
+const ACTIVITY_KINDS = ["added", "completed", "reopened"];
+const ACTIVITY_ROWS = 8;
 /** How long a field waits after the last keystroke before it becomes a transaction. */
 const COMMIT_IDLE_MS = 600;
 const TODOS = tableName("todos");

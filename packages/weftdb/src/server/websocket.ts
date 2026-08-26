@@ -501,7 +501,7 @@ export class SyncSocketHub {
     try {
       subscriber.socket.write(encodeClose(code, reason));
     } catch {
-      // The socket is already gone, which is the state we were trying to reach.
+      // The socket is already gone, which is the state this close is reaching for.
     }
     subscriber.socket.destroy();
   }

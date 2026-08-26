@@ -20,8 +20,8 @@ import { schemaHash, type SchemaDefinition } from "weftdb/schema";
 import type { SqlExecutor } from "weftdb/shared";
 import { DEFAULT_NAMESPACE, WEFT_NAMESPACE_PARAM } from "./database-key.ts";
 import { SqliteClientStore } from "./sqlite.ts";
-import { connectSocketTransport } from "./socket-transport.ts";
-import { httpTransport, type FetchLike } from "./transport.ts";
+import { connectSocketTransport, type SocketTransport } from "./socket-transport.ts";
+import { httpTransport, type AsyncSyncTransport, type FetchLike } from "./transport.ts";
 import type { SocketHandlers } from "./session.ts";
 import {
   openMemorySqliteExecutor,
@@ -34,8 +34,16 @@ import { serveWeftWorker, type WeftWorkerHost, type WorkerHostPortLike } from ".
 import type { WeftDurability, WeftWorkerReady } from "./worker.ts";
 import type { WebSocketFactory } from "./wakeups.ts";
 
+/** How hard to try, whichever way the relay is named. Timing, and nothing about where it is. */
+export interface WeftWorkerRelayTuning {
+  readonly pollWhileLiveMs?: number;
+  readonly pollWhileBlindMs?: number;
+  readonly debounceMs?: number;
+  readonly now?: () => number;
+}
+
 /**
- * Where the relay is, and how hard to try to reach it.
+ * The relay at a URL, which is the case a deployment is.
  *
  * The credential is deliberately absent: the page holds that, because the page is the only place a
  * token can be got, and it arrives over the port. What is here is what the worker builds a transport
@@ -43,18 +51,48 @@ import type { WebSocketFactory } from "./wakeups.ts";
  * built. A base URL declared on both sides that had to agree is a value nothing checks, wrong only
  * at runtime and only sometimes.
  */
-export interface WeftWorkerRelayOptions {
+export interface WeftWorkerRelayUrl extends WeftWorkerRelayTuning {
   /** Where the relay is mounted, e.g. `/api/db` behind a dev-server proxy or an absolute origin. */
   readonly baseUrl: string;
   /** Where the relay's sync socket is. Left out means HTTP and a poll, which still works. */
   readonly socketUrl?: string;
   readonly fetch?: FetchLike;
   readonly WebSocket?: WebSocketFactory;
-  readonly pollWhileLiveMs?: number;
-  readonly pollWhileBlindMs?: number;
-  readonly debounceMs?: number;
-  readonly now?: () => number;
+  readonly transport?: never;
+  readonly openSocket?: never;
 }
+
+/**
+ * The relay as a transport this worker was handed, for a relay that is not at a URL at all.
+ *
+ * The two members are the ones `WeftWorkerSessionOptions` already declares, and deliberately so:
+ * this is the general case and `WeftWorkerRelayUrl` is the shorthand for the common one, so an
+ * application that outgrows the shorthand keeps everything else `serveWeftWorkerDefaults` does —
+ * opening the pool its namespace names, installing the schema, announcing what it got — instead of
+ * assembling the worker by hand to change one line. `transport` is a function of the credential for
+ * the same reason it is one there: a transport carries its token, so signing in as somebody else is
+ * a new transport rather than a mutated one.
+ *
+ * The case it exists for is a relay reachable over a `MessagePort` — one running in a
+ * `SharedWorker` of the same browser, which is what a page with no server behind it can still sync
+ * through. No URL describes that, and `fetch` cannot reach it.
+ *
+ * `baseUrl` and `transport` are each `never` on the other side, so the two ways of saying where the
+ * relay is cannot be given at once and silently have one of them ignored.
+ */
+export interface WeftWorkerRelaySupplied extends WeftWorkerRelayTuning {
+  /** Built per credential. Called again whenever the token changes. */
+  readonly transport: (token: string) => AsyncSyncTransport;
+  /** The live connection, if this relay has one. Left out means the fallback poll alone. */
+  readonly openSocket?: (handlers: SocketHandlers, token: string) => SocketTransport;
+  readonly baseUrl?: never;
+  readonly socketUrl?: never;
+  readonly fetch?: never;
+  readonly WebSocket?: never;
+}
+
+/** Where the relay is: a URL the worker builds a transport from, or a transport it is handed. */
+export type WeftWorkerRelayOptions = WeftWorkerRelayUrl | WeftWorkerRelaySupplied;
 
 export interface ServeWeftWorkerDefaultsOptions {
   readonly schema: SchemaDefinition;
@@ -209,14 +247,38 @@ function session(
   schema: SchemaDefinition,
   relay: WeftWorkerRelayOptions,
 ): NonNullable<Parameters<typeof serveWeftWorker>[0]["session"]> {
-  const socketUrl = relay.socketUrl;
   return {
     schemaHash: schemaHash(schema),
+    ...reach(relay),
+    ...(relay.pollWhileLiveMs === undefined ? {} : { pollWhileLiveMs: relay.pollWhileLiveMs }),
+    ...(relay.pollWhileBlindMs === undefined ? {} : { pollWhileBlindMs: relay.pollWhileBlindMs }),
+    ...(relay.debounceMs === undefined ? {} : { debounceMs: relay.debounceMs }),
+    ...(relay.now === undefined ? {} : { now: relay.now }),
+  };
+}
+
+/**
+ * The two members that say how this worker talks to the relay, from whichever half of the union
+ * named it. A supplied transport is passed straight through; a URL is turned into the same pair.
+ */
+function reach(relay: WeftWorkerRelayOptions): {
+  readonly transport: (token: string) => AsyncSyncTransport;
+  readonly openSocket?: (handlers: SocketHandlers, token: string) => SocketTransport;
+} {
+  if (relay.transport !== undefined) {
+    return {
+      transport: relay.transport,
+      ...(relay.openSocket === undefined ? {} : { openSocket: relay.openSocket }),
+    };
+  }
+  const socketUrl = relay.socketUrl;
+  const baseUrl = relay.baseUrl;
+  return {
     // Per credential rather than per session: a transport carries its token, so signing in as
     // somebody else is a new transport rather than a mutated one.
     transport: (token) =>
       httpTransport({
-        baseUrl: relay.baseUrl,
+        baseUrl,
         token,
         ...(relay.fetch === undefined ? {} : { fetch: relay.fetch }),
       }),
@@ -234,10 +296,6 @@ function session(
               ...(relay.WebSocket === undefined ? {} : { WebSocket: relay.WebSocket }),
             }),
         }),
-    ...(relay.pollWhileLiveMs === undefined ? {} : { pollWhileLiveMs: relay.pollWhileLiveMs }),
-    ...(relay.pollWhileBlindMs === undefined ? {} : { pollWhileBlindMs: relay.pollWhileBlindMs }),
-    ...(relay.debounceMs === undefined ? {} : { debounceMs: relay.debounceMs }),
-    ...(relay.now === undefined ? {} : { now: relay.now }),
   };
 }
 

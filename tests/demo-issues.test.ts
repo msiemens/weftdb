@@ -1,57 +1,44 @@
 // The issues demo, driven through its own controls. What this covers that `demo.test.ts` does
 // not is the part of the schema the todo list has no use for: relationships resolved against
-// rows the client already holds, an append-only collection, a nested mapper, and the seed a
-// first visit opens on.
+// rows the client already holds, an append-only collection, a nested mapper, a status the list is
+// narrowed by in SQL, and the seed a first visit opens on.
 import assert from "node:assert/strict";
 import { beforeAll, test } from "vitest";
 import { JSDOM } from "jsdom";
 import { createElement, type ReactNode } from "react";
-import { httpTransport, WebStorageClientStore, type FetchLike, type StorageLike } from "weftdb/client";
-import { WeftServer } from "weftdb/server";
-import { createRelayHandler } from "weftdb/server/relay";
-import { demoVerifier } from "weftdb-demo-shared/auth";
-import { tabIdentity } from "weftdb-demo-shared/identity";
+import { rowId } from "weftdb/core";
 import { schema } from "weftdb-demo-issues/schema";
 import { DEMO } from "weftdb-demo-issues/scope";
+import { commentsTable } from "weftdb-demo-issues/bindings";
 import { IssueStore } from "weftdb-demo-issues";
+import { DemoBrowser, drain, type TabOptions } from "./demo-fixtures.ts";
 
-/** Storage that behaves like the browser's: string in, string out, nothing shared by accident. */
-function memoryStorage(): StorageLike {
-  const entries = new Map<string, string>();
-  return {
-    getItem: (key) => entries.get(key) ?? null,
-    setItem: (key, value) => void entries.set(key, String(value)),
-    removeItem: (key) => void entries.delete(key),
-  };
-}
-
-/** One relay, and stores that reach it the way the page does. */
-function relay(): FetchLike {
-  const server = new WeftServer();
-  const handler = createRelayHandler({ server, verifier: demoVerifier });
-  return async (input, init) => handler(new Request(`http://relay${input.replace(/^\/api/u, "")}`, init));
+function browser(): DemoBrowser {
+  return new DemoBrowser({ schema, demo: DEMO });
 }
 
 /**
- * A tab. `local` is shared between the tabs of one browser and `session` is not, which is what
- * makes each tab a device of its own under one visitor's scope.
+ * A tab. Local storage is shared between the tabs of one browser and session storage is not, which
+ * is what makes each tab a device of its own under one visitor's scope — and, through the namespace
+ * derived from it, a database of its own.
  */
-function openTab(local: StorageLike, fetch: FetchLike, slot: string): IssueStore {
-  const identity = tabIdentity(memoryStorage(), local, { demo: DEMO });
-  const persistence = new WebStorageClientStore(local, schema, `weft-demo-${slot}`);
-  const store = new IssueStore({
-    identity,
-    client: persistence.hydrate(identity.scopeId, identity.deviceId),
-    transport: httpTransport({ baseUrl: "/api", token: identity.token, fetch }),
-  });
-  store.seed(local);
+async function openTab(browser: DemoBrowser, name: string, options: TabOptions = {}): Promise<IssueStore> {
+  const { identity, database } = await browser.tab(name, options);
+  const store = new IssueStore({ identity, database });
+  store.seed(browser.local);
+  await settle(store);
   return store;
 }
 
-test("a first visit is seeded, and only the first", async () => {
-  const fetch = relay();
-  const local = memoryStorage();
-  const first = openTab(local, fetch, "one");
+/** Lets what the seed wrote cross the port and come back, which is when the store can be read. */
+async function settle(store: IssueStore): Promise<void> {
+  await drain(store, "this tab never drained what it wrote");
+}
+
+test("a first visit is seeded, and only the first", async (t) => {
+  const world = browser();
+  t.onTestFinished(() => world.close());
+  const first = await openTab(world, "one");
 
   assert.equal(first.projectRows().length, 2, "expected two seeded projects");
   assert.equal(first.issueRows().length, 5, "expected five seeded issues");
@@ -61,71 +48,85 @@ test("a first visit is seeded, and only the first", async () => {
     "the seed should cover every status",
   );
 
-  const second = openTab(local, fetch, "two");
-  assert.equal(second.projectRows().length, 0, "a second tab seeded the scope again");
+  const second = await openTab(world, "two");
   assert.equal(first.identity.scopeId, second.identity.scopeId, "both tabs are one visitor");
-  assert.notEqual(first.identity.deviceId, second.identity.deviceId, "each tab is its own device");
+  assert.notEqual(first.deviceId, second.deviceId, "each tab is its own device");
+  assert.equal(world.workers.length, 2, "the second tab was given the first tab's storage worker");
 
-  await first.sync();
-  await second.sync();
+  // Seeded once and reached the second tab by syncing, not by being written again: the guard is a
+  // key beside the scope, which every tab of one browser reads.
+  await settle(first);
+  await settle(second);
   assert.equal(second.projectRows().length, 2, "the second tab should receive the seed by sync");
+  assert.equal(first.projectRows().length, 2, "the scope was seeded twice");
 });
 
-test("emptying the scope does not bring the seed back", async () => {
-  const fetch = relay();
-  const local = memoryStorage();
-  const first = openTab(local, fetch, "one");
+test("emptying the scope does not bring the seed back", async (t) => {
+  const world = browser();
+  t.onTestFinished(() => world.close());
+  const first = await openTab(world, "one");
   for (const project of first.projectRows()) first.projects.delete(project.id);
   for (const issue of first.issueRows()) first.issues.delete(issue.id);
-  await first.sync();
+  await settle(first);
 
-  const second = openTab(local, fetch, "two");
-  await second.sync();
+  const second = await openTab(world, "two");
+  await settle(second);
   assert.equal(second.projectRows().length, 0, "reopening re-seeded a scope the visitor emptied");
 });
 
-test("comments are append-only", async () => {
-  const fetch = relay();
-  const store = openTab(memoryStorage(), fetch, "one");
+test("comments are append-only, and an edit to one is refused rather than ignored", async (t) => {
+  const world = browser();
+  t.onTestFinished(() => world.close());
+  const refused: Error[] = [];
+  const store = await openTab(world, "one", { onError: (error) => refused.push(error) });
   const surface = store.comments as unknown as Readonly<Record<string, unknown>>;
   assert.equal(typeof surface["create"], "function");
   assert.equal(surface["update"], undefined, "an event log must not generate update");
   assert.equal(surface["delete"], undefined, "an event log must not generate delete");
 
-  // The schema is what enforces this, not the page: reaching past the generated mutators to the
-  // client is refused before the op can reach the outbox.
-  await store.sync();
-  const comment = store.client.rows.values().find((row) => row.tableName === "comments");
+  // The schema is what enforces this, not the page. Reaching past the generated mutators posts the
+  // edit anyway; the client in the storage worker refuses it, and because a mutator returns `void`
+  // the only place that refusal can surface is the error the page was opened with.
+  const comment = store.source.listRows(commentsTable)[0];
   assert.ok(comment !== undefined, "the seed should have written comments");
-  assert.throws(
-    () => store.client.update(comment.tableName, comment.id, new Map() as never),
-    /append-class/u,
-    "an append-class row accepted an edit",
-  );
-  assert.throws(
-    () => store.client.delete(comment.tableName, comment.id),
-    /append-class/u,
-    "an append-class row accepted a delete",
-  );
+  store.source.update(commentsTable, rowId(comment.id), { body: "edited" });
+  await waitFor(() => refused.length > 0, "an edit to an append-class row was accepted in silence");
+  assert.match(refused[0]?.message ?? "", /append-class/u, "the refusal did not say why");
+
+  store.source.delete(commentsTable, rowId(comment.id));
+  await waitFor(() => refused.length > 1, "a delete of an append-class row was accepted in silence");
+  assert.match(refused[1]?.message ?? "", /append-class/u, "the refusal did not say why");
 });
 
-test("deleting a project leaves its issues and does not quarantine anything", async () => {
-  const fetch = relay();
-  const store = openTab(memoryStorage(), fetch, "one");
-  await store.sync();
+test("deleting a project leaves its issues and does not quarantine anything", async (t) => {
+  const world = browser();
+  t.onTestFinished(() => world.close());
+  const store = await openTab(world, "one");
 
   const project = store.projectRows()[0];
   assert.ok(project !== undefined);
-  const orphaned = store.issueRows(project.id).length;
+  const orphaned = store.issueRows().filter((row) => row.project_id === project.id).length;
   assert.ok(orphaned > 0, "the seeded project should have issues");
 
   store.projects.delete(project.id);
-  await store.sync();
-  await store.sync();
+  await settle(store);
+  await settle(store);
 
-  assert.equal(store.issueRows(project.id).length, orphaned, "deleting a project took its issues");
+  assert.equal(
+    store.issueRows().filter((row) => row.project_id === project.id).length,
+    orphaned,
+    "deleting a project took its issues",
+  );
   assert.equal(store.status().quarantined, 0, "deleting a project quarantined a change");
 });
+
+async function waitFor(condition: () => boolean, message: string): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  throw new Error(message);
+}
 
 let page: () => Promise<void>;
 
@@ -175,13 +176,30 @@ beforeAll(async () => {
   const { App } = await import("weftdb-demo-issues/app");
 
   page = async () => {
-    const store = openTab(memoryStorage(), relay(), "ui");
+    const world = browser();
+    const store = await openTab(world, "ui");
     const container = dom.window.document.createElement("div");
     dom.window.document.body.append(container);
     const root = createRoot(container);
     await act(async () => {
       root.render(createElement(App, { store }) as ReactNode);
     });
+
+    // Every read crosses the port: the rows come back as a push, and the list's statement is not
+    // registered with the worker until the effect that mounts it has run.
+    const flush = async (): Promise<void> => {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 2));
+      });
+    };
+    const until = async (condition: () => boolean, message: string): Promise<void> => {
+      for (let attempt = 0; attempt < 500; attempt += 1) {
+        if (condition()) return;
+        await flush();
+      }
+      throw new Error(message);
+    };
+    const issues = (): readonly Element[] => [...container.querySelectorAll("li.issue")];
 
     const button = (label: string): HTMLButtonElement => {
       const found = [...container.querySelectorAll("button")].find(
@@ -200,13 +218,33 @@ beforeAll(async () => {
       await act(async () => {
         target.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
       });
+      await flush();
     };
+
+    await until(() => issues().length === 5, "the seeded issues never reached the list");
 
     // The joins, on the row: the project name is the `hasOne`, the count is the `hasMany`, and
     // the rail's count is the `hasMany` from the other side.
     assert.equal(container.querySelector(".project-tag")?.textContent, "Loom firmware");
     assert.match(container.querySelector(".comment-count")?.textContent ?? "", /^3/u);
     assert.equal(container.querySelectorAll(".rail .count")[0]?.textContent, "3");
+
+    // The status filter is a compiled statement with a `where` and an `orderBy`, run against SQLite
+    // in the storage worker: the list is what it answered rather than what the page kept after
+    // throwing rows away. The rail's counts are the join over the whole collection and do not move.
+    await click("started");
+    await until(() => issues().length === 2, "narrowing to a status did not narrow the list");
+    assert.deepEqual(
+      [...container.querySelectorAll("li.issue .status")].map((chip) => chip.textContent),
+      ["started", "started"],
+      "the statement's where let another status through",
+    );
+    assert.equal(container.querySelectorAll(".rail .count")[0]?.textContent, "3", "a rail count followed the filter");
+    await click("closed");
+    await until(() => issues().length === 1, "the second status was not a second answer");
+    assert.equal(container.querySelector("li.issue .status")?.textContent, "closed");
+    await click("Any status");
+    await until(() => issues().length === 5, "clearing the filter did not bring the rest back");
 
     // The row's control opens a modal, and the list is still behind it rather than replaced.
     const opener = button("Open Shuttle stalls at row 12");
@@ -267,9 +305,11 @@ beforeAll(async () => {
     await act(async () => {
       root.unmount();
     });
+    await store.dispose();
+    world.close();
   };
 });
 
-test("the page renders the joins and opens an issue in a modal", async () => {
+test("the page renders the joins, narrows by status in SQL, and opens an issue in a modal", async () => {
   await page();
 });

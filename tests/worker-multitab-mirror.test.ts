@@ -194,7 +194,7 @@ test("§8.7 two tabs watching one statement do not retire it from under each oth
   assert.deepEqual(ids(tabs.owner, all), ["todo-1"]);
 
   guest.mirror.unwatch(all);
-  await settle(() => guest.mirror.select(all).length === 0);
+  await settle(() => guest.mirror.select(all) === undefined);
 
   // A row joining the list, not merely changing inside it. A mirror whose registration was retired
   // keeps the ids it last had, so an edit to an existing row leaves the two indistinguishable —
@@ -210,7 +210,9 @@ test("§8.7 two tabs watching one statement do not retire it from under each oth
     ["todo-1", "todo-2"],
     "one tab's unwatch retired a statement another tab was reading",
   );
-  assert.deepEqual(guest.mirror.select(all), [], "the tab that unwatched kept being answered");
+  // No answer, rather than an answer of no rows: the tab let the statement go, so it holds nothing
+  // the worker said about it — which is a different thing from the worker having said "nothing".
+  assert.equal(guest.mirror.select(all), undefined, "the tab that unwatched kept being answered");
 
   // And the last release really does retire it, or the count leaks the other way and the worker
   // re-runs statements nobody reads for the rest of the session. Read off the worker's own registry:

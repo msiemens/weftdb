@@ -23,7 +23,9 @@ WeftDB provides:
 Demos live under [`demos/`](./demos) and are not published:
 
 - [`weftdb-demo-todo`](./demos/todo-list/README.md) - a shared todo list, one device per browser tab.
-- `weftdb-demo-shared` - identity, token verifier, and the relay each demo runs against.
+- [`weftdb-demo-issues`](./demos/issues/README.md) - projects, issues and comments, joined through the schema.
+- [`weftdb-demo-chat`](./demos/chat/README.md) - an append-only message log, pushed to every open tab.
+- `weftdb-demo-shared` - identity, the storage worker each demo ships, and the relay they run in the browser.
 
 ## Install
 

@@ -4,9 +4,6 @@
   "private": true,
   "license": "MPL-2.0",
   "type": "module",
-  "scripts": {
-    "relay": "node src/relay-main.ts"
-  },
   "dependencies": {
     "weftdb": "workspace:*"
   },
@@ -16,7 +13,11 @@
   "exports": {
     "./auth": "./src/auth.ts",
     "./identity": "./src/identity.ts",
-    "./relay": "./src/relay.ts",
+    "./open": "./src/open.ts",
+    "./port-transport": "./src/port-transport.ts",
+    "./relay-worker": "./src/relay-worker.ts",
+    "./relay-worker-entry": "./src/relay-worker-entry.ts",
+    "./storage-worker": "./src/storage-worker.ts",
     "./dev": "./src/dev.ts",
     "./tokens.css": "./src/tokens.css"
   }

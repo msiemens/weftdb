@@ -20,11 +20,12 @@ import {
   tableName as toTableName,
   txnId as toTxnId,
   type FieldName,
+  type RowId,
   type WireValue,
 } from "weftdb/core";
 import type { SchemaHash } from "weftdb/core";
 import type { SqlExecutor, SqlRow, SqlValue } from "weftdb/shared";
-import { executorRowSelect, reactiveSqlQuery, type ReactiveSqlQuery, type RowSelect } from "./subscriptions.ts";
+import { executorRowSelect, reactiveSqlQuery, type ReactiveSqlQuery } from "./subscriptions.ts";
 import type { CompiledQuery } from "./query.ts";
 import { WeftSession, type SessionStatus, type SocketHandlers } from "./session.ts";
 import type { AsyncSyncTransport } from "./transport.ts";
@@ -145,7 +146,12 @@ export class WeftWorkerHost {
   readonly #connections = new Set<HostConnection>();
   readonly #executor: SqlExecutor;
   readonly #store: SqliteClientStore;
-  readonly #select: RowSelect;
+  /**
+   * The statements are run here, on the database this host holds, so this always has an answer —
+   * which is why it is `executorRowSelect`'s narrower result rather than a `RowSelect`. The absent
+   * answer is the page's state, not the worker's.
+   */
+  readonly #select: (query: ReactiveSqlQuery) => readonly RowId[];
   /**
    * Statements the pages are watching, by the cache key they know them under, with how many of them
    * asked.
@@ -203,10 +209,9 @@ export class WeftWorkerHost {
   /**
    * Which statements this worker is still recomputing after every mutation, by cache key.
    *
-   * For a test to read. It used to be legible from outside — every push carried every watched key —
-   * and now that a push carries only the asking tab's own statements, a registration nobody released
-   * is invisible from any one port. That is the leak worth catching: the worker re-runs a statement
-   * for the rest of the session on behalf of a tab that has gone.
+   * For a test to read. A push carries only the asking tab's own statements, so a registration
+   * nobody released shows on no individual port, and the worker recomputes that statement for the
+   * rest of the session on behalf of a tab that has gone.
    */
   get watching(): readonly string[] {
     return [...this.#watched.keys()];
@@ -215,10 +220,10 @@ export class WeftWorkerHost {
   /**
    * Serves one more tab on a port of its own.
    *
-   * This is the whole of what replaced the leader-tab proxy. Only one document may hold the OPFS
-   * synchronous access handle, so only one tab may create this worker — but a `MessagePort` to it
-   * can be handed to any number of others, and once it has been they talk to the database directly
-   * rather than through the tab that made it. The tab that owns the worker forwards each arriving
+   * Only one document may hold the OPFS synchronous access handle, so only one tab may create this
+   * worker — but a `MessagePort` to it can be handed to any number of others, and once it has been
+   * they talk to the database directly rather than through the tab that made it. The tab that owns
+   * the worker forwards each arriving
    * port here (`postMessage({ weft: "connect", port }, [port])`), and from that moment it is not on
    * the other tabs' data path at all.
    *
@@ -586,6 +591,11 @@ export class WeftWorkerHost {
    * `#watched` and only the delivery is per port.
    */
   #push(): void {
+    // A sync that was already in flight when the page asked to close the database still runs its
+    // own teardown, and calls back here to say what moved — against a client this host has let go
+    // of. There is nothing left to describe and nobody left to describe it to, so this is where it
+    // stops rather than throwing out of a promise the poll started and nobody is holding.
+    if (this.#client === undefined) return;
     const keys = [...this.#changed];
     this.#changed.clear();
     const moved = this.#moved(keys);

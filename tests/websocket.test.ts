@@ -11,6 +11,7 @@ import {
   connectWakeups,
   httpTransport,
   WeftClient,
+  WeftSession,
   type ScopeAdvanced,
   type SocketTransport,
 } from "weftdb/client";
@@ -390,41 +391,52 @@ test("a dropped socket comes back and asks for a catch-up", async (t) => {
   assert.equal(connects, 2, "the connection did not come back");
 });
 
-test("a change in one tab reaches another with nobody polling for it", async (t) => {
-  // The demo's fallback timer is a minute apart when the socket is up, so anything that
-  // arrives inside a second or two arrived because the relay said so.
-  const { TodoStore } = await import("weftdb-demo-todo");
+test("a change on one device reaches another with nobody polling for it", async (t) => {
+  // A session's fallback timer is a minute apart while the socket is up, so anything that arrives
+  // inside a second or two arrived because the relay said so.
   const running = await relay();
   t.onTestFinished(() => running.close());
 
-  const open = (device: string, token: string): InstanceType<typeof TodoStore> =>
-    new TodoStore({
-      identity: { scopeId: SCOPE, deviceId: deviceId(device), label: device, token },
-      client: client(device),
-      transport: httpTransport({ baseUrl: running.url, token }),
-      socketUrl: running.socketUrl,
-    });
+  const open = (device: string, token: string): { readonly client: WeftClient; readonly session: WeftSession } => {
+    const device_ = client(device);
+    return {
+      client: device_,
+      session: new WeftSession({
+        client: device_,
+        schemaHash: HASH,
+        transport: httpTransport({ baseUrl: running.url, token }),
+        openSocket: (handlers) =>
+          connectSocketTransport({
+            url: running.socketUrl,
+            token,
+            onWake: () => handlers.onWake(),
+            onBatch: handlers.onBatch,
+            onStatusChange: handlers.onStatusChange,
+            cursor: handlers.cursor,
+          }),
+      }),
+    };
+  };
 
   const writer = open("alpha", "token-alpha");
   const reader = open("beta", "token-beta");
-  t.onTestFinished(writer.start());
-  t.onTestFinished(reader.start());
+  t.onTestFinished(writer.session.start());
+  t.onTestFinished(reader.session.start());
 
   // Both sockets up before anything is written, so the wake-up is the only way across.
-  await waitFor(() => reader.status().live && writer.status().live, "the sockets never connected");
+  await waitFor(() => reader.session.status().live && writer.session.status().live, "the sockets never connected");
 
-  writer.todos.create("todo-1", {
-    title: "buy milk",
-    notes: "",
-    done: false,
-    rank: "a0",
-    due_at: null,
-    auto_delete_days: null,
-  });
+  writer.client.create(
+    TODOS,
+    rowId("todo-1"),
+    values({ title: "buy milk", notes: "", done: false, rank: "a0", due_at: null, auto_delete_days: null }),
+    txnId("txn-1"),
+  );
+  writer.session.changed();
 
   await waitFor(
-    () => reader.rows().some((row) => row.title === "buy milk"),
-    "the other tab never heard about the change",
+    () => reader.client.getRow(TODOS, rowId("todo-1"))?.fields.get(fieldName("title")) === "buy milk",
+    "the other device never heard about the change",
   );
 });
 

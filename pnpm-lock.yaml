@@ -98,6 +98,9 @@ importers:
 
   demos/chat:
     dependencies:
+      '@sqlite.org/sqlite-wasm':
+        specifier: 3.53.0-build1
+        version: 3.53.0-build1
       react:
         specifier: ^19.2.8
         version: 19.2.8
@@ -123,6 +126,9 @@ importers:
 
   demos/issues:
     dependencies:
+      '@sqlite.org/sqlite-wasm':
+        specifier: 3.53.0-build1
+        version: 3.53.0-build1
       react:
         specifier: ^19.2.8
         version: 19.2.8
@@ -158,6 +164,9 @@ importers:
 
   demos/todo-list:
     dependencies:
+      '@sqlite.org/sqlite-wasm':
+        specifier: 3.53.0-build1
+        version: 3.53.0-build1
       react:
         specifier: ^19.2.8
         version: 19.2.8

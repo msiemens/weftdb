@@ -32,7 +32,7 @@ so every write the client makes afterward is saved by whichever store produced i
 | ----------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | `openSqliteExecutor`    | `node:sqlite`                                                              | The relay's own storage, and a synchronous stand-in for a device in tests |
 | `openWebSqliteExecutor` | SQLite compiled to WebAssembly, over the Origin Private File System (OPFS) | A device's durable database in a browser                                  |
-| `WebStorageClientStore` | `localStorage`                                                             | The device storage the todo list demo runs on                             |
+| `WebStorageClientStore` | `localStorage`                                                             | A device that needs no SQL on it, and no worker to hold one               |
 
 Choose `openWebSqliteExecutor` for a relational database with real transactions, at the cost
 of the worker setup below. Choose `WebStorageClientStore` when that cost is not worth paying:
@@ -74,7 +74,8 @@ indistinguishable from one that matched nothing.
 Where an executor is on the thread that renders, `executorRowSelect(executor)` fills the same
 member with a selection that runs the statement, and both read paths work. Give it the executor the
 store writes through, or a statement runs against one database while the rows it selects are saved
-into another.
+into another. A source assembled by hand this way implements `watch` and `unwatch` as no-ops,
+because the statement runs on the thread that reads it. `rowMapSource` supplies both.
 
 SQLite is used on the device rather than IndexedDB because:
 
@@ -111,6 +112,29 @@ serveWeftWorkerDefaults({
 It opens the OPFS executor, builds the store, installs the schema, serves the protocol, and tells
 the page whether the database opened. A browser with no access handle pool is reported rather than
 thrown, so the page can fail the open with the reason rather than a stack from a worker.
+
+`relay` says where the relay is. `{ baseUrl, socketUrl }` is the shorthand for the common case, and
+the worker builds the transport from it. A relay that is not at a URL is given as a transport
+instead:
+
+```ts title="src/storage-worker.ts"
+serveWeftWorkerDefaults({
+  schema,
+  sqlite3InitModule,
+  relay: {
+    transport: (token) => myTransport(token),
+    openSocket: (handlers, token) => myLiveConnection(handlers, token),
+  },
+});
+```
+
+Those two members are the ones `serveWeftWorker`'s own `session` declares. The supplied form is
+therefore the general one and the URL form is a shorthand for it, so an application that outgrows
+the shorthand keeps everything else this entry point does. `transport` is a function of the
+credential because a transport carries its token. The two forms cannot be mixed: each is `never` on
+the other side, so a `baseUrl` beside a `transport` does not compile. The demos use the supplied
+form. Their relay is a `WeftServer` in a `SharedWorker` of the same browser, reachable over a
+`MessagePort` that no URL describes and `fetch` cannot reach.
 
 The pool it opens in is named from the namespace `openWeftDatabase` wrote into this worker's URL, so
 two applications in one origin hold two pools rather than contending for one. `poolName` names the
@@ -283,6 +307,13 @@ export function TodoList() {
 `<collection>Mutators` takes an optional `notify` callback as its second argument. Leave it out over
 a mirror: the worker's push wakes the subscriptions when the change arrives, and a callback fired
 when the mutator returns would wake them before there is anything new to read.
+
+A statement has to be registered with the worker before the mirror can answer it, because the
+mirror answers out of what the worker last pushed. `use<Collection>Query` does that in an effect
+through the source's `watch` and hands it back on unmount, so nothing above needs to. Reading a
+statement without the hooks means calling `mirror.watch(query)` and `mirror.unwatch(query)`
+around it; registrations are counted, so one statement read in two places is one statement in the
+worker.
 
 Per-field hybrid logical clock (HLC) readings, three-way merge ancestors, and the outbox stay in
 the worker. The sync session and retention read those, and neither runs on the page, so the mirror

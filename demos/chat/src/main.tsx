@@ -7,9 +7,12 @@ import "./style.css";
 const container = document.querySelector("#root");
 if (container === null) throw new Error("the page has no #root to mount into");
 
-// One store per tab, opened from whatever this tab left in local storage last time.
+// One database per tab, opened before anything renders. The rows live in a storage worker and the
+// page reads a mirror of them, so there is nothing to show until this tab has hydrated one.
+const store = await ChatStore.open(window);
+
 createRoot(container).render(
   <StrictMode>
-    <App store={ChatStore.open(window)} />
+    <App store={store} />
   </StrictMode>,
 );

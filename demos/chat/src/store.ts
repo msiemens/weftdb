@@ -1,26 +1,18 @@
 // What is left of an application's data layer once the library and codegen have taken their
 // halves. Row types, decoding, queries, mutators and hooks come from `src/generated`, which
-// `weft generate` writes from the schema; syncing, connectivity and status come from
-// `WeftSession`. What is genuinely this application's is here: which storage it uses, who this
-// tab is, and the heartbeat that keeps its device record current.
-import { rowId, type RowId } from "weftdb/core";
-import {
-  connectSocketTransport,
-  httpTransport,
-  SubscriptionEngine,
-  WebStorageClientStore,
-  WeftSession,
-  type AsyncSyncTransport,
-  type BroadcastChannelLike,
-  type SessionStatus,
-  type StorageLike,
-  type WeftClient,
-} from "weftdb/client";
-import { schemaHash } from "weftdb/schema";
-import { rowMapSource } from "weftdb-react";
+// `weft generate` writes from the schema; the database, the worker that holds it and the sync
+// session all come from `openWeftDatabase`. What is genuinely this application's is here: which
+// scope this visitor is on, the heartbeat that keeps this tab's device record current, and what a
+// row looks like once the client's own knowledge is added to it.
+import { deviceId as toDeviceId, rowId, type DeviceId, type RowId } from "weftdb/core";
+import type { SessionStatus, StorageLike, WeftClientMirror } from "weftdb/client";
+import { openDemoDatabase, DemoSync, type DemoDatabase, type DemoOpenOverrides } from "weftdb-demo-shared/open";
 import { tabIdentity, type TabIdentity } from "weftdb-demo-shared/identity";
 import { schema } from "./schema.ts";
 import { DEMO } from "./scope.ts";
+import brokerUrl from "./broker.ts?sharedworker&url";
+import relayWorkerUrl from "./relay-worker.ts?sharedworker&url";
+import storageWorkerUrl from "./storage-worker.ts?worker&url";
 import {
   decodeDevices,
   decodeMessages,
@@ -29,18 +21,15 @@ import {
   devicesTable,
   messagesMutators,
   messagesQuery,
+  messagesTable,
   type DevicesMutators,
   type DevicesRow,
   type MessagesMutators,
   type MessagesRow,
-  type WeftSource,
 } from "./generated/bindings.ts";
 
-export { devicesQuery, messagesQuery, useDevices, useMessages } from "./generated/bindings.ts";
+export { devicesQuery, messagesQuery, useDevicesQuery, useMessages } from "./generated/bindings.ts";
 export type { DevicesRow, MessagesRow } from "./generated/bindings.ts";
-export type { BroadcastChannelLike } from "weftdb/client";
-
-const HASH = schemaHash(schema);
 
 /** How often a tab rewrites its own device record. */
 export const HEARTBEAT_MS = 5_000;
@@ -65,12 +54,7 @@ export type StoreStatus = SessionStatus;
 
 export interface ChatStoreOptions {
   readonly identity: TabIdentity;
-  readonly client: WeftClient;
-  /** Used whenever the socket is not up — the same session, over HTTP. */
-  readonly transport: AsyncSyncTransport;
-  readonly channel?: BroadcastChannelLike | undefined;
-  /** Where the relay's sync socket is. Omitted means HTTP and a poll, which still works. */
-  readonly socketUrl?: string | undefined;
+  readonly database: DemoDatabase;
   readonly now?: (() => number) | undefined;
 }
 
@@ -81,82 +65,62 @@ export interface WindowLike {
 
 export class ChatStore {
   readonly identity: TabIdentity;
-  readonly client: WeftClient;
-  readonly engine = new SubscriptionEngine();
+  readonly database: DemoDatabase;
   /**
-   * What the React hooks read from. Storage here is `localStorage`, so there is no SQLite for a
-   * statement-backed read to run against and `use<Collection>Query` raises rather than quietly
-   * matching nothing. Held rather than rebuilt per read, so a component's subscription survives
-   * a render.
+   * What the React hooks read from and what the mutators write through: the mirror of the client
+   * the storage worker holds. It is a `WeftSource`, so `use<Collection>` and `use<Collection>Query`
+   * both work over it — the second because there is a real SQLite on the other side of the port for
+   * a compiled statement to run against.
    */
-  readonly source: WeftSource;
+  readonly source: WeftClientMirror;
+  /** This tab as the relay knows it, minted by `openWeftDatabase` under this tab's namespace. */
+  readonly deviceId: DeviceId;
   readonly messages: MessagesMutators;
   readonly devices: DevicesMutators;
-  readonly session: WeftSession;
+  /** The status pills, the online toggle, and the two verbs the header's buttons call. */
+  readonly connection: DemoSync;
   readonly now: () => number;
 
   constructor(options: ChatStoreOptions) {
     this.identity = options.identity;
-    this.client = options.client;
-    this.source = rowMapSource({ engine: this.engine, rows: options.client.rows }, options.client.scopeId);
+    this.database = options.database;
+    this.source = options.database.weft.source;
+    this.deviceId = toDeviceId(this.source.deviceId);
+    this.connection = new DemoSync(options.database);
     this.now = options.now ?? (() => Date.now());
-    this.session = new WeftSession({
-      client: options.client,
-      schemaHash: HASH,
-      transport: options.transport,
-      ...(options.channel === undefined ? {} : { channel: options.channel }),
-      ...(options.now === undefined ? {} : { now: options.now }),
-      // Views read through the engine, so anything that moves the client tells it to look again.
-      onChange: () => this.engine.notify(),
-      ...(options.socketUrl === undefined
-        ? {}
-        : {
-            // The socket is what this demo is for: the relay says "this scope is now at sequence
-            // N" and the session syncs on being told, rather than on a timer.
-            openSocket: (handlers) =>
-              connectSocketTransport({
-                url: options.socketUrl as string,
-                token: options.identity.token,
-                onWake: () => handlers.onWake(),
-                onBatch: handlers.onBatch,
-                onStatusChange: handlers.onStatusChange,
-                cursor: handlers.cursor,
-              }),
-          }),
-    });
-    const changed = (): void => this.session.changed();
-    this.messages = messagesMutators(options.client, changed);
-    this.devices = devicesMutators(options.client, changed);
+    // No `notify` callback: the worker's echo wakes the subscriptions when the change arrives, and
+    // a callback fired when the mutator returned would wake them before there was anything new.
+    this.messages = messagesMutators(this.source);
+    this.devices = devicesMutators(this.source);
   }
 
-  /** Opens the state this tab left behind, or a fresh client on a first visit. */
-  static open(window: WindowLike): ChatStore {
-    // The scope comes from local storage, so every tab of this browser joins the same room while
-    // another visitor gets their own. The device comes from session storage, so each tab is a
-    // device of its own.
+  /**
+   * Opens this tab's database.
+   *
+   * The scope comes from local storage, so every tab of this browser joins the same room while
+   * another visitor gets their own. The namespace comes from session storage, so **each tab is a
+   * database of its own** — its own election, its own storage worker, its own OPFS pool and its own
+   * device id — which is what puts a second chip on the device strip when you open a second tab.
+   */
+  static async open(window: WindowLike, overrides?: DemoOpenOverrides): Promise<ChatStore> {
     const identity = tabIdentity(window.sessionStorage, window.localStorage, { demo: DEMO });
-    const persistence = new WebStorageClientStore(window.localStorage, schema, `weftdb-demo/${DEMO}`);
-    return new ChatStore({
-      identity,
-      client: persistence.hydrate(identity.scopeId, identity.deviceId),
-      transport: httpTransport({ baseUrl: "/api", token: identity.token }),
-      // Same origin as the page, so the dev server's proxy carries the upgrade too.
-      socketUrl: `${location.origin.replace(/^http/u, "ws")}/api/sync`,
-      // Named for the scope, so two demos in two tabs do not wake each other's sessions.
-      channel:
-        typeof BroadcastChannel === "undefined" ? undefined : new BroadcastChannel(`weftdb-demo/${identity.scopeId}`),
+    const database = await openDemoDatabase({
+      schema,
+      scopeId: identity.scopeId,
+      namespace: `weftdb-demo/${DEMO}/${identity.deviceId}`,
+      worker: storageWorkerUrl,
+      broker: brokerUrl,
+      relayWorker: relayWorkerUrl,
+      ...(overrides === undefined ? {} : { overrides }),
     });
+    return new ChatStore({ identity, database });
   }
 
-  /** Starts the session and the heartbeat that puts this tab on the device strip. */
+  /** Starts the heartbeat that puts this tab on the device strip. */
   start(): () => void {
-    const stop = this.session.start();
     this.touch();
     const timer = setInterval(() => this.touch(), HEARTBEAT_MS);
-    return () => {
-      clearInterval(timer);
-      stop();
-    };
+    return () => clearInterval(timer);
   }
 
   /**
@@ -165,9 +129,9 @@ export class ChatStore {
    * device record is a current value, a message is a fact that already happened.
    */
   touch(): void {
-    const id = String(this.identity.deviceId);
+    const id = String(this.deviceId);
     const values = { label: this.identity.label, last_seen: this.now() };
-    if (this.client.getRow(devicesTable, rowId(id)) === undefined) {
+    if (this.source.getRow(devicesTable, rowId(id)) === undefined) {
       this.devices.create(id, values);
       return;
     }
@@ -178,61 +142,62 @@ export class ChatStore {
   view(row: MessagesRow): MessageView {
     return {
       ...row,
-      dirty: this.client.isRowDirty(messagesQuery().tableName, rowId(row.id)),
-      mine: row.device === String(this.identity.deviceId),
+      dirty: this.source.isRowDirty(messagesTable, rowId(row.id)),
+      mine: row.device === String(this.deviceId),
     };
   }
 
   /**
-   * The device strip: everything that has ever joined this room, ordered by device id.
+   * The device strip: everything that has ever joined this room, in the order the statement that
+   * selected it put them.
    *
-   * The order is a total one over a key the row cannot change: a device id is written when the
-   * row is created and is immutable after it, so the strip holds still while heartbeats land.
-   * `last_seen` is the value every heartbeat rewrites, which makes it the one field a stable
-   * order cannot read. Comparison is by code unit rather than `localeCompare`, so two devices
-   * in two locales lay the same rows out the same way.
+   * That order is a total one over a key the row cannot change — a device id is written when the
+   * row is created and is immutable after it — so the strip holds still while heartbeats land.
+   * `last_seen` is the value every heartbeat rewrites, which makes it the one field a stable order
+   * cannot read. What is added here is the pair of facts the row itself cannot carry: whether the
+   * heartbeat is recent enough to call the device present, and whether it is this tab.
    */
   presence(rows: readonly DevicesRow[]): readonly DeviceView[] {
     const cutoff = this.now() - PRESENT_MS;
-    return [...rows]
-      .sort((left, right) => compareIds(left.id, right.id))
-      .map((row) => ({
-        ...row,
-        here: row.last_seen >= cutoff,
-        self: row.id === String(this.identity.deviceId),
-      }));
+    return rows.map((row) => ({
+      ...row,
+      here: row.last_seen >= cutoff,
+      self: row.id === String(this.deviceId),
+    }));
   }
 
   /** The log outside a render, ordered as the page shows it. */
   rows(): readonly MessageView[] {
-    return this.engine
-      .getSnapshot(messagesQuery("created"), this.client.rows.values())
+    return this.source.engine
+      .getSnapshot(messagesQuery("created"), this.source.rows.values())
       .rows.map((row) => this.view(decodeMessages(row)));
   }
 
   /** The device records outside a render. */
   deviceRows(): readonly DevicesRow[] {
-    return this.engine.getSnapshot(devicesQuery("id"), this.client.rows.values()).rows.map((row) => decodeDevices(row));
+    return this.source.engine
+      .getSnapshot(devicesQuery("id"), this.source.rows.values())
+      .rows.map((row) => decodeDevices(row));
   }
 
   status(): StoreStatus {
-    return this.session.status();
+    return this.connection.status();
   }
 
   subscribeStatus(listener: () => void): () => void {
-    return this.session.subscribe(listener);
+    return this.connection.subscribe(listener);
   }
 
   get online(): boolean {
-    return this.session.online;
+    return this.connection.online;
   }
 
   setOnline(online: boolean): void {
-    this.session.setOnline(online);
+    this.connection.setOnline(online);
   }
 
   discardQuarantine(): void {
-    this.session.discardQuarantine();
+    this.connection.discardQuarantine();
   }
 
   /** Posts a message. Append-class rows carry no update, so this is the only write there is. */
@@ -241,23 +206,18 @@ export class ChatStore {
     if (trimmed === "") return;
     this.messages.create(newMessageId(), {
       body: trimmed,
-      device: String(this.identity.deviceId),
+      device: String(this.deviceId),
       author: this.identity.label,
     });
   }
 
   async sync(): Promise<void> {
-    await this.session.sync();
+    await this.connection.sync();
   }
 
-  changed(): void {
-    this.session.changed();
+  async dispose(): Promise<void> {
+    await this.database.dispose();
   }
-}
-
-/** Code units, the way `SubscriptionEngine` orders a query, and for the same reason. */
-function compareIds(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 export function newMessageId(): RowId {

@@ -15,7 +15,6 @@
     "demo": "pnpm --filter weftdb-demo-todo dev",
     "demo:chat": "pnpm --filter weftdb-demo-chat dev",
     "demo:issues": "pnpm --filter weftdb-demo-issues dev",
-    "demo:relay": "pnpm --filter weftdb-demo-shared relay",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",

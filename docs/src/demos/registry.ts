@@ -3,9 +3,9 @@
  *
  * One entry per demo. Adding a second — a relational app, a live chat — is an entry here, a
  * component under `./<slug>/`, and one line in the map in `pages/demos/[slug].astro`. Nothing
- * else: the routes, the sidebar links and the dev-server proxy are all derived from this list.
+ * else: the routes and the sidebar links are both derived from this list.
  *
- * This file is imported by `astro.config.mjs` to build the proxy table, so it must stay free of
+ * This file is imported by `astro.config.mjs` to build the sidebar, so it must stay free of
  * component imports — data only, or loading the config would pull React into it.
  *
  * Each demo is a workspace package under `demos/`, kept there rather than moved under `docs/`:
@@ -20,18 +20,6 @@ export interface DemoEntry {
   /** One line, used as the page description. */
   readonly blurb: string;
 }
-
-/**
- * Every demo talks to one relay at one same-origin path.
- *
- * The relay is schema-blind, so it needs to know nothing about any demo's schema, and scope
- * equality already keeps them apart: each demo prefixes its scopes with its own slug, and each
- * visitor gets a scope of their own underneath that. One process, one port, one proxy entry.
- */
-export const DEMO_API_BASE = "/api";
-
-/** Matches `DEFAULT_RELAY_PORT` in `weftdb-demo-shared/relay`. */
-export const DEMO_RELAY_PORT = 8787;
 
 export const DEMOS: readonly DemoEntry[] = [
   {
