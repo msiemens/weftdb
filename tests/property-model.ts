@@ -110,12 +110,18 @@ export const PROPERTY_RUNS = positiveInteger(process.env["WEFT_PROPERTY_RUNS"]) 
 export const SCENARIO_RUNS = positiveInteger(process.env["WEFT_SCENARIO_RUNS"]) ?? 200;
 export const WORLD_RUNS = positiveInteger(process.env["WEFT_WORLD_RUNS"]) ?? 300;
 
-const configuredSeed = positiveInteger(process.env["WEFT_PROPERTY_SEED"]);
+const configuredSeed = anyInteger(process.env["WEFT_PROPERTY_SEED"]);
 if (configuredSeed !== undefined) fc.configureGlobal({ seed: configuredSeed });
 
 function positiveInteger(value: string | undefined): number | undefined {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+/** Any integer, because fast-check reports about half its seeds negative. */
+function anyInteger(value: string | undefined): number | undefined {
+  const parsed = Number(value);
+  return value !== undefined && value !== "" && Number.isInteger(parsed) ? parsed : undefined;
 }
 
 export const DAY_MS = 24 * 60 * 60 * 1000;
