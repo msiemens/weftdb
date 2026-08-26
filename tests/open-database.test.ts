@@ -218,7 +218,10 @@ test("§8.7 a request in flight when the worker goes away rejects, and the re-hy
 
     // And the tab reconnects to whichever worker is serving now and reloads from the file, so what
     // it shows is whatever committed.
-    await waitFor(() => weft.source.rows.size === 1, "the tab never reconnected");
+    // Waited on the statement and not on the rows: a reconnect pushes the scope's rows and the
+    // answers to the statements this tab had registered as two separate messages, so a tab holding
+    // the row is not yet a tab whose list has been recomputed.
+    await waitFor(() => rowsOf(weft, "scope-1").length === 1, "the tab never reconnected");
     assert.deepEqual(rowsOf(weft, "scope-1").map(title), ["committed"]);
   }));
 
