@@ -361,7 +361,7 @@ export class WeftClient {
       // what was actually sent is drained — over a network an edit made while the push was in
       // flight is sitting in the outbox, acknowledged by nobody.
       const acknowledged = new Set<WeftOp>(sent);
-      this.outbox.splice(0, this.outbox.length, ...this.outbox.filter((op) => !acknowledged.has(op)));
+      this.retainQueued((op) => !acknowledged.has(op));
       for (const op of sent) this.outboxAttempts.delete(opKey(op));
       this.applyAcks(result.acks, sent);
       // Whatever was typed while this push was on the wire is still queued, and the loop's own
@@ -551,7 +551,7 @@ export class WeftClient {
     // transaction with what was sent — a create still being filled in is exactly that — and
     // draining it by id would retire an op the server has never seen.
     const acknowledged = new Set<WeftOp>(drained);
-    this.outbox.splice(0, this.outbox.length, ...this.outbox.filter((op) => !acknowledged.has(op)));
+    this.retainQueued((op) => !acknowledged.has(op));
     for (const op of drained) this.outboxAttempts.delete(opKey(op));
     this.applyAcks([...acks], drained);
   }
@@ -612,7 +612,7 @@ export class WeftClient {
 
   private moveTxnToQuarantine(rejection: Rejection): void {
     const rejected = this.outbox.filter((op) => op.txnId === rejection.op.txnId);
-    this.outbox.splice(0, this.outbox.length, ...this.outbox.filter((op) => op.txnId !== rejection.op.txnId));
+    this.retainQueued((op) => op.txnId !== rejection.op.txnId);
     for (const op of rejected) {
       this.outboxAttempts.delete(opKey(op));
       const quarantined = { ...op, rejectedAt: this.now(), reason: rejection.reason };
@@ -632,7 +632,7 @@ export class WeftClient {
     const satisfied = this.outbox.filter((op) => op.tableName === tableName && op.rowId === rowId && matches(op));
     if (satisfied.length === 0) return;
     const dropped = new Set<WeftOp>(satisfied);
-    this.outbox.splice(0, this.outbox.length, ...this.outbox.filter((op) => !dropped.has(op)));
+    this.retainQueued((op) => !dropped.has(op));
     for (const op of satisfied) this.outboxAttempts.delete(opKey(op));
     this.recomputeDirty(tableName, rowId);
   }
@@ -642,11 +642,7 @@ export class WeftClient {
     // flush, and quarantined work is never auto-retried — the user decides (§5.5).
     const diverged = this.outbox.filter((op) => op.tableName === tableName && op.rowId === rowId);
     if (diverged.length === 0) return;
-    this.outbox.splice(
-      0,
-      this.outbox.length,
-      ...this.outbox.filter((op) => op.tableName !== tableName || op.rowId !== rowId),
-    );
+    this.retainQueued((op) => op.tableName !== tableName || op.rowId !== rowId);
     for (const op of diverged) {
       this.outboxAttempts.delete(opKey(op));
       this.quarantine.push({ ...op, rejectedAt: this.now(), reason });
@@ -666,6 +662,18 @@ export class WeftClient {
     this.outbox.push(op);
     this.outboxAttempts.set(opKey(op), 0);
     this.rememberQueued(op);
+  }
+
+  /**
+   * Keeps the ops this predicate accepts, and drops the per-row counts along with the rest. A
+   * length is the whole of what says whether those counts still describe the outbox, so counts
+   * kept across a removal read as current again the moment later writes bring the outbox back to
+   * the length they were taken at, and every row is answered for out of a queue that has since
+   * been emptied.
+   */
+  private retainQueued(keep: (op: WeftOp) => boolean): void {
+    this.outbox.splice(0, this.outbox.length, ...this.outbox.filter(keep));
+    this.queuedIndexedLength = -1;
   }
 
   /**

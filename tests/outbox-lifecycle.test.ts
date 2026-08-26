@@ -91,6 +91,50 @@ test("a row whose only queued work was appended straight to the outbox still rea
   assert.equal(client.isRowDirty(NOTES, restored), true, "the hydrated op left its row reading as clean");
 });
 
+test("a snapshot rebuilds a row dirty for the work this device still holds", async () => {
+  // The per-row counts behind the dirty flag pass for a description of the outbox whenever their
+  // length matches its length, so counts kept across a removal are read as current again the
+  // moment later writes bring the outbox back to that length. Every row is then answered for out
+  // of the emptied queue: `isRowDirty` reports clean over unsent work, and a row a snapshot
+  // rebuilds is constructed to match, showing a person their edit as saved (§9.25).
+  const server = new WeftServer();
+  const author = device("tab-1");
+  await author.create(NOTES, ROW, values({ title: "shared" }), txnId("create-shared"));
+  await author.syncWith(inProcessTransport(server), HASH);
+
+  const client = device("tab-2");
+  await client.syncWith(inProcessTransport(server), HASH);
+
+  // A row the scope has never heard of: a resync sets its unsent work aside, and the delete queued
+  // behind that is refused on the next push. The row is gone locally by then, so the removal that
+  // refusal makes is followed by no recompute for anything.
+  const local = rowId("row-local");
+  await client.create(NOTES, local, values({ title: "never pushed" }), txnId("create-local"));
+  await client.applySnapshot(server.snapshot(SCOPE));
+  await client.delete(NOTES, local, txnId("delete-local"));
+  await client.syncWith(inProcessTransport(server), HASH);
+  assert.equal(client.outbox.length, 0, "the refused delete stayed queued");
+
+  // One op queued against a row the scope does hold, which is what brings the outbox back to the
+  // length the counts were taken at.
+  await client.delete(NOTES, ROW, txnId("delete-shared"));
+  assert.equal(client.isRowDirty(NOTES, ROW), true, "a row whose delete is still queued read as clean");
+
+  await client.applySnapshot(server.snapshot(SCOPE));
+
+  assert.equal(
+    client.outbox.some((op) => op.rowId === ROW),
+    true,
+    "the queued delete left the outbox, so the flag has nothing to disagree with",
+  );
+  assert.equal(client.isRowDirty(NOTES, ROW), true, "the rebuilt row read as clean");
+  assert.equal(
+    client.rows.get(`${NOTES}\0${ROW}`)?.internals._weft_dirty,
+    1,
+    "the snapshot rebuilt the row clean while its own delete waited in the outbox",
+  );
+});
+
 test("quarantined work on one collection does not mark a row of the same id in another", async () => {
   // A row id is unique within its collection and nowhere else, so anything keyed by id alone
   // conflates two rows that merely share a name.
