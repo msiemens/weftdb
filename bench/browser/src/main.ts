@@ -5,18 +5,7 @@
 // Every case is attempted on its own. One that throws is recorded as failed with its message and
 // the run carries on: a partial table answers most of the question, and an empty one answers none
 // of it.
-import { serializeClient, WebStorageClientStore } from "weftdb/client";
-import { DEVICE, SCOPE, schema, syncedClient } from "./fixtures.ts";
-import {
-  duration,
-  failure,
-  messageOf,
-  perOperation,
-  repeat,
-  repeatAsync,
-  type Budget,
-  type CaseRow,
-} from "./harness.ts";
+import { duration, failure, messageOf, perOperation, repeatAsync, type Budget, type CaseRow } from "./harness.ts";
 import type { BenchRequest, BenchResponse, DeltaValue, InitValue, SamplesValue } from "./protocol.ts";
 
 /** Database sizes every durable case is measured at. */
@@ -351,74 +340,6 @@ function openProxy(onRequest: (id: number, reply: (id: number) => void) => void)
   };
 }
 
-/**
- * The baseline the three demos ship today: the whole client serialised to JSON and written into
- * `localStorage` on the main thread, on every keystroke. The key is removed afterwards whatever
- * happens — a run that left eight megabytes behind would break the next one before it started.
- */
-function webStorageCase(size: number): readonly CaseRow[] {
-  const store = new WebStorageClientStore(localStorage, schema, `weftdb-bench/${size}`);
-  const client = syncedClient(size);
-  const budget = wholeDatasetBudget(size);
-  const rows: CaseRow[] = [];
-
-  // Measured before anything is attempted, because it is the number that explains the other two:
-  // one origin gets a few megabytes of `localStorage`, and a scope past that cannot be written at
-  // any speed. Lengths, not bytes — the quota is counted in UTF-16 code units, as the string is.
-  const characters = JSON.stringify(serializeClient(client)).length;
-  const scale = `${(characters / 1_048_576).toFixed(2)} MB of JSON`;
-
-  try {
-    // Splitting the serialising off from the writing is what keeps a refused write informative:
-    // this half always produces a number, and it is the half that blocks the main thread.
-    rows.push(
-      duration(
-        "webstorage.serialize",
-        size,
-        `the client turned into a string — ${scale}. Every save pays this before it writes a byte`,
-        repeat(() => {
-          const start = performance.now();
-          const json = JSON.stringify(serializeClient(client));
-          const elapsed = performance.now() - start;
-          if (json.length === 0) throw new Error("serialised to nothing");
-          return elapsed;
-        }, budget),
-      ),
-    );
-  } catch (error) {
-    rows.push(failure("webstorage.serialize", size, messageOf(error)));
-  }
-
-  try {
-    rows.push(
-      duration(
-        "webstorage.save",
-        size,
-        `serialise and write ${scale} into localStorage, on the main thread — what the demos do today`,
-        repeat(() => {
-          const start = performance.now();
-          store.save(client);
-          return performance.now() - start;
-        }, budget),
-      ),
-    );
-  } catch (error) {
-    // Not a slow save but an impossible one, and saying so is the whole value of this case: a
-    // scope this size has no localStorage answer at all, however long anyone is willing to wait.
-    rows.push(
-      failure(
-        "webstorage.save",
-        size,
-        `${messageOf(error)} — ${scale} is past what one origin may hold, so this write never completes at any size of budget; the CPU half of it is webstorage.serialize`,
-      ),
-    );
-  } finally {
-    store.forget(SCOPE, DEVICE);
-  }
-
-  return rows;
-}
-
 // ---------------------------------------------------------------------------------------------
 // The run.
 
@@ -484,12 +405,6 @@ async function runAll(): Promise<void> {
     status("Measuring the whole follower path…");
     if (opfs) await attempt("broadcast.full", INTERACTIVE, () => broadcastFull(worker, INTERACTIVE));
     else publish(failure("broadcast.full", INTERACTIVE, "no OPFS sync access handle pool in this browser"));
-
-    for (const size of SIZES) {
-      status(`Saving a ${size.toLocaleString("en-US")}-row client to localStorage…`);
-      await yieldToPage();
-      await attempt("webstorage.save", size, () => Promise.resolve(webStorageCase(size)));
-    }
   } finally {
     try {
       await worker.send({ type: "dispose" });

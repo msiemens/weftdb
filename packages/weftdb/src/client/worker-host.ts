@@ -1,5 +1,4 @@
-// The worker half of the page-to-worker bridge. `WorkerPortTransport` has always been a sender
-// with nothing on the other end; this is the other end.
+// The worker half of the page-to-worker bridge: the end `WorkerPortTransport` sends to.
 //
 // The whole client runs here. That is forced rather than chosen: `SqlExecutor` is synchronous, the
 // only browser storage SQLite can reach synchronously is an OPFS sync access handle, and a sync

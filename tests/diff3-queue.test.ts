@@ -1,8 +1,8 @@
 // Typing is not one edit. A field that merges with diff3 carries the hash of the version it
 // was written against, and several edits queued before a sync are pushed together — so each
-// one's ancestor has to be the edit queued before it, not the last thing the server said. When
-// it was the latter, a single device typing into a note could not push at all: every op after
-// the first was rejected as `merge_required` against a value only it had written.
+// one's ancestor has to be the edit queued before it, not the last thing the server said. Take
+// the latter and a single device typing into a note cannot push at all: every op after the first
+// is rejected as `merge_required` against a value only that device has written.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import fc from "fast-check";
@@ -224,12 +224,13 @@ test("a create transaction may refine a diff3 field before it is pushed", () => 
 });
 
 test("prose written before the relay was ever heard from does not come back marked", () => {
-  // The ancestor a rebase merges against used to be recorded only when a pull's value was
-  // applied. A device that wrote the field before it ever received one — a row made offline, or
-  // one whose every pull is shadowed by the unsent write sitting on top of it — therefore reached
-  // `rebase` with no ancestor, and `diff3("", mine, theirs)` matches neither side and returns a
-  // conflict block. The markers are the signal that two writers contended (§6), so producing them
-  // where the relay's copy is the very text this edit was made from makes the signal a lie.
+  // The ancestor a rebase merges against is recorded on every pull, applied or not. Record it
+  // only when the value is applied and a device that wrote the field before it ever received one —
+  // a row made offline, or one whose every pull is shadowed by the unsent write sitting on top of
+  // it — reaches `rebase` with no ancestor, where `diff3("", mine, theirs)` matches neither side
+  // and returns a conflict block. The markers are the signal that two writers contended (§6), so
+  // producing them where the relay's copy is the very text this edit was made from makes the
+  // signal a lie.
   const prose = "alpha\nbravo\ncharlie\ndelta";
   const server = new WeftServer();
 

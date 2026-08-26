@@ -12,13 +12,34 @@ import type { SyncArguments, SyncOperation, SyncResults } from "weftdb/server/re
 import { snapshotFromEnvelope } from "weftdb/server/snapshot";
 import { FIRST_RETRY_MS, nextRetryMs } from "./backoff.ts";
 import type { AsyncSyncTransport } from "./transport.ts";
-import {
-  TOKEN_PROTOCOL_PREFIX,
-  WAKEUP_PROTOCOL,
-  type ScopeAdvanced,
-  type WebSocketFactory,
-  type WebSocketLike,
-} from "./wakeups.ts";
+
+/** The relay saying a scope has moved. It carries the cursor to catch up to and nothing else. */
+export interface ScopeAdvanced {
+  readonly type: "advanced";
+  readonly scopeId: ScopeId;
+  readonly serverSeq: number;
+}
+
+/** The slice of the DOM `WebSocket` this needs, so a test can supply its own. */
+export interface WebSocketLike {
+  addEventListener(type: "open" | "message" | "close" | "error", listener: (event: never) => void): void;
+  send?(data: string): void;
+  close(): void;
+  readonly readyState: number;
+}
+
+export type WebSocketFactory = (url: string, protocols: readonly string[]) => WebSocketLike;
+
+/**
+ * The two subprotocols a connection offers: the dialect, and the credential.
+ *
+ * The token travels as a subprotocol because a browser's `WebSocket` constructor takes no headers,
+ * and a query string would put the credential in the relay's access log. The relay declares the same
+ * pair for itself in `server/websocket.ts`; the strings are on the wire, so changing one is changing
+ * a protocol and both ends move together.
+ */
+export const WAKEUP_PROTOCOL = "weft.v1";
+export const TOKEN_PROTOCOL_PREFIX = "weft.token.";
 
 /** What arrives on the socket, before it has been established which of the kinds it is. */
 interface IncomingMessage {

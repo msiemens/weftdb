@@ -21,8 +21,6 @@ import {
 } from "weftdb/core";
 import {
   QueryCache,
-  rowMapSource,
-  SqlQueryUnavailableError,
   useWeftConflicts,
   useWeftQuery,
   useWeftQuerySnapshot,
@@ -271,26 +269,6 @@ test("§8.3 an unmounted component stops receiving notifications", async () => {
   });
   assert.equal(renders, rendersAtUnmount, "an unmounted component was still subscribed");
   assert.equal(cache.listeners.size, 0, "the subscription was not released");
-});
-
-test("§8.3 a device with no SQL database says so rather than reading back an empty statement", () => {
-  // One source type covers both read paths, so a device persisting through `WebStorageClientStore`
-  // still has to answer `select`. Answering with no rows would be indistinguishable from a
-  // statement that matched nothing, which is a list that renders empty and never explains itself.
-  const engine = new SubscriptionEngine();
-  const rows = new Map<string, LocalRow>();
-  const source: WeftSource = rowMapSource({ engine, rows }, scopeId("user-1"));
-
-  assert.equal(source.engine, engine);
-  assert.equal(source.rows, rows);
-  assert.equal(source.scopeId, "user-1");
-
-  const statements = compileOnlyKysely<{ tasks: { id: string; scope_id: string } }>();
-  const query = reactiveSqlQuery({
-    tableName: TASKS,
-    query: statements.selectFrom("tasks").select("id").where("scope_id", "=", "user-1"),
-  });
-  assert.throws(() => source.select(query), SqlQueryUnavailableError);
 });
 
 test("§8.3 a statement with no answer yet renders no rows, and fills when the answer arrives", async () => {

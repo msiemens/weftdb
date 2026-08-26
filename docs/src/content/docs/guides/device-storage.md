@@ -5,10 +5,8 @@ sidebar:
   order: 6
 ---
 
-A device persists what it holds through one of two paths: `SqlExecutor`, which two SQLite
-builds implement, or `WebStorageClientStore`, which serialises the whole client as one JSON
-document and never runs SQL. `SqlExecutor` is what `SqliteClientStore` runs against, and it
-declares:
+A device persists what it holds through `SqlExecutor`, the port two SQLite builds implement.
+`SqliteClientStore` runs against it, and it declares:
 
 ```ts
 export interface SqlExecutor {
@@ -22,9 +20,8 @@ export interface SqlExecutor {
 `SqliteClientStore` takes an executor and a schema and turns them into a device's durable
 state. `installSchema()` runs the generated DDL, and adds any column a schema edit introduced
 since the database was last opened. `hydrate(scopeId, deviceId)` reads every row, tombstone,
-outbox entry and quarantined op back into a fresh `WeftClient`. Both it and
-`WebStorageClientStore` set themselves as the client's persistence before `hydrate` returns,
-so every write the client makes afterward is saved by whichever store produced it.
+outbox entry and quarantined op back into a fresh `WeftClient`. It sets itself as the client's
+persistence before `hydrate` returns, so every write the client makes afterward is saved.
 
 ## Choosing a storage backend
 
@@ -32,18 +29,9 @@ so every write the client makes afterward is saved by whichever store produced i
 | ----------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
 | `openSqliteExecutor`    | `node:sqlite`                                                              | The relay's own storage, and a synchronous stand-in for a device in tests |
 | `openWebSqliteExecutor` | SQLite compiled to WebAssembly, over the Origin Private File System (OPFS) | A device's durable database in a browser                                  |
-| `WebStorageClientStore` | `localStorage`                                                             | A device that needs no SQL on it, and no worker to hold one               |
 
-Choose `openWebSqliteExecutor` for a relational database with real transactions, at the cost
-of the worker setup below. Choose `WebStorageClientStore` when that cost is not worth paying:
-it needs nothing but an object with `getItem`, `setItem` and `removeItem`, which `localStorage`
-already is, and it runs on the main thread. `openSqliteExecutor` is for the relay and the test
-suite; neither runs in a browser.
-
-`WebStorageClientStore` takes the storage object, the schema, and a namespace that defaults to
-`"weft"`: `new WebStorageClientStore(localStorage, schema, "myapp")`. Every key it writes is
-prefixed with that namespace and the device's `scopeId` and `deviceId`, so one browser can hold
-data for more than one application, or more than one `scopeId`, without collision.
+`openWebSqliteExecutor` needs the worker setup below. `openSqliteExecutor` is for the relay and
+the test suite; neither runs in a browser.
 
 ## Building the source a hook reads
 
@@ -51,31 +39,38 @@ A generated hook takes a `WeftSource` ([reading data](/guides/reading-data/)), w
 the thread that renders is not on its own: it holds the rows and the scope, and the subscription
 engine and the statement selection come from beside it.
 
-A device storing through `WebStorageClientStore` has no SQLite for a statement to run against, so
-`rowMapSource` supplies a selection that says so:
+`executorRowSelect(executor)` supplies the statement selection where the executor is on the thread
+that renders:
 
 ```ts title="src/store.ts"
-import { SubscriptionEngine, WebStorageClientStore } from "weftdb/client";
+import { executorRowSelect, SubscriptionEngine, type WeftSource } from "weftdb/client";
+import { SqliteClientStore } from "weftdb/client/sqlite";
 import { deviceId, scopeId } from "weftdb/core";
-import { rowMapSource } from "weftdb-react";
+import { openSqliteExecutor } from "weftdb/server/node-sqlite";
 import { schema } from "./schema.ts";
 
-const store = new WebStorageClientStore(localStorage, schema, "myapp");
+const executor = openSqliteExecutor("weft.sqlite3");
+const store = new SqliteClientStore(executor, schema);
+store.installSchema();
 const client = store.hydrate(scopeId("user-1"), deviceId("laptop"));
-const engine = new SubscriptionEngine();
 
-export const source = rowMapSource({ engine, rows: client.rows }, client.scopeId);
+export const source: WeftSource = {
+  engine: new SubscriptionEngine(),
+  rows: client.rows,
+  scopeId: client.scopeId,
+  select: executorRowSelect(executor),
+  watch: () => Promise.resolve(),
+  unwatch: () => undefined,
+};
 ```
 
-`use<Collection>` reads the row map and runs. `use<Collection>Query` raises
-`SqlQueryUnavailableError`, because a statement that answered with no rows would be
-indistinguishable from one that matched nothing.
+Give it the executor the store writes through. Otherwise a statement runs against one database
+while the rows it selects are saved into another. `watch` and `unwatch` are no-ops here, because
+the statement runs on the thread that reads it and there is nothing to register it with. Both
+`use<Collection>` and `use<Collection>Query` read through this source unchanged.
 
-Where an executor is on the thread that renders, `executorRowSelect(executor)` fills the same
-member with a selection that runs the statement, and both read paths work. Give it the executor the
-store writes through, or a statement runs against one database while the rows it selects are saved
-into another. A source assembled by hand this way implements `watch` and `unwatch` as no-ops,
-because the statement runs on the thread that reads it. `rowMapSource` supplies both.
+The executor above is `node:sqlite`, which is synchronous and reachable from the thread that
+renders. A browser reaches SQLite only through the worker below.
 
 SQLite is used on the device rather than IndexedDB because:
 

@@ -512,8 +512,8 @@ class PortEndpoint<Incoming> {
     this.#port.start();
   }
 
-  // `unknown` rather than the protocol's own union, because the protocol is no longer all that
-  // crosses these ports: a tab that was handed a connection sends its `MessagePort` through one.
+  // `unknown` rather than the protocol's own union, because the protocol is not all that crosses
+  // these ports: a tab that was handed a connection sends its `MessagePort` through one.
   postMessage(message: unknown): void {
     this.#port.postMessage(message);
   }

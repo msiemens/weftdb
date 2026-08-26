@@ -32,7 +32,7 @@ import {
 } from "./wasm-sqlite.ts";
 import { serveWeftWorker, type WeftWorkerHost, type WorkerHostPortLike } from "./worker-host.ts";
 import type { WeftDurability, WeftWorkerReady } from "./worker.ts";
-import type { WebSocketFactory } from "./wakeups.ts";
+import type { WebSocketFactory } from "./socket-transport.ts";
 
 /** How hard to try, whichever way the relay is named. Timing, and nothing about where it is. */
 export interface WeftWorkerRelayTuning {

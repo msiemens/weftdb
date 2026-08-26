@@ -3,9 +3,9 @@
 // What is being tested is the composition, not the parts. Election, the port handover through the
 // broker, forwarding an arriving port into the worker, one engine per mirror, the device identity,
 // what happens when the tab holding the worker dies, and the order the whole thing comes down in
-// are each a mistake an application used to be able to make silently — no error, no type error,
-// just rows that stop moving. Every test below fails when its line is removed, which is the only
-// reason any of them is here.
+// are each a mistake an application assembling this by hand makes silently — no error, no type
+// error, just rows that stop moving. Every test below fails when its line is removed, which is the
+// only reason any of them is here.
 //
 // Everything is real except the browser. `node:worker_threads` MessageChannel stands in for the
 // worker port and for every tab's connection, the shipped broker relays those connections in this
@@ -138,11 +138,11 @@ test("§8.7 a second tab on the same scope follows, and a write in one appears i
 
 test("§8.7 one scope in two namespaces is two databases, and neither tab is in the other's", async () =>
   withBrowser(async (browser) => {
-    // A database is a namespace and a scope together. The scope alone used to name it, so two
-    // applications sharing an origin — or one application keeping a second profile beside the first —
-    // met at the Web Lock, at the broker, and on the OPFS pool, and the second of them silently
-    // became another tab of the first's database. Under the same person's `scopeId`, which is
-    // exactly when it would happen.
+    // A database is a namespace and a scope together. Named by the scope alone, two applications
+    // sharing an origin — or one application keeping a second profile beside the first — meet at
+    // the Web Lock, at the broker, and on the OPFS pool, and the second of them silently becomes
+    // another tab of the first's database. Under the same person's `scopeId`, which is exactly when
+    // it would happen.
     const alpha = `${browser.namespace}-alpha`;
     const beta = `${browser.namespace}-beta`;
     const first = await browser.open("scope-1", { namespace: alpha });
@@ -1245,7 +1245,7 @@ class FakeWorker implements WorkerLike {
     try {
       this.executor.close();
     } catch {
-      // Already closed by the request the page sent before it stopped us.
+      // Already closed by the request the page sent before it stopped this worker.
     }
     this.#channel.port1.close();
     this.#channel.port2.close();

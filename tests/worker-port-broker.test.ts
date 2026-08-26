@@ -4,8 +4,8 @@
 // Two mechanisms, and each has a failure the other cannot show. The broker's is that a
 // `MessagePort` cannot be cloned — only moved — so a `BroadcastChannel` can never carry one and a
 // relay that copied instead of transferring would hand two documents the same end. The host's is
-// new to this design and quieter: with one port there was only one place a reply could go, and with
-// several there is a right one and a wrong one. A response addressed to the wrong port settles
+// quieter: with one port there is only one place a reply can go, and with several there is a right
+// one and a wrong one. A response addressed to the wrong port settles
 // whatever request that tab happened to have outstanding under the same number — request ids are
 // per tab and every tab counts from one — and nothing anywhere reports a fault.
 //
@@ -189,7 +189,7 @@ test("§8.7 the last tab to register is the one ports are delivered to", async (
 });
 
 test("§8.7 a successor's claim reaches every other tab, and never the tab that made it", async () => {
-  // How a succession is announced now, and the reason it is announced here. A Web Lock wakes the
+  // How a succession is announced, and the reason it is announced here. A Web Lock wakes the
   // one waiter at the head of the queue and tells nobody else, so every follower further back would
   // go on holding a port into a document that has gone — no error, no rejection, just lists that
   // stop moving. The broker is the only per-origin thing with a live connection to each of them,
@@ -362,7 +362,7 @@ test("§8.7 a tab's watches are released by its own disconnect and by nobody els
     // neither would leave the worker re-running a statement nobody reads for the rest of the
     // session.
     //
-    // Both halves of that are asserted, because one port can no longer see the whole of it: a delta
+    // Both halves of that are asserted, because one port cannot see the whole of it: a delta
     // carries only the statements its own tab registered, so the retired one is invisible from here
     // whether or not the worker is still running it.
     assert.deepEqual(worker.host.watching, [shared.cacheKey], "a disconnect released the wrong registrations");

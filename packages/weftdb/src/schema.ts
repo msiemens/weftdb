@@ -227,7 +227,7 @@ function field<Type extends FieldDefinition["type"], const Nullable extends bool
  * `S.json<SortConfig>({ nullable: true })` quietly non-nullable — the half-fix this whole shape
  * exists to avoid. Overloads choose on the argument instead, and each carries the one type
  * parameter `Value` that a call may name. The last is the widened case: options assembled at
- * runtime say `boolean`, which is worth no more than it used to be but is still accepted.
+ * runtime say `boolean`, which pins nothing either way and is accepted as it stands.
  */
 function jsonField<Value = WireValue>(
   options: JsonFieldOptions & { readonly nullable: true },
@@ -390,7 +390,7 @@ type ValidRelationship<
  * A name the compiler can still read as the literal it was written as is held to `Allowed`. One
  * it cannot — a `RelationshipDefinition` assembled where the strings are only known at runtime —
  * is left exactly as it is: there is nothing to check it against, and refusing it would refuse
- * every schema built from data, which `defineSchema` has always accepted and still checks itself.
+ * every schema built from data, which `defineSchema` accepts and checks itself.
  */
 type CheckedName<Declared, Allowed extends string> = string extends Declared ? Declared : Allowed;
 
@@ -418,10 +418,10 @@ export function defineSchema<const Collections extends Record<string, Collection
 }
 
 /**
- * A relationship is three names into the rest of the schema, and until now nothing checked any of
- * them. A typo produced a join that matched no row at runtime, and — since the generator reads the
- * target collection to type the result — a result quietly typed `unknown` rather than a build that
- * failed. Here is the last point at which the mistake is still a line in the schema.
+ * A relationship is three names into the rest of the schema, and nothing downstream catches a typo
+ * in one: the join matches no row at runtime, and — since the generator reads the target collection
+ * to type the result — the result is quietly typed `unknown` rather than the build failing. Here is
+ * the last point at which the mistake is still a line in the schema.
  */
 function assertResolvableRelationship(
   collections: Record<string, CollectionDefinition>,

@@ -1,6 +1,4 @@
-// Reconnection timing, shared by `connectWakeups` and `connectSocketTransport`. Both may hold a
-// socket to the same relay, so the schedule belongs in one place: separate copies would let the
-// two drift apart under a tuning change to either.
+// Reconnection timing for a client's socket to the relay.
 //
 // Not in the package's exports map, so the schedule stays an implementation detail rather than
 // something a caller can depend on.

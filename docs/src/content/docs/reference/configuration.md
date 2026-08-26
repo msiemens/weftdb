@@ -145,21 +145,9 @@ supplementing it.
 | `WebSocket`      | `WebSocketFactory`                               | the global `WebSocket` constructor | factory used to open the socket                                                    |
 | `timeoutMs`      | `number`                                         | 15 seconds                         | how long a request waits before the connection is treated as gone quiet            |
 
-### Wakeup options
-
-`connectWakeups`, from `weftdb/client`, takes a `WakeupOptions` object. It carries no sync data:
-a device fetches for itself when told the scope moved, over `httpTransport` on the timer it
-already runs.
-
-| Field            | Type                                             | Default                            | Meaning                                                 |
-| ---------------- | ------------------------------------------------ | ---------------------------------- | ------------------------------------------------------- |
-| `url`            | `string`                                         | none, required                     | where the relay's socket is mounted                     |
-| `token`          | `string`                                         | none, required                     | bearer token, sent as a WebSocket subprotocol           |
-| `onWake`         | `(advanced: ScopeAdvanced \| undefined) => void` | none, required                     | called when the scope has moved, and on every reconnect |
-| `onStatusChange` | `(connected: boolean) => void`                   | unset                              | called when the socket connects or disconnects          |
-| `WebSocket`      | `WebSocketFactory`                               | the global `WebSocket` constructor | factory used to open the socket                         |
-| `setTimeout`     | `(handler: () => void, ms: number) => unknown`   | the global `setTimeout`            | scheduler for reconnect attempts                        |
-| `clearTimeout`   | `(handle: never) => void`                        | the global `clearTimeout`          | cancels a scheduled reconnect                           |
+Given `onBatch` and `cursor`, the connection subscribes and the relay sends what changed. Given
+neither, it calls `onWake` on every connect and whenever the relay says the scope moved, and the
+device syncs for itself over the transport and the timer it already runs.
 
 ## Fixed limits
 
@@ -171,7 +159,7 @@ a flag.
 | Request body cap          | `8 MiB`          | HTTP request bodies; over the limit, the relay returns `413` with `payload_too_large`                   |
 | WebSocket frame cap       | `8 MiB`          | the payload of one raw WebSocket frame; a larger one is refused on read and cannot be produced on write |
 | Socket chunk size         | `32KB`           | size of each piece when an answer or an unsolicited batch is split across several socket messages       |
-| Reconnect backoff floor   | 500 milliseconds | first retry delay after a client socket disconnects, in `connectSocketTransport` and `connectWakeups`   |
+| Reconnect backoff floor   | 500 milliseconds | first retry delay after a client socket disconnects, in `connectSocketTransport`                        |
 | Reconnect backoff ceiling | 30 seconds       | the retry delay doubles on each attempt and stops growing here                                          |
 
 The suite reads a further set of variables that tune its own run counts and seeds. None of them

@@ -1,11 +1,11 @@
 // Generated writes over a client that lives in a worker.
 //
-// The read half of the OPFS path has been reachable for a while: a `WeftClientMirror` satisfies
+// The read half of the OPFS path needs nothing of its own: a `WeftClientMirror` satisfies
 // `SqlQuerySource`, so `use<Collection>` and `use<Collection>Query` run over it unchanged. The
-// write half was not, because generated mutators asked for a `WeftClient` by class and a mirror is
-// not one. `MutationTarget` names the shape instead, and this file is the claim that the shape is
-// enough: the mutators the CLI emitted for the todo demo, handed a mirror, with an in-memory SQLite
-// on the other end of a real `MessageChannel`.
+// write half would need something, if generated mutators asked for a `WeftClient` by class, because
+// a mirror is not one. `MutationTarget` names the shape instead, and this file is the claim that the
+// shape is enough: the mutators the CLI emitted for the todo demo, handed a mirror, with an
+// in-memory SQLite on the other end of a real `MessageChannel`.
 //
 // Nothing here is stubbed except OPFS itself. `openSqliteExecutor(":memory:")` is synchronous, which
 // is the whole of what the worker host needs of a database, and a `node:worker_threads`
@@ -125,7 +125,7 @@ test("§8.7 the schema facade reads and writes over a mirror", async () => {
   await bridge.settle(() => todos.list().length === 2);
 
   // Read back through the facade rather than out of the row map, because `get` and `list` are what
-  // made `WeftDb` refuse a mirror: they are the reads the concrete class used to be needed for.
+  // made `WeftDb` refuse a mirror: they are the reads a concrete class would be needed for.
   assert.equal(todos.get("todo-1")?.fields.get(fieldName("title")), "alpha");
   assert.deepEqual(
     todos
@@ -270,7 +270,7 @@ test("§8.7 two collections can be written in one transaction through the genera
   // The relay applies a transaction as a unit, so a status change and the event that records it
   // have to share one or they are two writes that can be accepted separately — leaving a history
   // that disagrees with the row it describes. Without a `txnId` parameter the only way to say so
-  // was to drop out of the generated mutators and into the facade.
+  // is to drop out of the generated mutators and into the facade.
   const client = new WeftClient(SCOPE, DEVICE, schema, () => 1_000);
   const shared = txnId("status-and-history");
 

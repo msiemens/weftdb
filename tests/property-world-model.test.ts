@@ -85,9 +85,9 @@ test("a restore competing with an independent create of the same id settles with
   //
   // The server keeps the higher-stamped value, which is §5.9: a restore moves the liveness
   // register and leaves field values in place, so the id's field history survives the round
-  // trip rather than starting over. §5.1.acked read that as a write accepted and then lost,
-  // because its replay treated every row op as a new life of the row. Only `create` and
-  // `append` are, and this history is here to keep the two apart.
+  // trip rather than starting over. A §5.1.acked replay that treated every row op as a new life
+  // of the row would read that as a write accepted and then lost. Only `create` and `append` are,
+  // and this history is here to keep the two apart.
   const world = createWorld(5);
   const row = rowId("row-0");
   const loser = deviceAt(world, 3).client;

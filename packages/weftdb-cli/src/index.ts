@@ -292,12 +292,12 @@ function validateSchemaJson(value: unknown): SchemaJsonValidation {
 }
 
 /**
- * Kept, though `defineSchema` now throws on all three of these before a schema can be built.
- * `loadSchema` accepts a `.json` file for pipelines that would rather not execute project code,
- * and that value never passes through the DSL: it is cast to a `SchemaDefinition` after
- * `validateSchemaJson`, so this is the only thing standing between such a schema and a generated
- * join that matches no row. What was a duplicated check for a `.ts` schema is the whole check for
- * a `.json` one — and it now looks at the two field names as well, which nothing ever did.
+ * `defineSchema` throws on all three of these before a schema can be built, but `loadSchema` also
+ * accepts a `.json` file for pipelines that would rather not execute project code, and that value
+ * never passes through the DSL: it is cast to a `SchemaDefinition` after `validateSchemaJson`, so
+ * this is the only thing standing between such a schema and a generated join that matches no row.
+ * For a `.ts` schema it repeats a check the DSL has already made; for a `.json` one it is the whole
+ * check, the two field names included.
  */
 function validateRelationshipReferences(schema: import("weftdb/schema").SchemaDefinition): readonly string[] {
   const warnings: string[] = [];

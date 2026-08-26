@@ -71,9 +71,10 @@ export type WorkerRequestBody =
   | { readonly type: "discardQuarantine" };
 
 /**
- * Written as an intersection rather than as a second hand-maintained union: the two drifted apart
- * every time a verb was added, and narrowing on `.type` still works because an intersection over a
- * union distributes into a union of intersections.
+ * Written as an intersection rather than as a second hand-maintained union: a second union has to
+ * be edited for every verb added here, and drifts from this one the moment it is not. Narrowing on
+ * `.type` still works, because an intersection over a union distributes into a union of
+ * intersections.
  */
 export type WorkerRequest = WorkerRequestBody & { readonly id: number };
 

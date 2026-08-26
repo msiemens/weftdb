@@ -1,7 +1,7 @@
-// The typed facade — the surface an application is meant to hold a client through, and until
-// now the only public entry point with no tests at all. What it has to do is narrow: name a
-// collection once, take values the schema declares, and pass them down unchanged. What it must
-// not do is lose a value, invent one, or let a write reach a field the schema has no idea about.
+// The typed facade — the surface an application is meant to hold a client through. What it has to
+// do is narrow: name a collection once, take values the schema declares, and pass them down
+// unchanged. What it must not do is lose a value, invent one, or let a write reach a field the
+// schema has no idea about.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import fc from "fast-check";
@@ -195,10 +195,9 @@ test("a declared json type is the type the facade takes, without a cast", () => 
   const client = new WeftClient(SCOPE, deviceId("laptop"), declared, () => 1_000);
   const views = createWeftDb(client, declared).collection("views");
 
-  // The assertion is that this compiles. `MutationInput` used to type a json field as `WireValue`,
-  // whose object case demands an index signature, so an ordinary interface needed the very cast the
-  // declaration exists to remove — and the generated mutators and the facade disagreed about the
-  // same field.
+  // The assertion is that this compiles. Typed as `WireValue`, a json field demands an index
+  // signature for its object case, so an ordinary interface needs the very cast the declaration
+  // exists to remove — and the generated mutators and the facade then disagree about one field.
   const sort: SortConfig = { field: "title", direction: "desc" };
   views.create("view-1", { label: "by title", sort });
 
@@ -209,10 +208,10 @@ test("a nullable field takes null, and takes it as the type the schema declares"
   const { db: database, client } = db();
   const todos = database.collection("todos");
 
-  // The assertion is as much that this compiles as that it runs. `MutationInput` used to type
-  // every scalar as `WireValue`, which took `null` because it takes nearly everything; now each
-  // field is worth what it was declared as, and `null` is accepted because `weight` is the one
-  // that was declared nullable — see `tests/schema-types.test.ts` for the compiler's side of it.
+  // The assertion is as much that this compiles as that it runs. A `MutationInput` that typed
+  // every scalar as `WireValue` would take `null` because it takes nearly everything; each field
+  // is worth what it was declared as instead, and `null` is accepted here because `weight` is the
+  // one declared nullable — see `tests/schema-types.test.ts` for the compiler's side of it.
   const weight: number | null = null;
   todos.create("todo-1", { title: "plan", done: false, weight });
   assert.equal(client.getRow(tableName("todos"), rowId("todo-1"))?.fields.get(fieldName("weight")), null);

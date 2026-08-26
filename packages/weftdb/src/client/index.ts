@@ -911,17 +911,17 @@ function materializeRow(row: LocalRow): MaterializedRow {
   });
 }
 
-// The public surface is listed, not inherited: a new export reaches consumers only from here.
 export { httpTransport, RelayError } from "./transport.ts";
 export type { AsyncSyncTransport, FetchLike, HttpTransportOptions, PushResult } from "./transport.ts";
-export { connectWakeups, TOKEN_PROTOCOL_PREFIX, WAKEUP_PROTOCOL } from "./wakeups.ts";
-export type { ScopeAdvanced, WakeupConnection, WakeupOptions, WebSocketFactory, WebSocketLike } from "./wakeups.ts";
-export { connectSocketTransport, SocketClosedError, SocketRequestError } from "./socket-transport.ts";
-export type { SocketTransport, SocketTransportOptions } from "./socket-transport.ts";
+export {
+  connectSocketTransport,
+  SocketClosedError,
+  SocketRequestError,
+  TOKEN_PROTOCOL_PREFIX,
+} from "./socket-transport.ts";
+export type { ScopeAdvanced, SocketTransport, SocketTransportOptions, WebSocketFactory } from "./socket-transport.ts";
 export { WeftSession } from "./session.ts";
-export type { BroadcastChannelLike, SessionOptions, SessionStatus, SocketHandlers } from "./session.ts";
-export { serializeClient, WebStorageClientStore } from "./web-storage.ts";
-export type { StorageLike, StoredClient, StoredValue } from "./web-storage.ts";
+export type { SessionStatus, SocketHandlers } from "./session.ts";
 export {
   executorRowSelect,
   queryKey,
@@ -929,72 +929,47 @@ export {
   RowIdentityCache,
   SubscriptionEngine,
 } from "./subscriptions.ts";
-export { rowMapSource, SqlQueryUnavailableError } from "./source.ts";
 export type { QueryLifecycleSource, WeftSource } from "./source.ts";
 export type {
-  CollectionName,
-  FieldOf,
   QueryDelta,
   QueryKey,
-  QueryListener,
   QuerySnapshot,
   ReactiveSqlQuery,
-  ReactiveSqlQueryOptions,
   RowSelect,
   TypedQueryKey,
 } from "./subscriptions.ts";
+export { AuthorizerDependencyRecorder, compileQuery, invalidatesQuery, queryCacheKey } from "./query.ts";
+export type { CompiledQuery, QueryBuilderLike, QueryDependency, RegisteredQuery } from "./query.ts";
 export type { MutationTarget, WeftDbTarget } from "./mutation-target.ts";
 export { createWeftDb, WeftDb } from "./facade.ts";
-export type { CollectionFacade, MutationInput } from "./facade.ts";
+export type { MutationInput } from "./facade.ts";
 export { applyRetentionDeletes, planRetentionDeletes, visibleChildren } from "./retention.ts";
 export type { RetentionCandidate, RetentionPolicy } from "./retention.ts";
-export { AuthorizerDependencyRecorder, compileQuery, dependency, invalidatesQuery, queryCacheKey } from "./query.ts";
-export type { CompiledQuery, QueryBuilderLike, QueryDependency, RegisteredQuery } from "./query.ts";
 export { compileOnlyKysely } from "./kysely.ts";
 export type { ScopedRowQuery } from "./kysely.ts";
-export {
-  isDeltaPush,
-  isWeftWorkerConnect,
-  isWeftWorkerReady,
-  isWorkerHydrated,
-  isWorkerPush,
-  withRequestId,
-  WorkerPortTransport,
-} from "./worker.ts";
+export { isDeltaPush, WorkerPortTransport } from "./worker.ts";
 export type {
   WeftDurability,
-  WeftWorkerConnect,
   WeftWorkerReady,
   WireRow,
   WorkerDelta,
   WorkerDeltaPush,
-  WorkerHydrated,
   WorkerLike,
   WorkerMessage,
-  WorkerMutation,
   WorkerPush,
-  WorkerPushHandler,
-  WorkerStatusPush,
   WorkerRequest,
-  WorkerRequestBody,
   WorkerResponse,
+  WorkerStatusPush,
 } from "./worker.ts";
 export { serveWeftWorker, WeftWorkerHost } from "./worker-host.ts";
-export type { WeftWorkerHostOptions, WorkerHostPortLike } from "./worker-host.ts";
+export type { WorkerHostPortLike } from "./worker-host.ts";
 export { WeftClientMirror } from "./worker-mirror.ts";
-export type { WeftClientMirrorOptions } from "./worker-mirror.ts";
-export { DEFAULT_NAMESPACE, WEFT_NAMESPACE_PARAM, weftDatabaseKey } from "./database-key.ts";
+export { WEFT_NAMESPACE_PARAM, weftDatabaseKey } from "./database-key.ts";
 export { MultiTabCoordinator } from "./multitab.ts";
-export type {
-  LeadershipListener,
-  LockManagerLike,
-  LockRequestOptionsLike,
-  MultiTabOptions,
-  TabRole,
-} from "./multitab.ts";
-export { isBrokerMessage, serveWeftPortBroker, WeftBrokerClient } from "./broker.ts";
-export type { BrokeredPort, BrokerMessage, BrokerPortLike, WeftPortBroker } from "./broker.ts";
+export type { LockManagerLike, LockRequestOptionsLike, TabRole } from "./multitab.ts";
+export { serveWeftPortBroker, WeftBrokerClient } from "./broker.ts";
+export type { BrokeredPort, BrokerPortLike, WeftPortBroker } from "./broker.ts";
 export { Diff3EditorBuffer } from "./editor.ts";
 export type { BufferedRemoteEdit } from "./editor.ts";
 export { deviceIdForScope, openWeftDatabase, WeftOpenError } from "./open.ts";
-export type { OpenRelayOptions, OpenWeftDatabaseOptions, WeftDatabase, WeftOpenFailure } from "./open.ts";
+export type { StorageLike, WeftDatabase } from "./open.ts";

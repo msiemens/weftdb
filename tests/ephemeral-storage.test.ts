@@ -1,16 +1,15 @@
 // A window the browser has promised to forget, served rather than refused.
 //
-// A private browsing session gives no OPFS synchronous access handle pool, and until now that was
-// the end of the application: the worker reported that it had opened nothing and `openWeftDatabase`
-// rejected. It now opens the same SQLite in memory instead and says which of the two it got, so a
-// page can tell the person that this window will not remember — which is what they asked the browser
-// for. Nothing is written to `localStorage` to soften it: rows, outbox and quarantine all go with
-// the window, a reload included.
+// A private browsing session gives no OPFS synchronous access handle pool. Refusing on that
+// account is the end of the application, so the worker opens the same SQLite in memory instead and
+// says which of the two it got — and a page can then tell the person that this window will not
+// remember, which is what they asked the browser for. Nothing is written to `localStorage` to
+// soften it: rows, outbox and quarantine all go with the window, a reload included.
 //
 // The distinction the whole file turns on is between a browser that *declined* the pool and a build
 // that never had one. The first is a browsing mode and is served; the second is a bundle that
 // shipped wrong, would work through every reload of development and lose every device's data in
-// production, and is still refused.
+// production, and is refused.
 //
 // The SQLite is real. `@sqlite.org/sqlite-wasm` under Node has no `installOpfsSAHPoolVfs` at all,
 // which is exactly the build-is-wrong case; a browser that declines the pool is modelled by putting
@@ -123,7 +122,7 @@ test("§8.7 a build with no pool VFS at all is refused rather than served from m
 test("§8.7 a page opening against a build with no pool VFS still reports storage-unavailable", async () =>
   withBrowser(async (browser) => {
     // The page's half of the same case, through the real worker entry point rather than a hand-
-    // written announcement: `storage-unavailable` has to stay reachable, and it now means this.
+    // written announcement: `storage-unavailable` has to stay reachable, and this is what it means.
     const error = await browser.open("scope-1", { sqlite3: sqlite3 }).then(
       () => undefined,
       (reason: unknown) => reason,

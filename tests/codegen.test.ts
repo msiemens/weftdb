@@ -49,8 +49,9 @@ test("the json carriability checks are exported, so a strict consumer can still 
   );
 
   // A type alias that is only ever declared is TS6196 under `noUnusedLocals`, which Vite's
-  // React-TypeScript template turns on. Left local, these assertions failed the build of the very
-  // application they were generated for, and the fix was to patch the word in after generating.
+  // React-TypeScript template turns on. Left local, these checks fail the build of the very
+  // application they were generated for, and the only way out is to patch `export` in by hand
+  // after every generate.
   assert.match(bindings, /export type WeftJsonCheck1 = WeftDeclaredJson<SortConfig, WeftJsonCarriable<SortConfig>>;/u);
   assert.doesNotMatch(bindings, /^type WeftJsonCheck/mu, "a check was emitted as a local type alias");
 });
@@ -64,8 +65,8 @@ test("generated mutators take the transaction their caller wants them in", () =>
   );
 
   // The relay applies a transaction as a unit, so two collections written together have to be able
-  // to share one. Without this the only way to say so was the facade, and an application reached
-  // for it to get atomicity and lost the generated types on the way.
+  // to share one. Without this the only way to say so is the facade, and an application that
+  // reaches for it to get atomicity loses the generated types on the way.
   assert.match(mutators, /create\(id: string, values: TodosMutation, txnId\?: TxnId\): void;/u);
   assert.match(mutators, /update\(id: string, values: TodosMutation, txnId\?: TxnId\): void;/u);
   assert.match(mutators, /delete\(id: string, txnId\?: TxnId\): void;/u);
@@ -211,9 +212,9 @@ test("a relationship result is the row type of the collection it names", () => {
   });
   const relationships = generateRelationshipHelpers(schema);
 
-  // The schema already says which collection is on the far side, so `unknown` was a fact the
-  // generator held and declined to write down — and every application reading a relation result
-  // had to assert it back.
+  // The schema already says which collection is on the far side, so `unknown` would be a fact the
+  // generator holds and declines to write down, leaving every application reading a relation
+  // result to assert it back.
   assert.match(relationships, /export type UsersTasksResult<Target = Database\["tasks"\]> = readonly Target\[\];/u);
   assert.match(relationships, /export type TasksOwnerResult<Target = Database\["users"\]> = Target \| undefined;/u);
   assert.match(relationships, /^import type \{ Database \} from "\.\/database\.d\.ts";/u);
@@ -372,7 +373,7 @@ test("an accessor's result is the target row type, so a call site needs no cast"
 });
 
 test("a relationship naming a collection the schema does not define stays unknown", () => {
-  // Unreachable through `defineSchema`, which now refuses this schema outright — in both senses,
+  // Unreachable through `defineSchema`, which refuses this schema outright — in both senses,
   // since the literal below is a compile error as well as a throw. It is written by hand here
   // because generation still has to tolerate a `SchemaDefinition` that reached it another way: a
   // `.json` schema loaded by the CLI never passes through `defineSchema`, and `Database["absent"]`
@@ -417,9 +418,9 @@ test("relationship helper names are unambiguous after generation", () => {
 });
 
 test("a relationship is refused unless all three of its names resolve", () => {
-  // A relationship is three names into the rest of the schema, and none of them used to be
-  // checked. The join matched no row at runtime, and the result type quietly degraded to
-  // `unknown` — a typo that got quieter rather than louder the more the generator learned.
+  // A relationship is three names into the rest of the schema, and unchecked they fail quietly:
+  // the join matches no row at runtime, and the result type degrades to `unknown` — a typo that
+  // gets quieter rather than louder the more the generator learns.
   assert.throws(
     () =>
       defineSchema({

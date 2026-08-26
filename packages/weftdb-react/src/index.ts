@@ -68,7 +68,7 @@ export function useWeftSuspenseQuery<Value, Key extends SubscriptionKey>(
 }
 
 // Declared in `weftdb/client`, beside `executorRowSelect`, and re-exported here.
-export { rowMapSource, SqlQueryUnavailableError, type QueryLifecycleSource, type WeftSource } from "weftdb/client";
+export type { QueryLifecycleSource, WeftSource } from "weftdb/client";
 
 export function useWeftQuerySnapshot(source: QueryLifecycleSource, key: QueryKey): QuerySnapshot {
   const subscribe = useCallback((listener: () => void) => source.engine.subscribe(key, listener), [source, key]);

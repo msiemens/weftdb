@@ -8,7 +8,6 @@ import fc from "fast-check";
 import { deviceId, scopeId, fieldName, rowId, tableName, txnId, type FieldName, type WireValue } from "weftdb/core";
 import {
   connectSocketTransport,
-  connectWakeups,
   httpTransport,
   WeftClient,
   WeftSession,
@@ -197,7 +196,9 @@ test("a push by one device wakes another, which then pulls it", async (t) => {
   const wakes: (ScopeAdvanced | undefined)[] = [];
   const connected = nextWake();
   let pending = nextWake();
-  const connection = connectWakeups({
+  // The relay sends a bare announcement to a connection that has not subscribed, and that
+  // announcement is what this test follows.
+  const connection = connectSocketTransport({
     url: running.socketUrl,
     token: "token-beta",
     onWake: (advanced) => {
@@ -248,7 +249,7 @@ test("a change nobody pushed still wakes the devices it affects", async (t) => {
 
   const connected = nextWake();
   const pending = nextWake();
-  const connection = connectWakeups({
+  const connection = connectSocketTransport({
     url: running.socketUrl,
     token: "token-beta",
     onWake: (advanced) => (advanced === undefined ? connected.wake(undefined) : pending.wake(advanced)),
@@ -269,7 +270,7 @@ test("a change nobody pushed still wakes the devices it affects", async (t) => {
   await pending.promise;
 
   const afterPush = nextWake();
-  const listener = connectWakeups({
+  const listener = connectSocketTransport({
     url: running.socketUrl,
     token: "token-alpha",
     onWake: (advanced) => {
@@ -327,7 +328,7 @@ test("a wake-up never reaches a scope the token does not name", async (t) => {
 
   const woken: (ScopeAdvanced | undefined)[] = [];
   const connected = nextWake();
-  const connection = connectWakeups({
+  const connection = connectSocketTransport({
     url: running.socketUrl,
     token: "token-elsewhere",
     onWake: (advanced) => {
@@ -370,7 +371,7 @@ test("a dropped socket comes back and asks for a catch-up", async (t) => {
 
   let connects = 0;
   const reconnected = nextWake();
-  const connection = connectWakeups({
+  const connection = connectSocketTransport({
     url: running.socketUrl,
     token: "token-beta",
     onWake: (advanced) => {
@@ -855,7 +856,7 @@ test("closing the connection stops it reconnecting", async (t) => {
 
   const connected = nextWake();
   let wakes = 0;
-  const connection = connectWakeups({
+  const connection = connectSocketTransport({
     url: running.socketUrl,
     token: "token-beta",
     onWake: (advanced) => {

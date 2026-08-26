@@ -24,8 +24,7 @@ export interface QueryLifecycleSource {
  *
  * A `WeftClientMirror` is one of these already, and `openWeftDatabase` hands one back. A client on
  * the thread that renders becomes one by being paired with a `SubscriptionEngine` and an
- * `executorRowSelect` over the same SQLite its store writes through, or by {@link rowMapSource}
- * where there is no SQLite at all.
+ * `executorRowSelect` over the same SQLite its store writes through.
  */
 export interface WeftSource extends QueryLifecycleSource {
   /**
@@ -59,37 +58,4 @@ export interface WeftSource extends QueryLifecycleSource {
    */
   watch(query: ReactiveSqlQuery): Promise<void>;
   unwatch(query: ReactiveSqlQuery): void;
-}
-
-/** Raised where a statement-backed read is asked of a device that keeps no SQL database. */
-export class SqlQueryUnavailableError extends Error {
-  constructor(message = "this device has no SQL database, so a statement-backed query cannot run on it") {
-    super(message);
-    this.name = "SqlQueryUnavailableError";
-  }
-}
-
-/**
- * A source for a device whose rows live somewhere other than SQLite, such as one persisting through
- * `WebStorageClientStore` on the thread that renders.
- *
- * `useWeftRows` and the generated `use<Collection>` read the row map and work unchanged. A
- * statement-backed read has nothing to run against, so `select` raises
- * {@link SqlQueryUnavailableError} rather than answering with no rows, which is indistinguishable
- * from a statement that matched nothing.
- */
-export function rowMapSource(source: QueryLifecycleSource, scopeId: string): WeftSource {
-  return {
-    engine: source.engine,
-    rows: source.rows,
-    scopeId,
-    select: () => {
-      throw new SqlQueryUnavailableError();
-    },
-    // Registration is how a statement reaches a database somewhere else. No statement runs against
-    // this device at all — `select` is where that is said — so there is nothing to register and
-    // nothing to hand back.
-    watch: () => Promise.resolve(),
-    unwatch: () => undefined,
-  };
 }

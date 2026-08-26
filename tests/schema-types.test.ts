@@ -86,9 +86,9 @@ test("the field-value assertions are capable of failing", () => {
 
 test("a schema assembled at runtime still compiles, at the precision it can be read at", () => {
   // Not every schema is a literal: the CLI loads one from `.json`, and an application may build
-  // options from data. There is no literal `true` to capture there, so the field is worth what it
-  // always was — but it has to keep compiling, which the `json` overloads in particular could
-  // easily have stopped doing.
+  // options from data. There is no literal `true` to capture there, so the field is worth whatever
+  // the widened type says — but it has to keep compiling, which the `json` overloads in particular
+  // could easily stop doing.
   assert.deepEqual(
     typeDiagnostics(
       "runtime.ts",
@@ -156,7 +156,7 @@ test("a nullable field accepts null through the facade's mutation input", () => 
 
 test("a non-nullable field refuses null, and a scalar refuses the wrong type", () => {
   // The other side of it: precision that only ever widens is no precision at all. `WireValue`
-  // swallowed each of these.
+  // swallows each of these.
   assert.match(
     typeDiagnostics("mutation.ts", mutationSource("export const wrong: Input = { title: null };")).join("\n"),
     /'null' is not assignable/u,

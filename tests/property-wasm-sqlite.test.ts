@@ -1,5 +1,5 @@
 // The browser's storage port. A device's durable state is the one thing a local-first
-// application cannot afford to lose, and it now has a second `SqlExecutor` under it — so the
+// application cannot afford to lose, and it has a second `SqlExecutor` under it — so the
 // question is not whether SQLite compiled to WebAssembly runs SQL, but whether it answers
 // exactly as the port every other suite is written against.
 //

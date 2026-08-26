@@ -185,7 +185,6 @@ again, so each `use<Collection>Query` re-renders with the rows the new worker re
 flight when the previous worker died rejects, which reaches `onError` rather than leaving a
 mutator's promise pending.
 
-The demo sidesteps this rather than exercising it: each tab gets its own device id and its own
-`localStorage`-backed store, so tabs sync as separate devices through the relay instead of sharing
-one on-device database. Its `BroadcastChannel` only wakes a tab's sync sooner when another tab
-writes.
+The demo sidesteps this rather than exercising it: each tab opens its own database under a namespace
+of its own, so tabs sync as separate devices through the relay instead of sharing one on-device
+database. Its `BroadcastChannel` only wakes a tab's sync sooner when another tab writes.

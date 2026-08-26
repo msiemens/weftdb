@@ -35,7 +35,6 @@ import { MultiTabCoordinator, type LockManagerLike, type TabRole } from "./multi
 import { WeftBrokerClient, type BrokeredPort, type BrokerPortLike } from "./broker.ts";
 import { SubscriptionEngine } from "./subscriptions.ts";
 import type { SessionStatus } from "./session.ts";
-import type { StorageLike } from "./web-storage.ts";
 import {
   isWeftWorkerReady,
   isWorkerHydrated,
@@ -45,6 +44,13 @@ import {
   type WorkerMessage,
 } from "./worker.ts";
 import { WeftClientMirror } from "./worker-mirror.ts";
+
+/** The slice of the DOM `Storage` interface the device id needs — `localStorage` satisfies it. */
+export interface StorageLike {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
 
 /** Where this device's credential comes from. Read again per credential — see `setToken`. */
 export interface OpenRelayOptions {
@@ -102,7 +108,7 @@ export interface OpenWeftDatabaseOptions {
    * differ in either are two databases that share nothing — separate locks, separate workers,
    * separate device ids, separate OPFS pools — even where the `scopeId` is the same string.
    *
-   * It also prefixes every key the device id is kept under, which is where it started.
+   * It also prefixes every key the device id is kept under.
    */
   readonly namespace?: string;
   /** Web Locks, which decide which tab holds the worker. `navigator.locks` by default. */

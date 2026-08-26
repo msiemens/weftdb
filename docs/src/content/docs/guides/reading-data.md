@@ -36,9 +36,8 @@ statement matched, in order.
 `select` is a function rather than a database because the database is not always on the thread
 that renders. A `WeftClientMirror` is a `WeftSource` already: it reads the ids the worker last
 pushed. A client on the thread that renders is paired with `executorRowSelect(executor)`, which
-runs the statement. A device that keeps no SQL database is wrapped in `rowMapSource` from
-`weftdb-react`, whose `select` raises `SqlQueryUnavailableError`. Each answers synchronously,
-which is what a snapshot read during render requires, and a component sees none of the difference.
+runs the statement. Both answer synchronously, which is what a snapshot read during render
+requires, and a component sees none of the difference.
 
 `select` returns `undefined` for a statement the source has no answer for, which covers a statement
 nobody registered and a statement whose first answer has yet to arrive. A statement that ran and
@@ -120,9 +119,7 @@ the tiebreak. Values are compared as text, so a number field orders lexicographi
 
 Use `use<Collection>` for a collection a device holds all of, and `use<Collection>Query` when the
 answer is a part of one, is ordered by more than one field, or is a page. The query key path reads
-the row map alone and never touches `select`, so it is the only one of the two that runs on a
-device with no SQL database, such as one storing through `WebStorageClientStore`. There
-`use<Collection>Query` raises `SqlQueryUnavailableError` instead of returning no rows.
+the row map alone and never touches `select`, so its cost grows with the rows the device holds.
 
 The generated helper `todosQuery(orderBy)` builds the key, and `queryKey(schema, table, options)`
 builds one for a query an application assembles itself. Both validate names against the schema and

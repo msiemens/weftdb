@@ -408,8 +408,8 @@ test("edits to different fields both survive", async (t) => {
 
 test("a tab that is started twice keeps working, and reordering moves a row", async (t) => {
   // React runs an effect twice in development, so `start` and its cleanup both run before the
-  // page settles. Reordering is the part that used to break underneath that: a rank written into
-  // a list the page had stopped reading is a row that does not move.
+  // page settles. Reordering is the part that breaks underneath that: a rank written into a list
+  // the page has stopped reading is a row that does not move.
   const world = openWorld();
   t.onTestFinished(() => world.closeAll());
   const tab = await world.open("first");
