@@ -241,6 +241,104 @@ test("a quarantined write does not withhold a field from the next life of its ro
   );
 });
 
+test("a retried write is what its row shows before any push carries it", async () => {
+  // Retrying moves a write back into the outbox, where the last entry for a field is the value
+  // that field ends on locally (§5.8). A write the person typed over while it sat in quarantine
+  // carries the older text, so re-queueing it without moving the row leaves the row showing a
+  // value the next push replaces, and a device that never reconnects shows it for good.
+  const server = new WeftServer();
+  const client = device("tab-1");
+
+  // A row the scope has never heard of, so a resync sets its creation aside and the edit behind
+  // that is refused for the same reason.
+  await client.create(NOTES, ROW, values({ title: "as created" }), txnId("create"));
+  await client.applySnapshot(server.snapshot(SCOPE));
+  await client.update(NOTES, ROW, values({ title: "typed once" }), txnId("first-edit"));
+  await client.syncWith(inProcessTransport(server), HASH);
+  assert.equal(
+    client.listQuarantine().some((op) => op.txnId === txnId("first-edit")),
+    true,
+    "the edit against an absent row was not set aside",
+  );
+
+  // The person repairs the creation and types over the field, and both reach the scope.
+  await client.retryQuarantinedTxn(txnId("create"));
+  await client.update(NOTES, ROW, values({ title: "typed again" }), txnId("second-edit"));
+  await client.syncWith(inProcessTransport(server), HASH);
+  assert.equal(client.outbox.length, 0, "the repaired creation never drained");
+  assert.equal(client.getRow(NOTES, ROW)?.fields.get(TITLE), "typed again", "the later edit is not what the row holds");
+
+  await client.retryQuarantinedTxn(txnId("first-edit"));
+
+  const queued = client.outbox.filter((op) => op.kind === "set" && op.field === TITLE).at(-1);
+  assert.equal(
+    queued?.kind === "set" ? queued.value : undefined,
+    "typed once",
+    "the retry queued nothing for the field it was asked to send",
+  );
+  assert.equal(client.getRow(NOTES, ROW)?.fields.get(TITLE), "typed once", "the row disagrees with its own outbox");
+});
+
+test("a retried write does not displace one the person made after it", async () => {
+  // The other edge. A later write of the person's is still unsent, so it is the one the field
+  // ends on, and re-queueing the older write behind it would make the outbox's last word for the
+  // field the text they abandoned.
+  const server = new WeftServer();
+  const client = device("tab-1");
+
+  await client.create(NOTES, ROW, values({ title: "as created" }), txnId("create"));
+  await client.applySnapshot(server.snapshot(SCOPE));
+  await client.update(NOTES, ROW, values({ title: "typed once" }), txnId("first-edit"));
+  await client.syncWith(inProcessTransport(server), HASH);
+  await client.update(NOTES, ROW, values({ title: "typed again" }), txnId("second-edit"));
+  await client.syncWith(inProcessTransport(server), HASH);
+  for (const label of ["first-edit", "second-edit"]) {
+    assert.equal(
+      client.listQuarantine().some((op) => op.txnId === txnId(label)),
+      true,
+      `${label} was not set aside`,
+    );
+  }
+
+  await client.retryQuarantinedTxn(txnId("first-edit"));
+
+  assert.equal(
+    client.getRow(NOTES, ROW)?.fields.get(TITLE),
+    "typed again",
+    "the retry put back text the person had already replaced",
+  );
+  const queued = client.outbox.filter((op) => op.kind === "set" && op.field === TITLE).at(-1);
+  assert.equal(
+    queued === undefined || (queued.kind === "set" && queued.value === "typed again"),
+    true,
+    "the outbox ends on a write the row does not show",
+  );
+});
+
+test("a repaired creation still carries the base fields only it can deliver", async () => {
+  // The relay takes a row's base fields in the transaction that makes the row and refuses them
+  // against a row it already holds, so a `created` dropped from a repaired creation is a value
+  // the row never gets. The later write to the same field, set aside here, outranks the
+  // creation's.
+  const server = new WeftServer();
+  const client = device("tab-1");
+
+  await client.create(NOTES, ROW, values({ title: "as created" }), txnId("create"));
+  const created = client.getRow(NOTES, ROW)?.fields.get(fieldName("created"));
+  await client.applySnapshot(server.snapshot(SCOPE));
+  await client.update(NOTES, ROW, values({ created: "2026-04-01T09:00:00.000Z" }), txnId("recreate"));
+  await client.syncWith(inProcessTransport(server), HASH);
+
+  await client.retryQuarantinedTxn(txnId("create"));
+  await client.syncWith(inProcessTransport(server), HASH);
+
+  assert.equal(
+    server.snapshot(SCOPE).fields.find((field) => field.rowId === ROW && field.field === fieldName("created"))?.value,
+    created,
+    "the repaired creation reached the relay without the row's created stamp",
+  );
+});
+
 test("a snapshot writes the client through to its store", async () => {
   // §4.1 makes local storage the client's state rather than a cache of it. A snapshot replaces
   // most of what a device holds, so a snapshot that is not written through is the largest

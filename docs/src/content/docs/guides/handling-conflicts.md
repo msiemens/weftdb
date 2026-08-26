@@ -64,7 +64,9 @@ const reasons = client.listQuarantine().map((op) => op.reason);
 
 Once whatever caused a rejection is believed fixed, `WeftClient.retryQuarantinedTxn(txnId)`
 returns that transaction's operations to the outbox for the next sync to try again, and resolves
-once the move has been stored. Nothing in quarantine retries on its own.
+once the move has been stored. A field the device has written again since the rejection keeps the
+later value, and the retried write for it is dropped. The outbox holds one write per field, and a
+row shows the value that write carries. Nothing in quarantine retries on its own.
 
 ## Deciding a deleted row
 

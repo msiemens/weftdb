@@ -1,5 +1,6 @@
 import {
   BASE_FIELDS,
+  compareHlc,
   diff3,
   HlcClock,
   fieldName,
@@ -299,12 +300,53 @@ export class WeftClient {
   async retryQuarantinedTxn(txnId: TxnId): Promise<void> {
     const retrying = this.quarantine.filter((op) => op.txnId === txnId);
     this.quarantine.splice(0, this.quarantine.length, ...this.quarantine.filter((op) => op.txnId !== txnId));
+    // A transaction that makes the row keeps its opening writes however long it has been set
+    // aside, because the server takes a new row's base fields there and nowhere else (§9.23).
+    const opening = new Set(
+      retrying
+        .filter((op) => op.kind === "create" || op.kind === "append")
+        .map((op) => localKey(op.tableName, op.rowId)),
+    );
     for (const op of retrying) {
       const { rejectedAt: _rejectedAt, reason: _reason, serverValue: _serverValue, ...wireOp } = op;
+      if (wireOp.kind === "set" && !opening.has(localKey(wireOp.tableName, wireOp.rowId))) {
+        if (this.hasLaterWrite(wireOp)) continue;
+        this.supersedeQueuedSet(wireOp.tableName, wireOp.rowId, wireOp.field);
+        this.applyOwnWrite(wireOp);
+      }
       this.pushOutbox(wireOp);
-      this.recomputeDirty(wireOp.tableName, wireOp.rowId);
     }
+    for (const op of retrying) this.recomputeDirty(op.tableName, op.rowId);
     await this.persist();
+  }
+
+  /**
+   * Whether a write of this device's outranks the one being retried. Both queues hold writes the
+   * scope has not been given, so a write the person made after the one they are retrying is
+   * still the last thing they said about the field, and re-queueing the older one behind it would
+   * send the text they typed over.
+   */
+  private hasLaterWrite(op: SetOp): boolean {
+    const later = (candidate: WeftOp): boolean =>
+      candidate.kind === "set" &&
+      candidate.tableName === op.tableName &&
+      candidate.rowId === op.rowId &&
+      candidate.field === op.field &&
+      compareHlc(candidate.hlc, op.hlc) > 0;
+    return this.outbox.some(later) || this.quarantine.some(later);
+  }
+
+  /**
+   * Puts a re-queued write into the row it was written to. The outbox's last entry for a field is
+   * the value that field ends on locally (§5.8), so a row left showing something else shows a
+   * value the next push replaces, for as long as the device stays offline.
+   */
+  private applyOwnWrite(op: SetOp): void {
+    const row = this.rows.get(localKey(op.tableName, op.rowId));
+    if (!row) return;
+    row.fields.set(op.field, op.value);
+    row.internals._weft_rev += 1;
+    this.touch(localKey(op.tableName, op.rowId));
   }
 
   /**
