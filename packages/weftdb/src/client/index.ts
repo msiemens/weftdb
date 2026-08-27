@@ -81,7 +81,18 @@ export interface Tombstone {
   serverSeq: number;
 }
 
-export type QuarantinedOp = WeftOp & { rejectedAt: number; reason: Rejection["reason"]; serverValue?: WireValue };
+export type QuarantinedOp = WeftOp & {
+  rejectedAt: number;
+  reason: Rejection["reason"];
+  serverValue?: WireValue;
+  /**
+   * The `first_seen_at` of the row this write was made to, which is the only identity a row has
+   * (§5.8). `create` and `append` stamp a fresh one and `restore` does not (§5.9), so it tells a
+   * later life of a reused id apart from the life this write belongs to. Null while the row has
+   * never been acknowledged, which an ack fills in.
+   */
+  rowIdentity: number | null;
+};
 
 /**
  * Somewhere durable for the client to write itself to. §4.1 makes local storage the client's
@@ -337,7 +348,13 @@ export class WeftClient {
         .map((op) => localKey(op.tableName, op.rowId)),
     );
     for (const op of retrying) {
-      const { rejectedAt: _rejectedAt, reason: _reason, serverValue: _serverValue, ...wireOp } = op;
+      const {
+        rejectedAt: _rejectedAt,
+        reason: _reason,
+        serverValue: _serverValue,
+        rowIdentity: _rowIdentity,
+        ...wireOp
+      } = op;
       if (wireOp.kind === "set" && !opening.has(localKey(wireOp.tableName, wireOp.rowId))) {
         if (this.hasLaterWrite(wireOp)) continue;
         this.supersedeQueuedSet(wireOp.tableName, wireOp.rowId, wireOp.field);
@@ -619,13 +636,9 @@ export class WeftClient {
     // stamped below one a device holds, and a device that refused it on that basis would never
     // converge. Once the outbox has drained, everything the relay sends applies.
     if (this.hasQueuedWrite(field.tableName, field.rowId, field.field)) return;
-    // A write set aside in quarantine is unsent for good, and the value it left in the row is the
-    // divergence the person is the one who has to decide about (§5.5), so the relay's copy does
-    // not get to settle it either. It is the row's own copy that is protected, and only that. A
-    // field the row no longer holds belongs to a life of the row that has already ended, and
-    // withholding it would leave the life that replaced it missing the field altogether.
-    if (row.fields.has(field.field) && this.hasQuarantinedWrite(field.tableName, field.rowId, field.field)) return;
     this.touch(key);
+    // The record lands first, so a life of the row that the relay is rebuilding is never left
+    // missing a field. Whether it stays is settled below.
     row.fields.set(field.field, field.value);
     // `created` is held twice: in the field map a decoder reads, and on the row itself, which
     // is the copy a store writes its column from. A row that arrived from the server rather
@@ -633,6 +646,20 @@ export class WeftClient {
     // column and the value would be gone on the next hydrate.
     if (field.field === CREATED && typeof field.value === "string") row.created = field.value;
     row.internals.hlc.set(field.field, field.hlc);
+    // A write set aside in quarantine is unsent for good, and the value it left in the row is the
+    // divergence the person is the one who has to decide about (§5.5), so the relay's copy does
+    // not get to settle it either. The write speaks for the row it was made to and for no other,
+    // so a life of a reused id that it never saw keeps what the relay sent. A relay value stamped
+    // above it is a write the person made after it and had taken, which they are not asking about.
+    const quarantined = this.quarantinedWrite(field.tableName, field.rowId, field.field);
+    if (
+      quarantined !== undefined &&
+      quarantined.rowIdentity === row.internals._weft_first_synced_at &&
+      compareHlc(field.hlc, quarantined.hlc) <= 0
+    ) {
+      row.fields.set(field.field, quarantined.value);
+      row.internals.hlc.set(field.field, quarantined.hlc);
+    }
     row.internals._weft_rev += 1;
     this.recomputeDirty(field.tableName, field.rowId);
   }
@@ -677,6 +704,15 @@ export class WeftClient {
       for (const rowAck of ack.firstSeenAtByRow) {
         const row = this.rows.get(localKey(rowAck.tableName, rowAck.rowId));
         if (row) row.internals._weft_first_synced_at = rowAck.firstSeenAt;
+        // A write set aside before the scope had ever seen its row was set aside against no
+        // identity at all, and the acknowledgement is where that row gets one. Learned here, the
+        // write still speaks for the row the person made. Left null, it matches a row the relay
+        // rebuilds only by accident, and the person's value would land on whichever life of the
+        // id happened to arrive.
+        for (const op of this.quarantine) {
+          if (op.rowIdentity !== null || op.tableName !== rowAck.tableName || op.rowId !== rowAck.rowId) continue;
+          op.rowIdentity = rowAck.firstSeenAt;
+        }
       }
       // A write of this device's that lost is acknowledged like any other, and the record that
       // beat it kept a sequence below this device's cursor, so a pull will not bring it. Applied
@@ -732,7 +768,12 @@ export class WeftClient {
     this.retainQueued((op) => op.txnId !== rejection.op.txnId);
     for (const op of rejected) {
       this.outboxAttempts.delete(opKey(op));
-      const quarantined = { ...op, rejectedAt: this.now(), reason: rejection.reason };
+      const quarantined = {
+        ...op,
+        rejectedAt: this.now(),
+        reason: rejection.reason,
+        rowIdentity: this.rowIdentityFor(op.tableName, op.rowId),
+      };
       this.quarantine.push(
         rejection.serverValue === undefined ? quarantined : { ...quarantined, serverValue: rejection.serverValue },
       );
@@ -762,7 +803,12 @@ export class WeftClient {
     this.retainQueued((op) => op.tableName !== tableName || op.rowId !== rowId);
     for (const op of diverged) {
       this.outboxAttempts.delete(opKey(op));
-      this.quarantine.push({ ...op, rejectedAt: this.now(), reason });
+      this.quarantine.push({
+        ...op,
+        rejectedAt: this.now(),
+        reason,
+        rowIdentity: this.rowIdentityFor(op.tableName, op.rowId),
+      });
     }
     this.recomputeDirty(tableName, rowId);
   }
@@ -889,14 +935,40 @@ export class WeftClient {
   }
 
   /**
-   * Whether this field has a write of its own set aside for the person to decide about. As unsent
-   * as one in the outbox and counted the same way by the dirty flag (§5.8), because a row cannot
-   * read as dirty for a write whose value nothing on the device still shows.
+   * The write to this field the person still has to decide about, the last of them where several
+   * transactions were set aside. As unsent as an op in the outbox and counted the same way by the
+   * dirty flag (§5.8), because a row cannot read as dirty for a write whose value nothing on the
+   * device still shows.
+   *
+   * A base field is never one of these. It is the row's identity, immutable once the row exists
+   * (§9.23), so a write to one that reached quarantine describes a row nobody else can be holding.
+   * Neither is a write from the transaction that makes the row, which belongs to a life the scope
+   * never took.
    */
-  private hasQuarantinedWrite(tableName: TableName, rowId: RowId, field: FieldName): boolean {
-    return this.quarantine.some(
-      (op) => op.kind === "set" && op.tableName === tableName && op.rowId === rowId && op.field === field,
+  private quarantinedWrite(
+    tableName: TableName,
+    rowId: RowId,
+    field: FieldName,
+  ): Extract<QuarantinedOp, { kind: "set" }> | undefined {
+    if (BASE_FIELDS.has(field)) return undefined;
+    const opening = new Set(
+      this.quarantine
+        .filter((op) => op.kind === "create" || op.kind === "append")
+        .filter((op) => op.tableName === tableName && op.rowId === rowId)
+        .map((op) => op.txnId),
     );
+    let latest: Extract<QuarantinedOp, { kind: "set" }> | undefined;
+    for (const op of this.quarantine) {
+      if (op.kind !== "set" || op.tableName !== tableName || op.rowId !== rowId) continue;
+      if (op.field !== field || opening.has(op.txnId)) continue;
+      latest = op;
+    }
+    return latest;
+  }
+
+  /** The identity of the row a write is being set aside against, absent until the row is acked. */
+  private rowIdentityFor(tableName: TableName, rowId: RowId): number | null {
+    return this.rows.get(localKey(tableName, rowId))?.internals._weft_first_synced_at ?? null;
   }
 
   /** The value the last queued write leaves in this field, if anything is queued for it. */

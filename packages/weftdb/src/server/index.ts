@@ -151,6 +151,8 @@ export class WeftServer {
   protected readonly touchedDevices = new Set<string>();
   readonly #watchers = new Set<ScopeWatcher>();
   private readonly now: () => number;
+  /** The last `first_seen_at` handed out, which the next one has to clear. */
+  private lastFirstSeenAt = 0;
   /** Injectable so a test can name the epochs it is asserting about. */
   private readonly newEpoch: () => string;
 
@@ -447,7 +449,7 @@ export class WeftServer {
         scopeId: op.scopeId,
         tableName: op.tableName,
         rowId: op.rowId,
-        firstSeenAt: this.now(),
+        firstSeenAt: this.freshFirstSeenAt(),
         class: rowClass,
         deletedHlc: null,
         registerHlc: null,
@@ -457,6 +459,21 @@ export class WeftServer {
       this.rows.set(key, row);
     }
     return row;
+  }
+
+  /**
+   * §5.8 makes `first_seen_at` a property of the row, and §5.9 has a purged id come back as a new
+   * row with a new one, so a client tells one life of an id from the next by comparing it. Two
+   * lives stamped in the same millisecond would be indistinguishable, and a prune leaves no record
+   * to compare against, so the stamp is held above the last one this server issued.
+   *
+   * A burst of creations inside one millisecond therefore runs ahead of the wall clock by one
+   * millisecond per row. Retention reads the higher of this and the anchor (§7), so the drift can
+   * only postpone an expiry, never bring one forward.
+   */
+  private freshFirstSeenAt(): number {
+    this.lastFirstSeenAt = Math.max(this.now(), this.lastFirstSeenAt + 1);
+    return this.lastFirstSeenAt;
   }
 
   private scope(scopeId: ScopeId): ScopeState {

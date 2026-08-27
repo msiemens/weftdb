@@ -288,13 +288,14 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 
   private async saveQuarantine(tx: AsyncSqlTransaction, op: QuarantinedOp): Promise<void> {
     await tx.run({
-      sql: `INSERT INTO outbox_quarantine (scope_id, table_name, row_id, field, value, hlc, base_hash, txn_id, kind, rejected_at, reason, server_value)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      sql: `INSERT INTO outbox_quarantine (scope_id, table_name, row_id, field, value, hlc, base_hash, txn_id, kind, rejected_at, reason, server_value, row_identity)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       parameters: [
         ...encodeOutboxParameters(op),
         op.rejectedAt,
         op.reason,
         op.serverValue === undefined ? null : encodeWireValue(op.serverValue),
+        op.rowIdentity,
       ],
     });
   }
@@ -434,6 +435,7 @@ function decodeQuarantineOp(row: SqlRow): QuarantinedOp {
     ...op,
     rejectedAt: requiredNumber(column(row, "rejected_at")),
     reason: requiredString(column(row, "reason")) as import("weftdb/core").RejectReason,
+    rowIdentity: nullableNumber(column(row, "row_identity")),
     ...(serverValue === null ? {} : { serverValue: decodeWireValue(serverValue) }),
   };
 }

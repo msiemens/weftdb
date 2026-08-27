@@ -25,7 +25,8 @@ CREATE TABLE IF NOT EXISTS outbox_quarantine (
   kind TEXT NOT NULL,
   rejected_at INTEGER NOT NULL,
   reason TEXT NOT NULL,
-  server_value TEXT
+  server_value TEXT,
+  row_identity INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS tombstones (
