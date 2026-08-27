@@ -68,6 +68,15 @@ once the move has been stored. A field the device has written again since the re
 later value, and the retried write for it is dropped. The outbox holds one write per field, and a
 row shows the value that write carries. Nothing in quarantine retries on its own.
 
+A write reaches only the row it was made to. Deleting a row and purging its tombstone frees the id,
+and a later `create` under it makes a different row. The call resolves with the operations it did
+not send and leaves them in quarantine. Ask the person about those again rather than reporting the
+repair as complete.
+
+```ts
+const undeliverable = await client.retryQuarantinedTxn(txnId("edit-task-1"));
+```
+
 ## Deciding a deleted row
 
 The clearest case a person has to resolve is a `row_exists` rejection caused by a pull: a row was

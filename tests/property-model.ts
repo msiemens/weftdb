@@ -606,10 +606,18 @@ function repairQuarantine(device: number, mode: RepairMode, pick: number): World
     const transaction = at(transactions, pick % transactions.length);
     const exported = target.client.exportQuarantinedTxn(transaction);
     if (exported.length === 0) throw new Error(`quarantine export lost ${transaction}`);
-    if (mode === "retry") await target.client.retryQuarantinedTxn(transaction);
-    else await target.client.discardQuarantinedTxn(transaction);
-    if (target.client.quarantine.some((op) => op.txnId === transaction)) {
+    // Retrying answers with the writes it could not send, which are the ones addressed to a row
+    // the id no longer names. Those stay set aside for the person to decide about again, and
+    // everything else the repair took has to be gone from quarantine.
+    const undeliverable = mode === "retry" ? await target.client.retryQuarantinedTxn(transaction) : [];
+    if (mode === "discard") await target.client.discardQuarantinedTxn(transaction);
+    const kept = new Set<WeftOp>(undeliverable);
+    const left = target.client.quarantine.filter((op) => op.txnId === transaction);
+    if (left.some((op) => !kept.has(op))) {
       throw new Error(`repairing ${transaction} left it in quarantine`);
+    }
+    for (const op of undeliverable) {
+      if (op.kind !== "set") throw new Error(`repairing ${transaction} withheld a ${op.kind}`);
     }
   });
 }

@@ -338,7 +338,12 @@ export class WeftClient {
     await this.persist();
   }
 
-  async retryQuarantinedTxn(txnId: TxnId): Promise<void> {
+  /**
+   * Sends a set-aside transaction again (§5.5), and answers with the writes it could not send.
+   * A caller that shows quarantine has to say what happened to each one, because a repair the
+   * person asked for that reached nothing is the silent failure §5.5 forbids.
+   */
+  async retryQuarantinedTxn(txnId: TxnId): Promise<readonly QuarantinedOp[]> {
     const retrying = this.quarantine.filter((op) => op.txnId === txnId);
     this.quarantine.splice(0, this.quarantine.length, ...this.quarantine.filter((op) => op.txnId !== txnId));
     // A transaction that makes the row keeps its opening writes however long it has been set
@@ -348,6 +353,7 @@ export class WeftClient {
         .filter((op) => op.kind === "create" || op.kind === "append")
         .map((op) => localKey(op.tableName, op.rowId)),
     );
+    const undeliverable: QuarantinedOp[] = [];
     for (const op of retrying) {
       const {
         rejectedAt: _rejectedAt,
@@ -357,6 +363,16 @@ export class WeftClient {
         ...wireOp
       } = op;
       if (wireOp.kind === "set" && !opening.has(localKey(wireOp.tableName, wireOp.rowId))) {
+        // The write speaks for the row it was made to and for no other (§5.8). A `create` that
+        // reused the id since made a row this write never saw, and sending it there is refused
+        // nowhere, because the rebase behind a `merge_required` certifies whatever it produces
+        // and the text lands on every device holding a row that never had it (§5.4).
+        const held = this.rows.get(localKey(op.tableName, op.rowId));
+        if (held !== undefined && op.rowIdentity !== held.internals._weft_first_synced_at) {
+          undeliverable.push(op);
+          this.quarantine.push(op);
+          continue;
+        }
         if (this.hasLaterWrite(wireOp)) continue;
         this.supersedeQueuedSet(wireOp.tableName, wireOp.rowId, wireOp.field);
         this.applyOwnWrite(wireOp);
@@ -365,6 +381,7 @@ export class WeftClient {
     }
     for (const op of retrying) this.recomputeDirty(op.tableName, op.rowId);
     await this.persist();
+    return undeliverable;
   }
 
   /**
@@ -621,10 +638,18 @@ export class WeftClient {
     // The diff3 ancestor is a fact about the relay's copy rather than this device's, so it is
     // recorded whether or not the value below is applied. A field written here before the relay
     // was ever heard from (a row made offline, or one whose every pull has been shadowed by an
-    // unsent write) otherwise reaches `rebase` with no ancestor at all, and `diff3("", …)` can
-    // match neither side and marks up prose that never contended (§6). What is recorded is
-    // exactly what the relay will compare the next push against (§5.4).
-    if (this.schema.collections[field.tableName]?.fields[field.field]?.merge === "diff3") {
+    // unsent write from the transaction that made it) otherwise reaches `rebase` with no ancestor
+    // at all, and `diff3("", …)` can match neither side and marks up prose that never contended
+    // (§6).
+    //
+    // A field this device holds an unsent write to keeps the ancestor that write was made
+    // against, because that is the version `rebase` has to merge from. Recording the relay's
+    // newer copy here leaves `diff3(remote, mine, remote)`, which returns the local text and
+    // deletes every remote edit between the two with no marker and no rejection (§5.4).
+    if (
+      this.schema.collections[field.tableName]?.fields[field.field]?.merge === "diff3" &&
+      !this.holdsUnsentWrite(field.tableName, field.rowId, field.field, row)
+    ) {
       row.internals.diff3Base.set(field.field, field.value);
     }
     // A field this device has written and not yet sent keeps the value it was written with. What
@@ -921,6 +946,17 @@ export class WeftClient {
         candidate.tableName === op.tableName &&
         candidate.rowId === op.rowId,
     );
+  }
+
+  /**
+   * Whether this device is still holding a write to this field that the scope has not been given,
+   * queued or set aside. A quarantined write counts only for the life of the row it was made to,
+   * so a reused id starts again from what the relay sent (§5.8).
+   */
+  private holdsUnsentWrite(tableName: TableName, rowId: RowId, field: FieldName, row: LocalRow): boolean {
+    if (this.hasQueuedWrite(tableName, rowId, field)) return true;
+    const quarantined = this.quarantinedWrite(tableName, rowId, field);
+    return quarantined !== undefined && quarantined.rowIdentity === row.internals._weft_first_synced_at;
   }
 
   /** Whether this field has a write of its own waiting to be sent. */
