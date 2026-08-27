@@ -277,7 +277,7 @@ test("the query engine orders ranks the way the ranks were built", () => {
       const engine = new SubscriptionEngine();
       const rows = new Map<string, LocalRow>(
         ranks.map((rank, index) => [
-          `todos row-${index}`,
+          `todos\0row-${index}`,
           {
             id: rowId(`row-${index}`),
             scopeId: scopeId("s"),

@@ -252,7 +252,7 @@ test("a name carrying a statement terminator survives the adapter's split", asyn
           !foldsOntoAName("tasks", field),
       );
       // eslint-disable-next-line no-control-regex -- superseded by hasControlCharacter above
-      if (/[ -]/u.test(field)) return;
+      if (/[\0-]/u.test(field)) return;
 
       const schema = defineSchema({ tasks: S.collection({ [field]: S.string() }) });
       using database = new DatabaseSync(":memory:");

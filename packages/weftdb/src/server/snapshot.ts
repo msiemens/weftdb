@@ -256,11 +256,11 @@ function compareKeys(left: string, right: string): number {
 }
 
 function fieldKeyOf(record: FieldRecord): string {
-  return `${record.scopeId} ${record.tableName} ${record.rowId} ${record.field}`;
+  return `${record.scopeId}\0${record.tableName}\0${record.rowId}\0${record.field}`;
 }
 
 function rowKeyOf(record: RowRecord): string {
-  return `${record.scopeId} ${record.tableName} ${record.rowId}`;
+  return `${record.scopeId}\0${record.tableName}\0${record.rowId}`;
 }
 
 function serializeField(record: FieldRecord): SerializedFieldRecord {
