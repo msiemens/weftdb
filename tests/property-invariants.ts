@@ -337,10 +337,16 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
           // typed over. What the scope says is still excluded. The value has to be one this
           // device produced, its latest write, or the rebase that replaced that write before
           // the op was set aside.
+          //
+          // A write speaks for the row it was made to and for no other, named by the
+          // `first_seen_at` the op carries (§5.8). A `restore` after the scope purged the id
+          // builds a life the relay has never named, and `applyField` refuses to put a write
+          // from an earlier life into it, so the field holds whatever that life was given and
+          // the write stays in quarantine for the person to decide about.
           const quarantinedByField = new Map<FieldName, WireValue[]>();
           for (const op of device.client.quarantine) {
             if (op.kind !== "set" || op.tableName !== table || op.rowId !== id) continue;
-            if (lastQueued.has(op.field)) continue;
+            if (lastQueued.has(op.field) || op.rowIdentity !== row.internals._weft_first_synced_at) continue;
             quarantinedByField.set(op.field, [...(quarantinedByField.get(op.field) ?? []), op.value]);
           }
           for (const [field, quarantined] of quarantinedByField) {

@@ -19,10 +19,16 @@ import {
   STATUS,
   TASKS,
   TITLE,
+  TOMBSTONE_FLOOR_MS,
   WORLD_RUNS,
   worldCommands,
 } from "./property-model.ts";
-import { assertSettledInvariants, STEP_INVARIANTS, SETTLED_INVARIANTS } from "./property-invariants.ts";
+import {
+  assertSettledInvariants,
+  assertWorldInvariants,
+  STEP_INVARIANTS,
+  SETTLED_INVARIANTS,
+} from "./property-invariants.ts";
 import { inProcessTransport } from "weftdb/client";
 
 test("generated histories uphold every continuously-checked §9 invariant", async () => {
@@ -165,6 +171,58 @@ test("an edit written while the row's own create is set aside rebases against wh
     .snapshot(world.scopeId)
     .fields.find((record) => record.rowId === row && record.field === NOTES)?.value;
   if (notes !== edited) throw new Error(`the scope holds ${JSON.stringify(notes)} for prose only one device wrote`);
+});
+
+test("a set-aside edit is not demanded of a life of the row it was never made to", async () => {
+  // The arrangement a second generated history shrank to. `device-1` holds an edit to the prose
+  // that was set aside when the delete arrived (§9.22), brings the row back, and the relay purges
+  // the id under it, so the restore is set aside too. Discarding the restore leaves the edit alone
+  // in quarantine, against a row whose only life on this device is the one the restore made.
+  //
+  // That life carries no `first_seen_at`, because the relay has never named it, and the edit
+  // carries the one the relay gave the row it was made to (§5.8). `applyField` refuses to put a
+  // write into a life it was not made to, so the field holds nothing, and the edit waits for the
+  // person. A row the relay has named still has to show the write, which §5.8.unsent asserts.
+  const world = createWorld(2);
+  const row = rowId("row-0");
+  const author = deviceAt(world, 0).client;
+  const reader = deviceAt(world, 1).client;
+  const transport = () => inProcessTransport(world.server);
+
+  await author.create(
+    TASKS,
+    row,
+    {
+      [TITLE]: "a task",
+      [STATUS]: "open",
+      [NOTES]: BASE_NOTES,
+      [RANK]: "a:author",
+      [CONSUMED_AT]: world.now,
+      [AUTO_DELETE_DAYS]: 30,
+    },
+    txnId("create"),
+  );
+  await author.syncWith(transport(), propertySchemaHash);
+  await reader.syncWith(transport(), propertySchemaHash);
+
+  await reader.update(TASKS, row, { [NOTES]: "reader\nbravo\ncharlie\ndelta" }, txnId("edit"));
+  await author.delete(TASKS, row, txnId("delete"));
+  await author.syncWith(transport(), propertySchemaHash);
+  // The reader's edit is addressed to a row the scope reports deleted, so it is set aside for the
+  // person to decide about (§9.22) and the row leaves the device.
+  await reader.applyPull(world.server.pull(world.scopeId, reader.lastServerSeq));
+  await reader.restore(TASKS, row, { [TITLE]: "brought back" }, txnId("restore"));
+
+  world.now += TOMBSTONE_FLOOR_MS;
+  world.server.pruneTombstones(world.scopeId, TOMBSTONE_FLOOR_MS);
+  await reader.applySnapshot(world.server.snapshot(world.scopeId));
+  await reader.discardQuarantinedTxn(txnId("restore"));
+
+  await assertWorldInvariants(world, "discarding the restore");
+  const kept = reader.rows.get(`${TASKS}\0${row}`);
+  if (kept?.internals._weft_first_synced_at !== null) throw new Error("the restored row was named by the relay");
+  if (kept.fields.get(NOTES) !== undefined) throw new Error("a life the relay never named was given an older edit");
+  if (!reader.quarantine.some((op) => op.txnId === txnId("edit"))) throw new Error("the edit left quarantine");
 });
 
 test("a settled world reports no disagreements for a trivially empty history", async () => {
