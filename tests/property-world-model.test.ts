@@ -116,6 +116,57 @@ test("a restore competing with an independent create of the same id settles with
   await assertSettledInvariants(world);
 });
 
+test("an edit written while the row's own create is set aside rebases against what the create carries", async () => {
+  // The arrangement a generated history shrank to, written out so it does not depend on a seed.
+  // One device, so `tasks.notes` is written by nothing else in the world.
+  //
+  // §5.4 has a push carry `hash(_weft_base_notes)` and the relay fast-forward on a match. The
+  // ancestor of a diff3 field on a row made here is the value the create carries, which a create
+  // waiting in quarantine is still holding, so an edit written while it waits claims that value.
+  // An edit that claims an absent ancestor instead earns `merge_required` against prose the same
+  // device wrote, and once the row has been deleted here there is nothing left to merge from, so
+  // the edit is set aside for good and the relay keeps the text it was typed over.
+  const world = createWorld(1);
+  const row = rowId("row-0");
+  const device = deviceAt(world, 0).client;
+  const transport = inProcessTransport(world.server);
+  const edited = "edited\nbravo\ncharlie\ndelta";
+
+  await device.create(
+    TASKS,
+    row,
+    {
+      [TITLE]: "a task",
+      [STATUS]: "open",
+      [NOTES]: BASE_NOTES,
+      [RANK]: "a:only",
+      [CONSUMED_AT]: world.now,
+      [AUTO_DELETE_DAYS]: 30,
+    },
+    txnId("create"),
+  );
+  // A snapshot taken before the create was pushed does not name the row, and everything queued
+  // for it is dirty, so the whole transaction is set aside as `row_absent` (§5.5).
+  await device.applySnapshot(world.server.snapshot(world.scopeId));
+  await device.update(TASKS, row, { [NOTES]: edited }, txnId("edit"));
+  // The edit is addressed to a row the relay has never been given, so it joins the create in
+  // quarantine. Retrying the create is what puts the row, and the prose the edit was written
+  // against, on the relay.
+  await device.syncWith(transport, propertySchemaHash);
+  await device.retryQuarantinedTxn(txnId("create"));
+  await device.syncWith(transport, propertySchemaHash);
+
+  await device.delete(TASKS, row, txnId("delete"));
+  await device.retryQuarantinedTxn(txnId("edit"));
+
+  await quiesce(world);
+  await assertSettledInvariants(world);
+  const notes = world.server
+    .snapshot(world.scopeId)
+    .fields.find((record) => record.rowId === row && record.field === NOTES)?.value;
+  if (notes !== edited) throw new Error(`the scope holds ${JSON.stringify(notes)} for prose only one device wrote`);
+});
+
 test("a settled world reports no disagreements for a trivially empty history", async () => {
   const world = await runWorld([]);
   await quiesce(world);

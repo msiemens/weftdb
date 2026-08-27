@@ -184,6 +184,13 @@ export class WeftClient {
       // row that lacks them, and a decoder reads them as blank, so without this a new row is
       // invisible to the application until it has been pushed (§4.1).
       if (BASE_FIELDS.has(field)) row.fields.set(field, value);
+      // A diff3 field on a row made here has the create's own value as its ancestor, because the
+      // relay holds nothing under this id until the create lands and then holds exactly this.
+      // A later edit reads the ancestor from the outbox while the create is queued, and from
+      // here once it has been set aside (§5.5), where claiming an absent ancestor would earn a
+      // `merge_required` against the value this device itself wrote (§5.4).
+      if (this.schema.collections[tableName]?.fields[field]?.merge === "diff3")
+        row.internals.diff3Base.set(field, value);
       this.pushOutbox(this.setOp(tableName, rowId, field, value, txnId));
     }
     await this.persist();
