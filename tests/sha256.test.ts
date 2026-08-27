@@ -18,10 +18,9 @@ test("the portable digest matches the platform's SHA-256", () => {
 });
 
 test("it agrees with the platform over any string, of any length, in any alphabet", () => {
-  // The equivalence this rests on, drawn wide enough to stand in for the implementation itself.
   // `fc.string()` above draws printable ASCII, which exercises the compression function and almost
-  // none of the encoding: a digest is taken over bytes, and where the bytes come from is half of
-  // what there is to get wrong.
+  // none of the encoding, because a digest is taken over bytes, and where the bytes come from is
+  // half of what there is to get wrong.
   //
   // `binary` units are arbitrary UTF-16 code units, so this reaches lone surrogates, which are not
   // text and which `TextEncoder` and `Buffer` both replace with U+FFFD. Anything swapped in here
@@ -50,9 +49,8 @@ test("it agrees with the platform over any string, of any length, in any alphabe
 });
 
 test("it hashes the bytes the platform encodes, not the code units", () => {
-  // The other half stated separately: the digest is over `TextEncoder`'s bytes. Pinned against
-  // `Buffer.from(input, "utf8")` rather than against another digest, so a change that broke both
-  // the hash and the encoding in the same direction still fails here.
+  // This assertion pins the digest against `Buffer.from(input, "utf8")`, so a change that broke
+  // both the hash and the encoding the same way still fails here.
   fc.assert(
     fc.property(fc.string({ unit: "binary", maxLength: 200 }), (input) => {
       const bytes = Buffer.from(new TextEncoder().encode(input));

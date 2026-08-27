@@ -1,6 +1,6 @@
 // The page. A shared todo list, one device per tab, talking to the relay over HTTP. Nothing
-// here is scripted: open a second tab, take one offline, edit the same note line in both, and
-// watch what the merge does when it comes back.
+// here is scripted, so open a second tab, take one offline, edit the same note line in both,
+// and watch what the merge does when it comes back.
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Diff3EditorBuffer } from "weftdb/client";
 import { dropIfRowIsGone } from "weftdb-demo-shared/open";
@@ -11,9 +11,9 @@ import { DEMO } from "./scope.ts";
 
 export function App({ store }: { readonly store: TodoStore }): ReactNode {
   useEffect(() => store.start(), [store]);
-  // Straight from `weft generate`: a hook per collection, rows already decoded into the type
-  // the schema describes. What the client knows and the schema does not — unsent work, a
-  // conflicted merge — is added on top.
+  // `useTodos` comes straight from `weft generate`, a hook per collection with rows already
+  // decoded into the type the schema describes. What the client knows and the schema does not
+  // (unsent work, a conflicted merge) is added on top.
   const todos = useTodos(store.source, "rank").map((row) => store.view(row));
   const status = useStatus(store);
 
@@ -23,7 +23,7 @@ export function App({ store }: { readonly store: TodoStore }): ReactNode {
       {status.quarantined > 0 ? (
         <Quarantine store={store} count={status.quarantined} reasons={status.quarantineReasons} />
       ) : null}
-      {/* Composer, rows and empty state are one surface: it is a single list, and the styling
+      {/* Composer, rows and empty state are one surface. It is a single list, and the styling
           reads it that way. */}
       <section className="list">
         <Composer store={store} />
@@ -44,8 +44,8 @@ function Header({ store, status }: { readonly store: TodoStore; readonly status:
   return (
     <header>
       <div className="title">
-        {/* The span is the wordmark's one flourish — `db` in the accent. It leaves `textContent`
-            as "weftdb", which is what a screen reader and the tests both read. */}
+        {/* The span is the wordmark's one flourish, `db` in the accent colour. It leaves
+            `textContent` as "weftdb", which is what a screen reader and the tests both read. */}
         <h1>
           weft<span>db</span>
         </h1>
@@ -185,8 +185,8 @@ function TodoItem({
   readonly total: number;
 }): ReactNode {
   const [notesOpen, setNotesOpen] = useState(false);
-  // A conflict arriving from another tab opens the notes whether or not you asked, because a
-  // merge you cannot see is one you cannot resolve.
+  // A conflict arriving from another tab opens the notes regardless of whether they were already
+  // open, because a merge you cannot see is one you cannot resolve.
   const showNotes = notesOpen || todo.conflicted;
 
   return (
@@ -201,8 +201,8 @@ function TodoItem({
             // reaches the worker, by this tab or by one it pulls from, so the tick is allowed to
             // find nothing to tick.
             dropIfRowIsGone(store.todos.update(todo.id, { done: !todo.done }));
-            // Event-log ids are minted per write: two tabs ticking the same row at the same
-            // moment are two entries in history, not one write racing another.
+            // Event-log ids are minted per write, so two tabs ticking the same row at the same
+            // moment each get their own entry in history.
             dropIfRowIsGone(
               store.todoEvents.create(`event-${crypto.randomUUID()}`, {
                 todo_id: todo.id,
@@ -296,10 +296,9 @@ function Notes({ store, todo }: { readonly store: TodoStore; readonly todo: Todo
 /**
  * The last few things anyone did, newest first.
  *
- * A compiled statement rather than the whole collection sliced afterwards: `useTodoEventsQuery`
- * takes the ordering, the direction and the bound down to SQLite in the storage worker, so what
- * crosses the port is the eight rows this list renders instead of every event the scope has ever
- * recorded. The `where` names the kinds this panel is about, which is what the buttons below write.
+ * `useTodoEventsQuery` compiles a statement that takes the ordering, the direction and the bound
+ * down to SQLite in the storage worker, so only the eight rows this list renders cross the port.
+ * The `where` names the kinds this panel is about, which is what the buttons below write.
  */
 function Activity({ store }: { readonly store: TodoStore }): ReactNode {
   const entries = useTodoEventsQuery(store.source, (statement) =>
@@ -327,9 +326,9 @@ function Activity({ store }: { readonly store: TodoStore }): ReactNode {
 }
 
 /**
- * The guide is a modal rather than a panel: it is read once, at the start, and then it is in the
- * way of the thing it is describing. `<dialog>` is used natively for it, which is where Escape,
- * the focus trap and the inert backdrop come from — none of that is worth reimplementing.
+ * The guide is a modal because it is read once at the start and would otherwise sit in the way
+ * of the thing it describes. `<dialog>` supplies Escape, the focus trap and the inert backdrop
+ * natively, so none of it needs reimplementing.
  */
 function Guide(): ReactNode {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -337,8 +336,8 @@ function Guide(): ReactNode {
   /**
    * `close()` takes the dialog out of the top layer immediately, so it has to be held open for
    * as long as the stylesheet's closing animation. The marker is set with `setAttribute` rather
-   * than through React state: a class React owns would be reconciled away by the next store
-   * update, which lands often here, and the dialog would blink out mid-animation. The close
+   * than through React state, because a class React owns would be reconciled away by the next
+   * store update, which lands often here, and the dialog would blink out mid-animation. The close
    * itself runs off a timer rather than `animationend`, because an animation that never fires
    * must not leave a modal stuck open over the page.
    */
@@ -364,8 +363,9 @@ function Guide(): ReactNode {
         </button>
         <ResetData />
       </footer>
-      {/* A sibling of the trigger, not a child of it: nesting the dialog inside the trigger's
-          wrapper let `.guide-open button` reach the dialog's own button and repaint it. */}
+      {/* The dialog is a sibling of the trigger rather than a child, because nesting it inside
+          the trigger's wrapper let `.guide-open button` reach the dialog's own button and
+          repaint it. */}
       <dialog
         className="guide"
         ref={dialog}
@@ -375,7 +375,8 @@ function Guide(): ReactNode {
           close();
         }}
         // A click on the backdrop is dispatched to the dialog itself, so "outside" has to be
-        // measured rather than assumed — the dialog's own padding is inside its box too.
+        // measured against the dialog's own bounding box, because its padding sits inside that
+        // box too.
         onClick={(event) => {
           if (event.target !== event.currentTarget) return;
           const box = event.currentTarget.getBoundingClientRect();
@@ -437,7 +438,7 @@ function GuideBody({ onClose }: { readonly onClose: () => void }): ReactNode {
  * Clearing the demo, behind a second click.
  *
  * There is no undo, and this sits beside a button people press to read something, so the
- * confirmation is the label: a first click arms it and a second carries it out. Arming lapses,
+ * confirmation is the label, and a first click arms it while a second carries it out. Arming lapses,
  * which is what keeps a click made and forgotten from arming the click after it.
  *
  * A reset in another tab retires the scope this one is on, so this is also where a tab hears that

@@ -1,12 +1,12 @@
 // One browser, for the demos to be opened in.
 //
 // Everything the demos ship is real here and only the browser is stood in for. The shipped
-// `serveDemoStorageWorker` runs once per browser — one `SharedWorker` serves an origin — and each
-// tab reaches it over a `MessageChannel`, syncing through the shipped `serveDemoRelay` over a port
-// that is genuinely transferred into that worker. The device ids, the routing and the storage are
-// the library's own, driven through `openWeftDatabase` exactly as a page drives them.
+// `serveDemoStorageWorker` runs once per browser, with one `SharedWorker` serving an origin, and
+// each tab reaches it over a `MessageChannel`, syncing through the shipped `serveDemoRelay` over a
+// port that is genuinely transferred into that worker. The device ids, the routing and the storage
+// are the library's own, driven through `openWeftDatabase` exactly as a page drives them.
 //
-// What a namespace is here is what it is in a browser: the identity of one database. Each tab of a
+// A namespace here means what it means in a browser, the identity of one database. Each tab of a
 // demo takes one of its own, which is what makes a second tab a second device, so the file each
 // client is read out of is keyed on it. A database whose last tab has gone is dropped and reopened
 // with what it committed still in it, which is what makes a reload a reload.
@@ -21,7 +21,7 @@ import { serveDemoStorageWorker, type DemoStorageWorker } from "weftdb-demo-shar
 import { memorySqlite } from "./storage-fixtures.ts";
 import { PortEndpoint } from "./multitab-fixtures.ts";
 
-/** Storage that behaves like the browser's: string in, string out, nothing shared by accident. */
+/** Storage that behaves like the browser's, string in and string out, nothing shared by accident. */
 export function memoryStorage(): StorageLike {
   const entries = new Map<string, string>();
   return {
@@ -41,14 +41,14 @@ export interface DemoBrowserOptions {
 export interface TabOptions {
   /**
    * Whether this tab is given a port to the relay. `false` is a browser with nowhere to run one,
-   * which is a demo that works and does not sync — the state a local-first page is built for.
+   * which is a demo that works and does not sync, the state a local-first page is built for.
    */
   readonly relay?: boolean;
   /** Where a failure with no caller to reject is reported. */
   readonly onError?: (error: Error) => void;
 }
 
-/** One tab's half of a demo: who it says it is, and the database it opened. */
+/** One tab's half of a demo, who it says it is and the database it opened. */
 export interface DemoTab {
   readonly identity: TabIdentity;
   readonly database: DemoDatabase;
@@ -57,10 +57,10 @@ export interface DemoTab {
 /**
  * Runs syncs until a device has nothing left to send.
  *
- * `syncing` is half the condition rather than decoration. The worker's session starts a sync of its
- * own the moment a token reaches it, which is before anything the page did has crossed the port, and
- * a status published from inside that sync reports an outbox that is empty because nothing has been
- * put in it yet. Waiting for the sync to finish as well is what makes "nothing pending" mean it.
+ * The worker's session starts a sync of its own the moment a token reaches it, before anything the
+ * page did has crossed the port, and a status published from inside that sync reports an outbox
+ * that is empty only because nothing has been put in it yet. Checking `syncing` alongside `pending`
+ * is what makes "nothing pending" mean it.
  */
 export async function drain(
   store: { sync(): Promise<void>; status(): SessionStatus },
@@ -80,7 +80,7 @@ function delay(ms: number): Promise<void> {
 }
 
 export class DemoBrowser {
-  /** One `localStorage` for the whole browser: the visitor's scope, and every device id. */
+  /** One `localStorage` for the whole browser, holding the visitor's scope and every device id. */
   readonly local = memoryStorage();
   /** One relay `SharedWorker`, which is what stands in for a deployment. */
   readonly relay: WeftDemoRelay = serveDemoRelay();
@@ -104,9 +104,9 @@ export class DemoBrowser {
   /**
    * The browser stopping this origin's storage worker and starting it again over the same files.
    *
-   * Stopping the worker is not what a page hears; a closed port is. So the worker's end of every
+   * A closed port is what a page actually hears when a worker stops, so the worker's end of every
    * tab connection is closed here, which is the notice `openWeftDatabase` reconnects on, and the
-   * connection it makes is served by the new worker — one that has none of the relay ports the
+   * connection it makes is served by the new worker, one that has none of the relay ports the
    * tabs handed to the old one.
    */
   async restartStorage(): Promise<void> {
@@ -119,10 +119,10 @@ export class DemoBrowser {
   /**
    * Opens one tab's database, the way each demo's own `open` does.
    *
-   * The namespace is the tab's, which is the whole arrangement these demos rest on: two tabs of one
-   * browser take two namespaces under one scope, so they are two databases holding one list —
-   * separate clients, separate files, separate device ids — and everything they show each other has
-   * been through the relay.
+   * The namespace is the tab's, which is the whole arrangement these demos rest on. Two tabs of
+   * one browser take two namespaces under one scope, so they are two databases holding one list,
+   * with separate clients, separate files and separate device ids, and everything they show each
+   * other has been through the relay.
    */
   async tab(name: string, options: TabOptions = {}): Promise<DemoTab> {
     const identity = await tabIdentity(this.session(name), this.local, { demo: this.#demo });
@@ -130,8 +130,8 @@ export class DemoBrowser {
       schema: this.#schema,
       scopeId: identity.scopeId,
       namespace: `weftdb-demo/${this.#demo}/${identity.deviceId}`,
-      // Never dereferenced: `overrides` is what turns these into a connection and a relay port,
-      // because Node has no `SharedWorker` constructor.
+      // `overrides` is what actually turns these into a connection and a relay port, since Node
+      // has no `SharedWorker` constructor, so neither string here is ever dereferenced.
       worker: "./storage-worker.ts",
       relayWorker: "./relay-worker.ts",
       ...(options.onError === undefined ? {} : { onError: options.onError }),
@@ -141,7 +141,7 @@ export class DemoBrowser {
   }
 
   /**
-   * A tab's `sessionStorage`, which is what makes a tab a tab: reusing a name is that tab
+   * A tab's `sessionStorage`, which is what makes a tab a tab. Reusing a name is that tab
    * reloading, and a new name is a new tab and therefore a new device.
    */
   session(name: string): StorageLike {
@@ -161,7 +161,7 @@ export class DemoBrowser {
     };
   }
 
-  /** A `WindowLike` for one tab: this browser's local storage, and that tab's session storage. */
+  /** A `WindowLike` for one tab, this browser's local storage and that tab's session storage. */
   window(name: string): { readonly sessionStorage: StorageLike; readonly localStorage: StorageLike } {
     return { sessionStorage: this.session(name), localStorage: this.local };
   }

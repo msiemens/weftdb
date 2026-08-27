@@ -1,10 +1,10 @@
-// The storage worker every demo ships, minus the one thing that differs between them: the schema.
+// The storage worker every demo ships, minus the one thing that differs between them, the schema.
 //
-// A demo's own worker module is two lines — its schema, its SQLite build — because everything
-// interesting here is the same for all three. What that is: this worker's relay is not at a URL.
-// It is a `WeftServer` in a second `SharedWorker` of the same browser (`relay-worker.ts`), reachable
-// only over a `MessagePort`, and the page is the only side that can construct a `SharedWorker` and
-// get one. So the port is transferred in from the page over its own connection to this worker, and
+// A demo's own worker module is two lines, its schema and its SQLite build, because everything
+// interesting here is the same for all three. This worker's relay is not at a URL. It is a
+// `WeftServer` in a second `SharedWorker` of the same browser (`relay-worker.ts`), reachable only
+// over a `MessagePort`, and the page is the only side that can construct a `SharedWorker` and get
+// one. So the port is transferred in from the page over its own connection to this worker, and
 // turned into the transport the sync session runs over.
 //
 // One line per database. Each tab of a demo opens under a namespace of its own (`open.ts`), so this
@@ -12,14 +12,14 @@
 // relay and a switch of its own on it. The relay factories are told which database they are being
 // built for, which is what a line is found by.
 //
-// Three messages arriving on each connecting port are read here. Two are the demo's own and are
-// tagged so that `WeftStorageWorker`'s listener drops them: the relay port, before anything else on
-// that port, and the online switch whenever somebody clicks it. The third is the library's own
-// `hydrate`, which is where the port says which database it is for — the demo messages arrive
-// before it, so what they carry is held until there is a line to put it on. The switch is here
-// rather than on the page because the session is here — cutting the line where the calls are made is
-// what makes an offline tab an offline *device*, with its work piling up in the outbox exactly as it
-// would with the network gone.
+// Each connecting port carries the relay port, the online switch and the library's own `hydrate`.
+// The relay port and the switch are the demo's own, tagged so that `WeftStorageWorker`'s listener
+// drops them. The relay port arrives before anything else on the port, and the switch arrives
+// whenever somebody clicks it. `hydrate` says which database the port is for, and it arrives after
+// the other two, so what they carry is held until there is a line to put it on. The switch lives
+// here rather than on the page because the session lives here, and cutting the line where the
+// calls are made is what makes an offline tab an offline *device*, with its work piling up in the
+// outbox exactly as it would with the network gone.
 import type { ScopeId, WeftOp } from "weftdb/core";
 import type { SchemaDefinition } from "weftdb/schema";
 import type { HandshakeRequest, HandshakeResponse, PullBatch, PushOutcome, Snapshot } from "weftdb/server";
@@ -31,7 +31,7 @@ import { RelayPortTransport, type RelayPortLike } from "./port-transport.ts";
 /**
  * A tab handing this worker its line to the relay. Sent on the tab's own connection port, before
  * anything else on it. A `port` of `undefined` is a browser with no `SharedWorker` to run a relay
- * in: the database is served all the same, with no session at all.
+ * in, and the database is served all the same, with no session at all.
  */
 export const DEMO_RELAY_MESSAGE = "weft-demo-relay";
 
@@ -56,7 +56,7 @@ export interface DemoStorageWorkerOptions {
   readonly pollWhileBlindMs?: number;
 }
 
-/** A demo's storage worker: the library's, plus the line to the relay and the switch on it. */
+/** A demo's storage worker, built from the library's plus the line to the relay and the switch on it. */
 export interface DemoStorageWorker {
   /** Serves one arriving port, and reads the demo's two messages and the routing off it. */
   connect(port: WorkerHostPortLike): void;
@@ -144,13 +144,13 @@ class DemoConnection {
 /**
  * The line one device syncs over, with that device's switch on it.
  *
- * One `RelayPortTransport` per port, wrapped rather than rebuilt per session: two transports over
+ * One `RelayPortTransport` per port, wrapped rather than rebuilt per session. Two transports over
  * one port would number their calls from one apiece and each would settle the other's replies. A
  * session's teardown closes the socket it was handed, which puts down that session's wake handler
  * and leaves the port open for the next one.
  *
  * `connected` is what a session reads to decide whether it has a live connection, so the switch
- * turns it off: an offline device polls, fails, and shows its work as unsent.
+ * turns it off. An offline device polls, fails, and shows its work as unsent.
  */
 class DemoRelayLine implements AsyncSyncTransport {
   online = true;
@@ -166,8 +166,8 @@ class DemoRelayLine implements AsyncSyncTransport {
    * Takes a port to the relay, and lets go of the one it was holding.
    *
    * The newest is the one known to be live. A port whose relay the browser stopped stays open at
-   * this end and answers nothing, and `RelayPortTransport.connected` cannot see that — so a tab
-   * that has just built a fresh connection is the only evidence there is.
+   * this end and answers nothing, and `RelayPortTransport.connected` cannot see that. A tab that
+   * has just built a fresh connection is the only evidence there is.
    */
   adopt(port: RelayPortLike | undefined): void {
     if (port === undefined) return;
@@ -175,7 +175,7 @@ class DemoRelayLine implements AsyncSyncTransport {
     this.#relay = new RelayPortTransport({
       port,
       onWake: (advanced) => {
-        // Dropped while the line is cut, because acting on it would be a sync that cannot happen —
+        // Dropped while the line is cut, because acting on it would be a sync that cannot happen,
         // and this device is meant to hear nothing at all while it is offline.
         if (this.online) this.#wake.get(advanced.scopeId)?.();
       },
@@ -226,7 +226,7 @@ class DemoRelayLine implements AsyncSyncTransport {
  *
  * A `SocketTransport`, because the relay says when a scope has moved and a session that hears it
  * syncs there and then. The four calls are the line's, and closing puts down this session's wake
- * handler alone: a line outlives the sessions on it, and a namespace with two scopes open has two
+ * handler alone. A line outlives the sessions on it, and a namespace with two scopes open has two
  * of them.
  */
 class DemoRelaySocket implements SocketTransport {
@@ -271,7 +271,7 @@ function isOnlineMessage(value: unknown): value is DemoOnlineMessage {
   return tagged(value) === DEMO_ONLINE_MESSAGE && typeof (value as DemoOnlineMessage).online === "boolean";
 }
 
-/** The routing the library reads off this same port: which database the tab that owns it wants. */
+/** What the library reads off this same port to learn which database the tab that owns it wants. */
 function isHydrateRequest(value: unknown): value is { readonly namespace: string } {
   if (typeof value !== "object" || value === null) return false;
   const message = value as { readonly type?: unknown; readonly namespace?: unknown };

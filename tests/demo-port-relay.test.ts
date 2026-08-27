@@ -1,10 +1,10 @@
-// The relay the docs demos sync against when there is no relay: a `WeftServer` in a `SharedWorker`,
-// reached from each tab over a `MessagePort`.
+// The relay the docs demos sync against when there is no relay, a `WeftServer` in a
+// `SharedWorker`, reached from each tab over a `MessagePort`.
 //
 // Both halves under test are the ones the demos ship, and only the process boundary is stood in
-// for — Node has no `SharedWorker`, so each "tab" connects over a `MessageChannel` exactly as a
-// page connects over a shared worker's port. The clients are real `WeftClient`s running the real
-// `syncWith`, so what these exercise is the sync path rather than a description of it.
+// for, since Node has no `SharedWorker` and each "tab" connects over a `MessageChannel` instead,
+// exactly as a page connects over a shared worker's port. The clients are real `WeftClient`s
+// running the real `syncWith`, so what these exercise is the sync path itself.
 import assert from "node:assert/strict";
 import { MessageChannel } from "node:worker_threads";
 import { test } from "vitest";
@@ -33,7 +33,7 @@ test("two tabs of one browser converge through the relay running in it", async (
 
   assert.equal(beta.getRow(TODOS, rowId("todo-1"))?.fields.get(TITLE), "buy milk");
   assert.equal(alpha.outbox.length, 0, "acknowledged work stayed in the outbox");
-  // Two ports, two devices, one scope: the tabs are as separate to the relay as a laptop and a
+  // Two ports, two devices, one scope. The tabs are as separate to the relay as a laptop and a
   // phone are, which is what makes their outboxes, clocks and cursors independent.
   assert.equal(relay.relay.connections, 2);
   assert.equal(relay.relay.server.devices.size, 2, "the two tabs were taken for one device");
@@ -52,13 +52,13 @@ test("a wake reaches the tab that did not push, and never the tab that did", asy
   await newTodo(alpha, "todo-1", "buy milk");
   await alpha.syncWith(alphaPort, HASH);
 
-  // This is the whole reason a second tab updates without being touched: it is told, rather than
-  // finding out at its next poll.
+  // The relay tells a second tab directly, so it updates without waiting for its next poll.
   await settle(() => woke.beta.length > 0);
   assert.equal(woke.beta[0]?.scopeId, SCOPE);
   assert.equal(woke.beta[0]?.serverSeq, relay.relay.server.scopes.get(SCOPE)?.serverSeq);
-  // Not back to the pusher. A tab woken by its own push syncs again over work it already has, and
-  // two tabs taking turns would keep each other syncing for as long as the page was open.
+  // The push does not wake the pusher itself. A tab woken by its own push would sync again over
+  // work it already has, and two tabs taking turns would keep each other syncing for as long as
+  // the page was open.
   assert.deepEqual(woke.alpha, [], "the tab that pushed was woken by its own push");
 });
 
@@ -74,7 +74,7 @@ test("a relay that throws rejects the caller rather than answering it wrongly", 
   const transport = relay.connect();
 
   await assert.rejects(transport.pull(SCOPE, 0), /the scope's records could not be read/u);
-  // And the port is still serving: one call that failed is not a connection that has gone.
+  // The port keeps serving after one call fails; a failed call does not close the connection.
   assert.equal((await transport.handshake(client("alpha").handshakeRequest(HASH))).ok, true);
 });
 
@@ -86,8 +86,8 @@ test("a push the relay refuses is an answer, not a failure", async () => {
   const ops = [...alpha.outbox];
 
   assert.equal((await transport.push(SCOPE, ops)).ok, true);
-  // The same create a second time: the row exists now, so the server refuses it. A rejection is
-  // part of a `PushResult` — the value the client rebases and quarantines from — so it resolves.
+  // The same create a second time. The row exists now, so the server refuses it. A rejection is
+  // part of a `PushResult`, the value the client rebases and quarantines from, so it resolves.
   // Rejecting the promise would report diverged work as an unreachable relay, and the edit would
   // sit in the outbox instead of being surfaced.
   const again = await transport.push(SCOPE, ops);
@@ -127,8 +127,8 @@ class Relay {
   channel(): RelayPortLike {
     const channel = new MessageChannel();
     this.#channels.push(channel);
-    // A `node:worker_threads` port has every method `RelayPortLike` asks for; `PortEndpoint` is
-    // about the two type declarations and about starting the port, not about the runtime.
+    // A `node:worker_threads` port has every method `RelayPortLike` asks for. `PortEndpoint` only
+    // supplies the two type declarations and starts the port.
     this.relay.connect(new PortEndpoint<RelayMessage>(channel.port2));
     return new PortEndpoint<RelayMessage>(channel.port1);
   }
@@ -146,7 +146,7 @@ class Relay {
     for (const transport of this.#transports) transport.close();
     this.relay.stop();
     // An open port keeps Node's event loop alive, so a failing run that skipped these would hang
-    // the file rather than report a failure.
+    // the file with no failure ever reported.
     for (const channel of this.#channels) {
       channel.port1.close();
       channel.port2.close();

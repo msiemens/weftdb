@@ -1,4 +1,4 @@
-// The relay, running in the visitor's own browser: one `WeftServer` in a `SharedWorker`, serving a
+// The relay, running in the visitor's own browser. One `WeftServer` in a `SharedWorker`, serving a
 // port to each tab of the origin.
 //
 // It stands in for a deployment rather than for a transport. Every tab still runs the real client
@@ -8,14 +8,14 @@
 //
 // Nothing here needs storage. `WeftServer` imports only from `weftdb/core`, takes no executor and
 // keeps its records in maps, so there is no SQLite, no WebAssembly and no persistence. The scope's
-// history therefore lasts exactly as long as the worker: close every tab of the origin and the
+// history therefore lasts exactly as long as the worker. Close every tab of the origin and the
 // relay's copy is gone, while each tab keeps its own rows in its own storage. For two tabs open
 // beside each other, which is the whole of what these demos demonstrate, that is the entire
 // lifetime that matters.
 //
 // There is no authorisation here, and there must not be. A deployed relay derives the scope and the
 // device from a token, and that is what keeps one visitor's rows away from another's. This relay
-// has nobody to keep apart: every "device" it serves is a tab of one person's browser, opened by
+// has nobody to keep apart. Every "device" it serves is a tab of one person's browser, opened by
 // that person, reading data that never leaves their machine. So a tab names its own scope and its
 // own device in every call, and is believed. Anything modelled on this file needs the scope taken
 // out of the caller's hands before it is put in front of a second person.
@@ -56,11 +56,13 @@ export function serveDemoRelay(server: WeftServer = new WeftServer()): WeftDemoR
   let serving = true;
 
   // Watching the server rather than the push that moved it is what makes a change nobody pushed
-  // reach the tabs: a prune raising the tombstone floor advances the scope and no call carries it.
+  // reach the tabs, because a prune raising the tombstone floor advances the scope and no call
+  // carries it.
   const unwatch = server.watch((scopeId, serverSeq) => {
-    // To every other connection rather than to the ones known to care: the relay keeps no register
-    // of which tab is on which scope, the notice names the scope it is about, and a tab drops what
-    // is not its own. The alternative is a second register, built from the same calls, to be wrong.
+    // To every other connection rather than to the ones known to care, because the relay keeps no
+    // register of which tab is on which scope. The notice names the scope it is about, and a tab
+    // drops whatever is not its own. The alternative would be a second register, built from the
+    // same calls, and liable to go wrong.
     for (const port of connections.keys()) {
       if (port === calling) continue;
       port.postMessage({ weft: "relay", type: "advanced", scopeId, serverSeq });
@@ -76,7 +78,7 @@ export function serveDemoRelay(server: WeftServer = new WeftServer()): WeftDemoR
       port.postMessage({ weft: "relay", id: request.id, ok: true, result: perform(server, request) });
     } catch (error) {
       // A throw is the relay failing to answer, and it goes back as a failure so the caller's
-      // promise rejects. A push the server *refuses* never arrives here: a rejection is part of a
+      // promise rejects. A push the server *refuses* never arrives here. A rejection is part of a
       // `PushResult`, returned rather than thrown, and travels as an ordinary answer.
       port.postMessage({
         weft: "relay",
@@ -126,8 +128,8 @@ function perform(server: WeftServer, request: RelayRequest): RelayResults[keyof 
       return server.pull(request.argument.scopeId, request.argument.lastServerSeq);
     case "snapshot": {
       // The envelope only. The records are already in the body, and sending both would double the
-      // largest message this relay produces — and the digest is what the receiving tab checks the
-      // body against, which is the one thing worth carrying twice.
+      // largest message this relay produces. The digest is what the receiving tab checks the body
+      // against, which is the one thing worth carrying twice.
       const { snapshot: _snapshot, ...envelope } = contentAddressSnapshot(server.snapshot(request.argument.scopeId));
       return envelope;
     }

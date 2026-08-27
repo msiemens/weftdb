@@ -1,6 +1,6 @@
-// The relay worker's front door: the whole of what its `SharedWorker` script has to say.
+// The relay worker's front door. The whole of what its `SharedWorker` script has to say.
 //
-// A module of its own because a `SharedWorker` is identified by its script URL — every tab that
+// A module of its own because a `SharedWorker` is identified by its script URL. Every tab that
 // constructs one from this URL gets the same worker, which is the entire reason the relay can be
 // one server rather than one per tab. A blob URL would be a different URL per tab and therefore a
 // different relay per tab, which is no relay at all.

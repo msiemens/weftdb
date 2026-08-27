@@ -1,6 +1,6 @@
-// The sync socket. It carries the protocol in both directions: the requests a session makes —
-// answered by the same handler the HTTP surface uses, so there is one implementation and one
-// place authorization is decided — and the relay's unsolicited "this scope is at sequence N",
+// The sync socket. It carries the protocol in both directions, the requests a session makes
+// (answered by the same handler the HTTP surface uses, so there is one implementation and one
+// place authorization is decided) and the relay's unsolicited "this scope is at sequence N",
 // which a device answers with the sync it would otherwise have run on a timer.
 import { createHash, randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
@@ -33,10 +33,11 @@ export interface ScopeAdvanced {
 }
 
 /**
- * Sent when a scope moves and this connection has subscribed with a cursor: the records it is
- * missing, rather than a note telling it to ask. A device learns about a change in one message
- * instead of two, and the batch goes through the client's ordinary pull path — it is the same
- * batch the same `/pull` would have answered with, delivered without being asked.
+ * Sent when a scope moves and this connection has subscribed with a cursor. It carries the
+ * records the connection is missing, rather than a note telling it to ask, so a device learns
+ * about a change in one message instead of two. The batch goes through the client's ordinary
+ * pull path, because it is the same batch the same `/pull` would have answered with, delivered
+ * without being asked.
  */
 export interface ScopeBatch {
   readonly type: "batch";
@@ -50,11 +51,11 @@ export interface SubscribeRequest {
 }
 
 /**
- * A request carried on the socket. It names the operation it wants — the socket reaches the
- * protocol directly rather than describing a route for someone to fetch, so there is no method,
- * no path and no query string to parse on a connection that has none of those things. The four
- * shapes are the protocol's four calls, and they are carried out by the same `SyncOperations`
- * the HTTP surface calls.
+ * A request carried on the socket. It names the operation it wants, because the socket reaches
+ * the protocol directly rather than describing a route for someone to fetch, so there is no
+ * method, no path and no query string to parse on a connection that has none of those things.
+ * Each shape is one of the protocol's calls, carried out by the same `SyncOperations` the HTTP
+ * surface calls.
  */
 export type SocketRequest = {
   readonly [Op in SyncOperation]: { readonly id: string; readonly op: Op } & SyncArguments[Op];
@@ -77,7 +78,7 @@ export interface SocketFailure {
 }
 
 /**
- * A large answer — a snapshot, mostly — goes out in pieces so that everything else has a turn
+ * A large answer, a snapshot mostly, goes out in pieces so that everything else has a turn
  * between them. One socket carries every request and every wake-up, and a megabyte written in
  * one go is a megabyte during which nothing else on that connection moves.
  */
@@ -103,7 +104,7 @@ export interface SyncSocketOptions {
   readonly pull: (scopeId: ScopeId, lastServerSeq: number) => { readonly serverSeq: number };
   /**
    * How often to ping. A connection dropped by an idle middlebox looks exactly like a healthy
-   * one until something is written to it, so the server writes something on purpose.
+   * one until something is written to it, so the server writes something to find out.
    */
   readonly keepaliveMs?: number;
 }
@@ -124,8 +125,8 @@ interface Subscriber {
   cursor: number | undefined;
   /**
    * A message being delivered across several frames. RFC 6455 lets a peer split a data frame
-   * wherever it likes, and browsers do — so a hub that only ever read whole frames would leave
-   * a fragmented request unanswered and the client waiting on a reply that is never coming.
+   * wherever it likes, and browsers do, so a hub that only ever read whole frames would leave a
+   * fragmented request unanswered and the client waiting on a reply that is never coming.
    */
   fragment: { opcode: Opcode; chunks: Buffer[]; bytes: number } | undefined;
 }
@@ -150,7 +151,7 @@ export class SyncSocketHub {
   }
 
   /**
-   * One round of the keepalive: anything that has not answered the previous ping is gone, and
+   * One round of the keepalive. Anything that has not answered the previous ping is gone, and
    * everyone else is pinged and marked unanswered until they say otherwise.
    */
   sweep(): void {
@@ -216,14 +217,14 @@ export class SyncSocketHub {
         "Upgrade: websocket",
         "Connection: Upgrade",
         `Sec-WebSocket-Accept: ${accept(key)}`,
-        // Only the version is echoed: a server must not echo a subprotocol it was not offered,
+        // Only the version is echoed. A server must not echo a subprotocol it was not offered,
         // and echoing the token back would put it somewhere it does not need to be.
         `Sec-WebSocket-Protocol: ${PROTOCOL}`,
         "\r\n",
       ].join("\r\n"),
     );
 
-    // The token is not kept: it was a way to establish who this is, and that is now settled.
+    // The token is not kept. It served to establish who this is, and that is now settled.
     this.#attach({ id: randomUUID(), auth, socket, alive: true, cursor: undefined, fragment: undefined }, head);
     return true;
   }
@@ -246,8 +247,8 @@ export class SyncSocketHub {
   }
 
   /**
-   * Sends what a connection is missing and records how far it has been sent. The cursor moves
-   * on the send rather than on an acknowledgement: a socket that dies before the batch lands
+   * Sends what a connection is missing and records how far it has been sent. The cursor moves on
+   * the send rather than on an acknowledgement, because a socket that dies before the batch lands
    * takes the record of it with it, and the client re-subscribes from where it really is.
    */
   #sendBatch(subscriber: Subscriber, scopeId: ScopeId, from: number): void {
@@ -302,7 +303,7 @@ export class SyncSocketHub {
     };
     subscriber.socket.on("close", forget);
     subscriber.socket.on("end", forget);
-    // A dead peer must not take the process with it: the socket is simply gone.
+    // A dead peer must not take the process with it. The socket is simply gone.
     subscriber.socket.on("error", () => this.#drop(subscriber, CLOSE.internal, "socket error"));
   }
 
@@ -313,8 +314,8 @@ export class SyncSocketHub {
       this.#drop(subscriber, CLOSE.normal, "");
       return false;
     }
-    // Control frames are answered where they arrive: they are never fragmented, and they may sit
-    // between the pieces of a message that is.
+    // Control frames are answered where they arrive. They are never fragmented, and they may
+    // sit between the pieces of a message that is.
     if (opcode === OPCODE.ping) {
       subscriber.socket.write(encodeFrame(OPCODE.pong, payload));
       return true;
@@ -372,7 +373,7 @@ export class SyncSocketHub {
 
   /**
    * Carries out a request that arrived on the socket. The connection was authenticated once, at
-   * the upgrade, and its `AuthContext` decides the scope for everything that follows — so a
+   * the upgrade, and its `AuthContext` decides the scope for everything that follows, so a
    * request names what it wants and nothing about who is asking.
    */
   #serve(subscriber: Subscriber, payload: Buffer): void {
@@ -385,8 +386,8 @@ export class SyncSocketHub {
 
     if (message.type === "subscribe") {
       // The client says where it has got to, and everything from there on arrives without
-      // being asked for. It is sent immediately as well: whatever moved while it was away is
-      // exactly what it does not know it is missing.
+      // being asked for. It is sent immediately as well, because whatever moved while it was
+      // away is exactly what it does not know it is missing.
       //
       // A subscription is the only request whose argument outlives it, so a cursor that is not a
       // sequence number is a connection that stays open and silently receives nothing for as long
@@ -480,7 +481,7 @@ export class SyncSocketHub {
       } catch {
         return;
       }
-      // Yielding is the whole point: it is what lets anything else reach the socket.
+      // Yielding is the whole point. It is what lets anything else reach the socket.
       await new Promise((resolve) => setImmediate(resolve));
     }
   }

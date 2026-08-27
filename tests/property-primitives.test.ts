@@ -1,7 +1,7 @@
 // The algebra underneath the protocol. Everything above these holds only if they do: an
 // ordering that is not a total order, a rank that is not strictly between its neighbours, or a
 // merge that is not idempotent, all show up far from here as a convergence failure nobody can
-// explain. The property suite exercises them constantly as machinery — this is the file that
+// explain. The property suite exercises them constantly as machinery; this is the file that
 // says what they are supposed to be.
 import assert from "node:assert/strict";
 import { test } from "vitest";
@@ -53,8 +53,9 @@ const wireArb: fc.Arbitrary<WireValue> = fc.letrec<{ value: WireValue }>((tie) =
     fc.double({ noNaN: true, noDefaultInfinity: true }).map((value) => (Object.is(value, -0) ? 0 : value)),
     fc.string(),
     fc.array(tie("value"), { maxLength: 4 }),
-    // Ordinary objects: a value with a null prototype is not something storage round-trips or
-    // an application produces, and comparing prototypes would be testing the generator.
+    // Ordinary objects, since a value with a null prototype is not something storage
+    // round-trips or an application produces, and comparing prototypes would be testing the
+    // generator.
     fc.dictionary(fc.string({ maxLength: 6 }), tie("value"), { maxKeys: 4, noNullPrototype: true }),
   ),
 })).value;
@@ -142,8 +143,8 @@ test("a clock never repeats or rewinds a stamp, however time behaves", () => {
 test("observing a stamp puts this device's next write after it", () => {
   fc.assert(
     fc.property(hlcArb, (observed) => {
-      // Frozen wall clock: the counter is all the clock has to work with, which is exactly the
-      // situation where a device that has just heard from another must still write later.
+      // Frozen wall clock, so the counter is all the clock has to work with, which is exactly
+      // the situation where a device that has just heard from another must still write later.
       const clock = new HlcClock(deviceId("device-a"), () => 1_700_000_000_000);
       clock.observe(observed);
       assert.equal(compareHlc(clock.next(), observed) > 0, true, "a write did not come after what was observed");
@@ -154,7 +155,7 @@ test("observing a stamp puts this device's next write after it", () => {
 
 test("a skew correction lands after everything the device has had accepted", () => {
   fc.assert(
-    // Only a device far enough ahead of the server is ever asked to re-stamp: below the
+    // Only a device far enough ahead of the server is ever asked to re-stamp. Below the
     // threshold nothing is rejected, so there is no correction to make.
     fc.property(
       fc.integer({ min: 300_001, max: 5_000_000 }),
@@ -169,7 +170,7 @@ test("a skew correction lands after everything the device has had accepted", () 
         clock.observe(emitted);
         const restamped = clock.restampAfterSkew(wall - serverOffset);
         // The rejected stamp is dropped, but nothing the device already emitted may be reused
-        // or overtaken — that is what keeps its own history in order (§5.5).
+        // or overtaken, which is what keeps its own history in order (§5.5).
         assert.equal(compareHlc(restamped, emitted) > 0, true, "a re-stamp did not come after the device's own write");
       },
     ),
@@ -183,7 +184,7 @@ function ordered(left: RankString, right: RankString): boolean {
   return left < right;
 }
 
-/** A list built the way an application builds one: rows inserted at generated positions. */
+/** A list built the way an application builds one, rows inserted at generated positions. */
 const listArb = fc.array(fc.tuple(fc.nat(), deviceArb), { minLength: 1, maxLength: 12 }).map((inserts) => {
   const ranks: RankString[] = [];
   for (const [position, device] of inserts) {
@@ -257,8 +258,8 @@ test("two devices inserting into the same gap keep both rows, in an order everyo
         assert.equal(ordered(left, rank) && ordered(rank, right), true, `${rank} left the gap it was inserted into`);
       }
 
-      // And a third row can still go between them afterwards, which is the case that used to
-      // throw: their cores are equal, so there is no core between them to find.
+      // And a third row can still go between them afterwards, the edge case where both cores
+      // are equal, so there is no core between them to find.
       const third = rankBetween(a, b, deviceId("device-c"));
       assert.equal(ordered(a, third) && ordered(third, b), true, `${third} did not land between ${a} and ${b}`);
     }),
@@ -270,7 +271,7 @@ test("the query engine orders ranks the way the ranks were built", () => {
   fc.assert(
     fc.property(listArb, (ranks) => {
       // A rank is only "between" its neighbours under plain comparison. Sorting the same rows
-      // by locale — which weighs punctuation and case differently — puts them in an order the
+      // by locale (which weighs punctuation and case differently) puts them in an order the
       // fractional index never promised, so a reorder writes a new rank and the list does not
       // move. It also means two devices in different locales would disagree about the order of
       // the same list, which is the one thing a shared list cannot do.
@@ -351,7 +352,7 @@ test("a clean merge is stable: merging it again does nothing", () => {
       const merged = diff3(base, mine, theirs);
       fc.pre(!merged.conflicted);
       // The merged text is what both devices now hold, so merging it with itself against its
-      // own base has to be a no-op — otherwise a second sync would keep changing the value.
+      // own base has to be a no-op; otherwise a second sync would keep changing the value.
       assert.equal(diff3(merged.value, merged.value, merged.value).value, merged.value);
     }),
     { numRuns: RUNS },
@@ -378,10 +379,10 @@ test("a conflicted merge keeps what each side wrote", () => {
     fc.property(textArb, textArb, textArb, (base, mine, theirs) => {
       const merged = diff3(base, mine, theirs);
       fc.pre(merged.conflicted);
-      // Not every line of each side: a line one side deleted and the other left alone is
-      // legitimately gone, and that can happen in one hunk while another hunk conflicts. What
-      // a conflict must never do is drop something a side actually wrote, because the whole
-      // point of surfacing it rather than picking a winner is that nobody's work is discarded.
+      // A line one side deleted and the other left alone is legitimately gone from the merge,
+      // and that can happen in one hunk while another hunk conflicts. What a conflict must
+      // never do is drop something a side actually wrote, because surfacing it instead of
+      // silently picking a winner is what keeps everyone's work from being discarded.
       for (const [name, side] of [
         ["local", mine],
         ["remote", theirs],
@@ -417,9 +418,10 @@ test("a value survives the trip to storage and back", () => {
 
 test("negative zero is the one value storage does not give back unchanged", () => {
   // JSON has no negative zero, so `-0` is stored and read back as `0`. Everything that
-  // compares values — hashes, snapshot digests, what other devices see — already agrees with
+  // compares values (hashes, snapshot digests, what other devices see) already agrees with
   // that, so the only difference is in the writing device's memory until it reloads. Pinned
-  // here so it is a known property of the wire format rather than a surprise in a field.
+  // here, so it is a known property of the wire format instead of a surprise found later in
+  // a field.
   assert.equal(Object.is(decodeWireValue(encodeWireValue(-0)), 0), true);
   assert.equal(stableHash(-0), stableHash(0), "the two zeroes hash differently, which would fail a base check");
 });
@@ -453,7 +455,7 @@ test("an HLC counter that runs out of digits carries into the wall clock", () =>
     "an over-wide counter was still encoded",
   );
 
-  // Reached from a peer rather than only from local traffic: `observe` folds a remote counter in
+  // This overflow is triggered by a peer's stamp, because `observe` folds a remote counter in
   // with `Math.max(...) + 1`, so a reading at the top of the range pushes this device over.
   const clock = new HlcClock(deviceId("device-a"), () => 1_000);
   const atTheTop = encodeHlc({ wallMs: 1_000, counter: 36 ** 6 - 1, deviceId: deviceId("device-b") });

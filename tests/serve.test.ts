@@ -1,4 +1,4 @@
-// The runnable relay: environment configuration and the Node HTTP adapter around the
+// The runnable relay. Environment configuration and the Node HTTP adapter sit around the
 // fetch-style handler.
 import assert from "node:assert/strict";
 import { test } from "vitest";
@@ -42,8 +42,8 @@ test("token configuration round-trips through the environment", () => {
 });
 
 test("a flag says the same thing as its environment variable, and wins over it", () => {
-  // Both surfaces exist for different reasons — an orchestrator sets the environment, a person
-  // types a flag — so they have to mean the same thing, and the more specific one has to win.
+  // An orchestrator sets the environment and a person types a flag, so the two have to mean the
+  // same thing, and the more specific one has to win.
   assert.deepEqual(envFromArgv(["--port", "9001", "--db", "/data/weft.sqlite"]), {
     WEFT_PORT: "9001",
     WEFT_DB: "/data/weft.sqlite",
@@ -272,8 +272,8 @@ test("the HTTP relay serves the protocol end to end", async (t) => {
     body: JSON.stringify({ scopeId: "scope-1", schemaHash: "hash", schemaVersion: 1, lastServerSeq: 0 }),
   });
   assert.equal(handshake.status, 200);
-  // The epoch is minted per scope, so what this asserts is that the surface carries one and that
-  // the handshake was accepted.
+  // The epoch is minted per scope, so the handshake response must carry one alongside the
+  // acceptance.
   const accepted = (await handshake.json()) as { ok: boolean; epoch: string };
   assert.equal(accepted.ok, true);
   assert.equal(typeof accepted.epoch, "string");
@@ -341,8 +341,8 @@ test("a zero prune interval turns the sweep off", async (t) => {
   const scope = scopeId("scope-1");
   const table = tableName("tasks");
   const row = rowId("ancient");
-  // Old enough, and with a cutoff of zero, that any sweep at all would take it. A surviving row
-  // can only mean no timer was started.
+  // The row is old enough, and the cutoff is zero, that any sweep at all would take it; a
+  // surviving row can only mean no timer was started.
   relay.server.push(scope, tombstoneOps(scope, table, row, Date.now() - 400 * 24 * 60 * 60 * 1000));
 
   await new Promise((resolve) => setTimeout(resolve, 100));
@@ -351,8 +351,9 @@ test("a zero prune interval turns the sweep off", async (t) => {
 });
 
 test("pruning runs without being configured, because the protocol assumes it has", async (t) => {
-  // The default interval is a day, so this asserts a timer exists rather than waiting for a tick:
-  // an unconfigured relay that scheduled nothing would leave the floor unable to ever advance.
+  // The default interval is a day, so this test proves a timer exists without waiting for a tick
+  // to elapse. An unconfigured relay that scheduled nothing would leave the floor unable to ever
+  // advance.
   const relay = await listen(t);
   const scope = scopeId("scope-1");
   relay.server.push(scope, tombstoneOps(scope, tableName("tasks"), rowId("old"), Date.now()));
@@ -400,9 +401,9 @@ test("closing the relay stops the scheduled prune", async () => {
   const scope = scopeId("scope-1");
   const table = tableName("tasks");
   const row = rowId("post-close");
-  // The in-memory server outlives `close()` — only the timer, sockets and HTTP listener are
-  // torn down — so pushing directly to it is what tells apart "the timer was cleared" from
-  // "there was nothing left to prune".
+  // The in-memory server outlives `close()`; only the timer, sockets and HTTP listener are torn
+  // down. Pushing directly to it is what tells apart "the timer was cleared" from "there was
+  // nothing left to prune".
   relay.server.push(scope, tombstoneOps(scope, table, row, Date.now() - 5));
 
   await new Promise((resolve) => setTimeout(resolve, 100));

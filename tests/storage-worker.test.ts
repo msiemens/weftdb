@@ -1,12 +1,12 @@
-// The worker's front door under §8.7: which database an arriving port turns out to be for, and
-// what happens to that database when the last tab reading it goes away.
+// The worker's front door under §8.7 decides which database an arriving port turns out to be for,
+// and what happens to that database when the last tab reading it goes away.
 //
-// A `SharedWorker` is identified by its script URL, so one instance serves every tab of an origin —
-// tabs on different scopes, and tabs of two applications that share an origin and a bundle. A port
-// arrives through `onconnect` saying nothing about which of those it wants, and the first request
-// on it is what settles it.
+// A `SharedWorker` is identified by its script URL, so one instance serves every tab of an origin,
+// including tabs on different scopes and tabs of two applications that share an origin and a
+// bundle. A port arrives through `onconnect` saying nothing about which of those it wants, and the
+// first request on it is what settles it.
 //
-// Everything here is real except IndexedDB: the worker, the store, the client and the WebAssembly
+// Everything here is real except IndexedDB. The worker, the store, the client and the WebAssembly
 // SQLite under them are the shipped ones, and `node:worker_threads` channels carry the protocol, so
 // messages are structured-cloned and delivered on a later turn.
 import assert from "node:assert/strict";
@@ -43,8 +43,8 @@ test("§8.7 a port is served the database its first request names", async () => 
 
 test("§8.7 a namespace and a scope that run together are still two databases", async () => {
   // The pair is composed with a length prefix, so namespace `a:b` with scope `c` and namespace `a`
-  // with scope `b:c` cannot land on one key — which would be two applications sharing one client,
-  // one outbox and one file, with nothing anywhere reporting it.
+  // with scope `b:c` cannot land on one key. Colliding there would mean two applications sharing
+  // one client, one outbox and one file, with nothing anywhere reporting it.
   using origin = new Origin();
   const first = origin.connect();
   const second = origin.connect();
@@ -73,7 +73,7 @@ test("§8.7 two tabs of one database share one client", async () => {
 
 test("§8.7 the database of a tab that has gone is dropped, and what it wrote is still there", async () => {
   // A `SharedWorker` outlives every tab of its origin, so a client nobody released stays in the
-  // worker's heap until the browser stops it — and `IDBMirrorVFS` holds the whole database in that
+  // worker's heap until the browser stops it, and `IDBMirrorVFS` holds the whole database in that
   // heap. One per `(namespace, scope)` an origin has ever opened is the ceiling this avoids.
   using origin = new Origin();
   const first = origin.connect();
@@ -118,8 +118,8 @@ class Origin {
   [Symbol.dispose](): void {
     for (const transport of this.#opened) transport.dispose();
     void this.worker.stop();
-    // An open port keeps Node's event loop alive, so a failing run that skipped these would hang
-    // the whole file rather than report a failure.
+    // An open port keeps Node's event loop alive, so closing these is what lets a failing run
+    // report its failure.
     for (const channel of this.#ports) {
       channel.port1.close();
       channel.port2.close();

@@ -1,10 +1,10 @@
 /*
- * The demo's visual identity: a loom.
+ * The demo's visual identity is a loom.
  *
  * The palette lives in `weftdb-demo-shared/tokens.css`, which the documentation and the landing
- * page wear too. What is here is what this page does with it: the list is the subject and gets the
- * one raised surface; the header, the activity log and the guide sit directly on the ground, ruled
- * rather than boxed, so nothing competes with it.
+ * page wear too. This page uses it so the list is the subject and gets the one raised surface,
+ * while the header, the activity log and the guide sit directly on the ground, ruled rather than
+ * boxed, so nothing competes with it.
  *
  * No web fonts. A local-first demo that goes blank-faced the moment the network is gone would be
  * arguing against itself, and the offline toggle is the first thing anyone clicks here.
@@ -18,10 +18,10 @@
 }
 
 /*
- * The ground lives on `html`, not on `body` with `background-attachment: fixed`. A fixed
- * background is painted into its own element's box and stops there, which leaves a bare band
- * around the viewport at some zoom levels; a background on the root element is propagated to
- * the canvas and covers everything, overscroll included.
+ * The ground lives on `html`. A fixed background attached to `body` is painted into its own
+ * element's box and stops there, which leaves a bare band around the viewport at some zoom
+ * levels; a background on the root element is propagated to the canvas and covers everything,
+ * overscroll included.
  */
 html {
   background-color: var(--ground);
@@ -74,7 +74,7 @@ header {
   color: var(--ink);
 }
 
-/* The one place the accent is used decoratively: the thread the product is named after. */
+/* The one place the accent is used decoratively, the thread the product is named after. */
 .title h1 span {
   color: var(--accent);
 }
@@ -95,9 +95,9 @@ header {
 }
 
 /*
- * Chips are square-cornered rather than pills, and monospace: these are readouts, and half of
- * them end in a number that changes while you watch it. `tabular-nums` keeps the cursor count
- * from shifting the whole row sideways each time it ticks over a digit width.
+ * Chips are square-cornered rather than pills, and monospace, because these are readouts, and
+ * half of them end in a number that changes while you watch it. `tabular-nums` keeps the cursor
+ * count from shifting the whole row sideways each time it ticks over a digit width.
  */
 .badge {
   display: inline-flex;
@@ -178,14 +178,14 @@ header {
 /* --- buttons ------------------------------------------------------------------------- */
 
 /*
- * Every button colour, resting *and* hovered, is a custom property, and the state rules only
- * ever read them. This is not decoration: a state rule that names a colour outright competes on
- * specificity with the variant rules, and it wins more often than it looks like it will —
- * `button:hover:not(:disabled)` is (0,3,1) because `:not()` carries its argument's specificity,
- * so it beats `.primary` outright, and `.some-wrapper button` ties with `button.primary` and
- * then wins on source order. Both mistakes have already shipped on this page, each time as a
- * filled button whose label vanished into its own fill. Resolving a variable instead means the
- * variant always supplies the colour and the state rule only decides which one to read.
+ * Every button colour, resting and hovered, is a custom property that the state rules only
+ * read. A state rule that names a colour outright competes on specificity with the variant
+ * rules and often wins: `button:hover:not(:disabled)` is (0,3,1), since `:not()` carries its
+ * argument's specificity and beats `.primary` outright, while `.some-wrapper button` ties with
+ * `button.primary` and wins on source order. Both mistakes have already shipped on this page,
+ * each time as a filled button whose label vanished into its own fill. Resolving a variable
+ * instead means the variant always supplies the colour and the state rule only decides which
+ * one to read.
  */
 button {
   --btn-fg: var(--ink);
@@ -215,14 +215,14 @@ button:active:not(:disabled) {
   border-color: var(--btn-border-hover);
 }
 
-/* Pressed is darker, not smaller: a list where the rows jump out from under the pointer is
-   harder to hit twice in a row. */
+/* Pressed is darker rather than smaller, because a list where the rows jump out from under the
+   pointer is harder to hit twice in a row. */
 button:active:not(:disabled) {
   filter: brightness(0.94);
 }
 
-/* Colour only. Setting a border here would draw a box around the disabled reorder arrows that
-   the enabled ones do not have, which is the emphasis exactly backwards. */
+/* Colour only. A border here would frame the disabled reorder arrows more heavily than the
+   enabled ones, which inverts the emphasis. */
 button:disabled {
   color: var(--ink-3);
   cursor: default;
@@ -281,8 +281,8 @@ textarea:focus-visible {
 
 /*
  * Composer, rows and empty state share a single raised surface divided by hairlines, rather
- * than each floating in its own card. It is one list, and a stack of separate cards says the
- * opposite — as well as burying the subject of the page under twelve identical borders.
+ * than each floating in its own card, because it is one list, and separate cards would bury
+ * the subject of the page under twelve identical borders.
  */
 .list {
   background: var(--surface);
@@ -301,8 +301,8 @@ textarea:focus-visible {
   border-bottom: 1px solid var(--rule);
 }
 
-/* Direct children only, per the note on the button rules: a bare `.composer button` ties with
-   `button.primary` on specificity and would win on source order. */
+/* Direct children only, per the note on the button rules, because a bare `.composer button`
+   ties with `button.primary` on specificity and would win on source order. */
 .composer > input {
   flex: 1 1 auto;
   background: var(--surface);
@@ -365,8 +365,8 @@ textarea:focus-visible {
   --btn-border-hover: var(--accent-hover);
 }
 
-/* The title is a field that does not announce itself until you reach for it: a row of framed
-   inputs reads as a form, and this is meant to read as a list. */
+/* The title is a field that does not announce itself until you reach for it, because a row of
+   framed inputs reads as a form and this is meant to read as a list. */
 .todo-title {
   flex: 1 1 auto;
   min-width: 0;
@@ -397,8 +397,8 @@ textarea:focus-visible {
   flex: 0 0 auto;
 }
 
-/* Quiet by default and never hidden: reveal-on-hover controls do not exist for anyone using a
-   touch screen or a keyboard. */
+/* Quiet by default and never hidden, because reveal-on-hover controls do not exist for anyone
+   using a touch screen or a keyboard. */
 .row-actions button {
   --btn-fg: var(--ink-3);
   --btn-fg-hover: var(--ink);
@@ -486,8 +486,8 @@ button.danger {
 
 /* --- quarantine ---------------------------------------------------------------------- */
 
-/* Above the list and stripe-first: this is the state where the library declined to guess, and
-   burying it in the same weight as the guide would undo the point of saying so. */
+/* Above the list and stripe-first, because this is the state where the library declined to
+   guess, and burying it in the same weight as the guide would undo the point of saying so. */
 .quarantine {
   padding: 16px 18px;
   background: var(--bad-wash);
@@ -602,8 +602,8 @@ button.danger {
 /*
  * Direct child, and never a bare descendant selector. `.guide-open button` and `button.primary`
  * carry the same specificity, so a descendant match anywhere under this wrapper would silently
- * win on source order and repaint a filled button's label — which is exactly how this page
- * ended up with an indigo label on an indigo fill.
+ * win on source order and repaint a filled button's label. That is exactly how this page ended
+ * up with an indigo label on an indigo fill.
  */
 .guide-open > button {
   --btn-fg: var(--accent);
@@ -617,9 +617,9 @@ button.danger {
 }
 
 /*
- * A `<dialog>` has to be given its box outright: the user-agent sheet centres it and nothing
- * else, and `max-height` is what stops seven items plus a heading running off a short viewport
- * with no way to reach the end.
+ * A `<dialog>` has to be given its box outright, because the user-agent sheet only centres it,
+ * and `max-height` stops seven items plus a heading from running off a short viewport with no
+ * way to reach the end.
  */
 .guide {
   width: min(34rem, calc(100vw - 32px));
@@ -634,22 +634,22 @@ button.danger {
 }
 
 .guide::backdrop {
-  /* Not tokens: `::backdrop` only resolves custom properties against the originating element in
-     newer engines, so these two are written out to be sure they land everywhere. The page is
-     still legible through the blur, which is the point — the guide describes what to go and do
-     to the list behind it. */
+  /* These two colours are written out literally rather than as tokens, because `::backdrop`
+     only resolves custom properties against the originating element in newer engines, and this
+     needs to land everywhere. The page stays legible through the blur, because the guide
+     describes what to go and do to the list behind it. */
   background: rgb(28 26 20 / 40%);
   backdrop-filter: blur(6px) saturate(110%);
   -webkit-backdrop-filter: blur(6px) saturate(110%);
 }
 
 /*
- * Keyframes, not a transition. Animating a `<dialog>` open with `transition` needs
- * `transition-behavior: allow-discrete` and `@starting-style`, and wherever any part of that
- * fails to settle — an engine without it, a headless render, a tab backgrounded mid-flight —
- * the dialog is stranded at a partial opacity with its contents washed out. That already
- * happened here. An animation cannot strand anything: it ends at the element's ordinary styles,
- * so the worst case of it not running at all is a dialog that simply appears.
+ * Keyframes are used instead of a transition, because animating a `<dialog>` open with
+ * `transition` needs `transition-behavior: allow-discrete` and `@starting-style`, and wherever
+ * any part of that fails to settle (an engine without it, a headless render, a tab backgrounded
+ * mid-flight), the dialog is stranded at a partial opacity with its contents washed out. That
+ * already happened here. An animation cannot strand anything, because it ends at the element's
+ * ordinary styles, so the worst case of it not running at all is a dialog that simply appears.
  */
 .guide[open] {
   animation: guide-in 200ms cubic-bezier(0.16, 0.84, 0.32, 1);
@@ -660,7 +660,7 @@ button.danger {
 }
 
 /*
- * Closing is the other way round: `close()` removes the dialog from the top layer immediately,
+ * Closing runs the other way round. `close()` removes the dialog from the top layer immediately,
  * so it has to be held open for the length of the animation. `data-closing` is set on the
  * element imperatively rather than through React state, because a `className` React owns would
  * be reconciled away on the next store update mid-animation.
@@ -711,8 +711,8 @@ button.danger {
   color: var(--ink-2);
 }
 
-/* A hanging rule per item instead of a bullet: these are seven separate experiments, not a
-   sequence, so nothing here should suggest an order to work through. */
+/* A hanging rule per item instead of a bullet, because these are separate experiments rather
+   than a sequence, so nothing here should suggest an order to work through. */
 .guide li {
   padding-left: 14px;
   border-left: 2px solid var(--rule-strong);

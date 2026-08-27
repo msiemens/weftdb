@@ -1,19 +1,18 @@
-// The page half of a demo's database: `openWeftDatabase`, the rows a first visit arrives to, and
-// the two things these demos need that no deployed application does.
+// The page half of a demo's database. `openWeftDatabase`, the rows a first visit arrives to, and
+// what these demos need that no deployed application does.
 //
-// The first is that **each tab is a device**. A browser normally wants the opposite — one database
-// per person, whichever tabs are open, which is what one `SharedWorker` per origin gives — and a
-// demo about two devices merging has nothing to show under it. `namespace` is the seam: a database
-// is a namespace and a scope together, so giving every tab a namespace of its own gives every tab
-// its own client, its own storage and its own device id inside that one worker, while the scope
-// stays the visitor's and the rows stay one list. What a second tab is here is what a second laptop
-// is in a deployment.
+// Each tab is a device. A browser normally wants one database per person, whichever tabs are open,
+// which is what one `SharedWorker` per origin gives, and a demo about two devices merging has
+// nothing to show under that. `namespace` is the seam. A database is a namespace and a scope
+// together, so giving every tab a namespace of its own gives every tab its own client, its own
+// storage and its own device id inside that one worker, while the scope stays the visitor's and
+// the rows stay one list. What a second tab is here is what a second laptop is in a deployment.
 //
-// The second is where the relay is. There is no server behind a static docs page, so the relay is a
-// `WeftServer` in a second `SharedWorker` of this browser (`relay-worker.ts`) and it is reached over
-// a `MessagePort`. Only the page can construct a `SharedWorker`, and only the storage worker can run
-// the sync session, so the page transfers that port into the storage worker over its own connection
-// to it — which is what `connect` below is wrapped for.
+// There is no server behind a static docs page, so the relay is a `WeftServer` in a second
+// `SharedWorker` of this browser (`relay-worker.ts`), reached over a `MessagePort`. Only the page
+// can construct a `SharedWorker`, and only the storage worker can run the sync session, so the
+// page transfers that port into the storage worker over its own connection to it. `connect` below
+// is wrapped for that transfer.
 import type { ScopeId } from "weftdb/core";
 import type { SchemaDefinition } from "weftdb/schema";
 import {
@@ -31,10 +30,10 @@ import type { RelayPortLike } from "./port-transport.ts";
  * The credential the demo relay runs under.
  *
  * A deployed relay derives the scope and the device from the token, and that is what keeps one
- * person's rows away from another's. This relay has nobody to keep apart — every device it serves
- * is a tab of one browser, reading data that never leaves the machine — so it reads no token at
- * all. One is still handed over, because a device with no credential has no session: the worker
- * holds the rows and never syncs them.
+ * person's rows away from another's. This relay has nobody to keep apart, since every device it
+ * serves is a tab of one browser, reading data that never leaves the machine, so it reads no token
+ * at all. One is still handed over, because a device with no credential has no session, and the
+ * worker holds the rows and never syncs them.
  */
 export const DEMO_TOKEN = "demo";
 
@@ -42,7 +41,7 @@ export const DEMO_TOKEN = "demo";
  * A write nobody is waiting on, where the row going before it lands is an ordinary outcome.
  *
  * These demos write from event handlers and a heartbeat, none of which can await, so a rejection
- * has nowhere to go: under Node it takes the process down, and in a browser it reaches the console
+ * has nowhere to go. Under Node it takes the process down, and in a browser it reaches the console
  * with no page left to receive it. The case that arrives in normal use is a row deleted between the
  * render and the write, on the tab doing the deleting or on one pulling the delete in. Anything
  * else is a fault and stays one.
@@ -100,10 +99,10 @@ export async function openDemoDatabase(options: DemoDatabaseOptions): Promise<De
 
   const connect = (url: URL | string): WorkerLike => {
     const opened = (overrides.connect ?? defaultConnect)(url);
-    // Before anything else is said on it: the storage worker reads this off the port and every
-    // session it builds afterwards runs over the line it names. A port is transferred, so a worker
-    // the browser restarted holds none of the ports the tabs it lost handed in, and every
-    // connection carries a new one for whichever worker answers it.
+    // Posted before anything else on the port, because the storage worker reads this message off
+    // the port and every session it builds afterwards runs over the line it names. A port is
+    // transferred, so a worker the browser restarted holds none of the ports the tabs it lost
+    // handed in, and every connection carries a new one for whichever worker answers it.
     const handing = openRelayPort?.();
     post(opened, { weft: DEMO_RELAY_MESSAGE, port: handing }, handing === undefined ? [] : [handing]);
     post(opened, { weft: DEMO_ONLINE_MESSAGE, online });
@@ -119,8 +118,8 @@ export async function openDemoDatabase(options: DemoDatabaseOptions): Promise<De
     connect,
     ...(overrides.deviceStorage === undefined ? {} : { deviceStorage: overrides.deviceStorage }),
     ...(options.onError === undefined ? {} : { onError: options.onError }),
-    // A worker that was given no relay port was given no session either, and asking it to
-    // authenticate is refused rather than ignored.
+    // A worker that was given no relay port was given no session either, so asking it to
+    // authenticate is refused.
     ...(openRelayPort === undefined ? {} : { relay: { token: () => DEMO_TOKEN } }),
   });
 
@@ -133,10 +132,10 @@ export async function openDemoDatabase(options: DemoDatabaseOptions): Promise<De
     setOnline: (next) => {
       online = next;
       if (port !== undefined) post(port, { weft: DEMO_ONLINE_MESSAGE, online: next });
-      // Coming back is a sync now rather than at the next poll, which is what the toggle is for:
-      // the unsent count drains while you are looking at it. A relay that cannot be reached is an
-      // ordinary state and settles into the status; what is caught here is the tab going away with
-      // this sync still crossing the port, which has nobody left to tell.
+      // Coming back triggers a sync immediately, so the unsent count drains while you are looking
+      // at it. A relay that cannot be reached is an ordinary state and settles into the status;
+      // what is caught here is the tab going away with this sync still crossing the port, which
+      // has nobody left to tell.
       if (next && openRelayPort !== undefined) void weft.source.sync().catch(() => undefined);
     },
     dispose: () => weft.dispose(),
@@ -144,7 +143,7 @@ export async function openDemoDatabase(options: DemoDatabaseOptions): Promise<De
 }
 
 export interface SeedScopeOptions {
-  /** Where the mark that this scope has been seeded is kept. Local storage: every tab reads it. */
+  /** Where the mark that this scope has been seeded is kept. Local storage, so every tab reads it. */
   readonly storage: StorageLike;
   /** The mark's key, under `weftdb-demo/<demo>/` with the rest of this visitor's state. */
   readonly key: string;
@@ -160,7 +159,7 @@ export interface SeedScopeOptions {
  *
  * Local storage has no compare-and-set, so three tabs opened together read the same unset mark
  * before any of them has written it. A Web Lock is the mutual exclusion an origin has across its
- * contexts, and it is held until the promise its body returns has settled — so the rows are written
+ * contexts, and it is held until the promise its body returns has settled, so the rows are written
  * inside it, and the tabs waiting behind it find the mark set.
  *
  * A new tab is a new device, and a device hydrates with nothing in it and stays empty until it has
@@ -217,7 +216,7 @@ async function withTabLock<T>(name: string, body: () => Promise<T>): Promise<T> 
  *
  * One object rather than one per read, because `useSyncExternalStore` compares snapshots by
  * identity and a status rebuilt on every render is a render loop. `online` is true because nothing
- * has failed: this is a device that has not been given a relay, which is where every open starts.
+ * has failed. This is a device that has not been given a relay, which is where every open starts.
  */
 const IDLE: SessionStatus = {
   online: true,
@@ -235,16 +234,15 @@ const IDLE: SessionStatus = {
  * What each demo's page reads its status pills off, and clicks its online toggle through.
  *
  * The one thing it does that reading `weft.status()` does not is fold in the switch. Being
- * offline by choice is a fact the page knows and the worker's session does not: the session sees
+ * offline by choice is a fact the page knows and the worker's session does not. The session sees
  * a relay it cannot reach, which is what `lastError` is for and is honest, but a person who has
  * just clicked "offline" is not looking at a fault. So the reported status is handed through
  * unchanged while the line is up, and while it is cut the three fields that describe a connection
- * are turned off and the error is dropped. Everything else — `pending` climbing, `quarantined`,
- * `cursor` — is the session's own and passes through either way, which is the whole point of
+ * are turned off and the error is dropped. Everything else (`pending` climbing, `quarantined`,
+ * `cursor`) is the session's own and passes through either way, which is the whole point of
  * cutting the line in the worker rather than signing out.
  *
- * The result is memoised against the two things it is derived from, for the reason `IDLE` is one
- * object.
+ * The result is memoised against `reported` and `#online`, the same reason `IDLE` is one object.
  */
 export class DemoSync {
   readonly #database: DemoDatabase;
@@ -306,9 +304,9 @@ export class DemoSync {
  *
  * A `SharedWorker` is identified by its script URL, which is the whole reason the relay can be one
  * server for every tab rather than one per tab, and why constructing it again yields another port
- * onto the same server. A browser without one is not refused here: the demo opens, the database
- * works, and only the syncing is gone — which `openWeftDatabase` would refuse anyway a moment
- * later, for the storage worker rather than for this.
+ * onto the same server. A browser without one still opens the demo and the database works, and
+ * only the syncing is gone, which `openWeftDatabase` would refuse anyway a moment later, for the
+ * storage worker rather than for this.
  */
 function relayOpener(
   url: URL | string,

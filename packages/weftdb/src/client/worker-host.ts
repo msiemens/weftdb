@@ -1,4 +1,4 @@
-// The worker half of the page-to-worker bridge: the end `WorkerPortTransport` sends to.
+// The worker half of the page-to-worker bridge. The end `WorkerPortTransport` sends to.
 //
 // The whole client runs here, beside the database it writes itself through to. One host serves
 // every tab that asked for this database, so a row one tab writes is a row the tab beside it is
@@ -7,7 +7,7 @@
 //
 // What crosses back is a row delta, not an acknowledgement. The page applies nothing optimistically
 // and therefore has nothing to roll back, which is what keeps the client's "no rollback path"
-// (DESIGN.md §259) true of the worker-backed path as well as the main-thread one.
+// (§3.5) true of the worker-backed path as well as the main-thread one.
 //
 // Nothing here knows what the database is stored in. The executor and the store are options, so the
 // same host runs against a `node:sqlite` file behind `asyncSqlExecutor` and a `MessageChannel` port
@@ -37,8 +37,8 @@ import type { ClientPersistence, LocalRow, WeftClient } from "./index.ts";
 import type { WireRow, WorkerDelta, WorkerHydrated, WorkerMessage, WorkerMutation, WorkerRequest } from "./worker.ts";
 
 /**
- * The worker's own side of one tab's connection: a `MessagePort` `onconnect` handed over. It is the
- * mirror image of `WorkerLike`, sending `WorkerMessage` — replies and unsolicited pushes alike —
+ * The worker's own side of one tab's connection. A `MessagePort` `onconnect` handed over. It is the
+ * mirror image of `WorkerLike`, sending `WorkerMessage` (replies and unsolicited pushes alike)
  * and receiving `WorkerRequest`.
  *
  * `start` is optional because a test's stand-in may not have one, and a `MessagePort` reached
@@ -54,13 +54,13 @@ export interface WorkerHostPortLike {
 /**
  * What the worker needs to keep the client it holds in touch with a relay.
  *
- * The session has to run here for the same reason the client does: it drives `syncWith` against a
+ * The session has to run here for the same reason the client does. It drives `syncWith` against a
  * `WeftClient` this thread owns, and reaches into its outbox and quarantine to say what is pending.
  * Left on the page it would be driving a client it cannot see, and every application would write
  * the same side-channel to bridge the gap.
  *
  * `transport` is a function of the credential rather than a value, because a transport carries its
- * token: the socket presents one when it connects, and HTTP sends one per request. Signing in as
+ * token. The socket presents one when it connects, and HTTP sends one per request. Signing in as
  * somebody else is therefore a new transport, not a mutated one.
  */
 export interface WeftWorkerSessionOptions {
@@ -98,7 +98,7 @@ export interface WeftWorkerHostOptions {
    * Called once the last tab has disconnected.
    *
    * A `SharedWorker` outlives every tab of its origin, so a client nobody released is a client's
-   * worth of rows held in the worker's heap until the browser stops it — and one worker holds a
+   * worth of rows held in the worker's heap until the browser stops it, and one worker holds a
    * database per `(namespace, scope)` an origin has open.
    */
   readonly onIdle?: () => void;
@@ -118,9 +118,9 @@ export function serveWeftWorker(options: WeftWorkerHostOptions): WeftWorkerHost 
  *
  * The watches are counted per connection rather than only in aggregate because a port is the only
  * handle the host has on a tab. A tab that goes away has to have its registrations released, and
- * "which of the watches were this tab's" is a question nothing else can answer — a cache key is
- * derived from the statement, so two tabs watching one list are indistinguishable in the aggregate
- * count.
+ * "which of the watches were this tab's" is a question nothing else can answer, because a cache key
+ * is derived from the statement, so two tabs watching one list are indistinguishable in the
+ * aggregate count.
  */
 interface HostConnection {
   readonly port: WorkerHostPortLike;
@@ -135,13 +135,13 @@ const NO_IDS: readonly string[] = [];
 export class WeftWorkerHost {
   /**
    * Every tab this worker is serving. One in the ordinary single-tab case; one more for each tab
-   * that had a port delivered here — see `connect`.
+   * that had a port delivered here. See `connect`.
    */
   readonly #connections = new Set<HostConnection>();
   readonly #executor: AsyncSqlExecutor;
   readonly #store: SqliteClientStore;
   /**
-   * The statements are run here, on the database this host holds, so this always has an answer —
+   * The statements are run here, on the database this host holds, so this always has an answer,
    * which is why it is `executorRowSelect`'s narrower result rather than a `RowSelect`. The absent
    * answer is the page's state, not the worker's.
    */
@@ -150,14 +150,14 @@ export class WeftWorkerHost {
    * Statements the pages are watching, by the cache key they know them under, with how many of them
    * asked.
    *
-   * Counted because one worker serves every tab: two tabs rendering the same list register the same
-   * cache key — it is derived from the compiled statement — and an `unwatch` that simply deleted the
+   * Counted because one worker serves every tab. Two tabs rendering the same list register the same
+   * cache key (it is derived from the compiled statement), and an `unwatch` that simply deleted the
    * entry would stop recomputing a statement the other tab is still showing.
    */
   readonly #watched = new Map<string, { readonly query: ReactiveSqlQuery; refs: number }>();
   /**
    * Rows touched since the last push, as `${tableName}\0${id}` keys. Accumulated rather than read
-   * on demand: see `#recorder`.
+   * on demand. See `#recorder`.
    */
   readonly #changed = new Set<string>();
   readonly #sessionOptions: WeftWorkerSessionOptions | undefined;
@@ -172,7 +172,7 @@ export class WeftWorkerHost {
    */
   #stale = false;
   #session: WeftSession | undefined;
-  /** `start`'s teardown: stops the poll timer and closes the socket. */
+  /** `start`'s teardown. Stops the poll timer and closes the socket. */
   #stopSession: (() => void) | undefined;
   #offStatus: (() => void) | undefined;
   #token: string | null = null;
@@ -184,7 +184,7 @@ export class WeftWorkerHost {
    * Deltas, in the order the changes they describe happened.
    *
    * Reading what a statement now answers is a query against the database, so a push has to wait
-   * for one — and two pushes started a moment apart would otherwise deliver in whichever order
+   * for one. Two pushes started a moment apart would otherwise deliver in whichever order
    * their queries finished, leaving a tab holding the older of two answers with nothing to correct
    * it.
    */
@@ -231,7 +231,7 @@ export class WeftWorkerHost {
    *
    * `replay` is what the caller read off the port before it knew which host this port belonged to.
    * A `SharedWorker`'s `onconnect` hands over a port carrying no statement of which database it
-   * wants, so the entry point reads until the `hydrate` says — and everything it took off the port
+   * wants, so the entry point reads until the `hydrate` says, and everything it took off the port
    * on the way has to be answered rather than dropped.
    *
    * A port is started before it is listened on, because a `MessagePort` reached through
@@ -262,7 +262,7 @@ export class WeftWorkerHost {
     // port for pushes, and in a `MessageChannel` test both halves can see each other's traffic.
     if (typeof message !== "object" || message === null || typeof (message as WorkerRequest).id !== "number") return;
     const request = message as WorkerRequest;
-    // Through a promise whether or not the handler returned one: `sync` answers when the sync it
+    // Through a promise whether or not the handler returned one. `sync` answers when the sync it
     // ran has finished, and a page that awaited it would otherwise be told "done" while the relay
     // was still being talked to.
     void Promise.resolve()
@@ -271,15 +271,15 @@ export class WeftWorkerHost {
         (value) => {
           // To the port the request came in on, and to no other. Every tab's requests are numbered
           // from one in the tab that issued them, so an answer posted to all of them settles
-          // whichever request each tab happens to have outstanding under that number — one tab's
-          // row list handed to another, with nothing anywhere reporting a fault.
+          // whichever request each tab happens to have outstanding under that number (one tab's
+          // row list handed to another, with nothing anywhere reporting a fault).
           this.#post(connection, { id: request.id, ok: true, value });
         },
         (error: unknown) => {
-          // A rejection crosses as text: an `Error` does not survive a structured clone with its
+          // A rejection crosses as text. An `Error` does not survive a structured clone with its
           // prototype intact, and dropping it would hang the page on a request already given up on.
           // The name goes with it, because which failure it is decides whether a caller can carry
-          // on: a write to a row that has since been deleted is one an application meets in normal
+          // on. A write to a row that has since been deleted is one an application meets in normal
           // use, and telling it apart from a fault needs more than a message to match on.
           this.#post(connection, {
             id: request.id,
@@ -333,7 +333,7 @@ export class WeftWorkerHost {
   #disconnect(connection: HostConnection): null {
     if (!this.#connections.has(connection)) return null;
     for (const [cacheKey, count] of connection.watching) {
-      // Once per registration, because the aggregate count is per registration: a tab that watched
+      // Once per registration, because the aggregate count is per registration. A tab that watched
       // a statement twice holds two references, and releasing one would leave the worker
       // recomputing a statement nobody reads for the rest of the session.
       for (let index = 0; index < count; index += 1) this.#release(cacheKey);
@@ -353,11 +353,11 @@ export class WeftWorkerHost {
   }
 
   /**
-   * Takes the credential the session runs under. A token is not applied to the running session: a
+   * Takes the credential the session runs under. A token is not applied to the running session. A
    * socket presents its token when it connects, so the session is rebuilt around the new one and
    * its socket reopened.
    *
-   * Signing out ends the session and closes the socket. It does not touch the outbox: unsent work
+   * Signing out ends the session and closes the socket. It does not touch the outbox. Unsent work
    * is the device's, not the session's, and a person who signs out and back in expects to find it
    * still queued (§4.1). What it does do is publish one last status saying so, because a page whose
    * status stream simply stopped would go on showing a live connection that has been closed.
@@ -417,16 +417,16 @@ export class WeftWorkerHost {
 
   #postStatus(status: SessionStatus): void {
     this.#lastStatus = status;
-    // Every tab, for the same reason a delta goes to every tab: one session runs here and what it
+    // Every tab, for the same reason a delta goes to every tab. One session runs here and what it
     // is doing is true of the device rather than of whichever tab last asked something.
     this.#broadcast({ push: "status", status });
   }
 
   /**
-   * The status of a device with no session: whatever was last true of it, with the three things
-   * that describe a live connection turned off. Synthesised rather than read, because the session
-   * that could have reported it has been stopped — and saying nothing would leave the page showing
-   * the connection it had before it signed out.
+   * The status of a device with no session. Whatever was last true of it, with `online`, `syncing`
+   * and `live` turned off. Synthesised rather than read, because the session that could have
+   * reported it has been stopped, and saying nothing would leave the page showing the connection
+   * it had before it signed out.
    */
   #postSignedOut(): void {
     const last = this.#lastStatus;
@@ -473,8 +473,8 @@ export class WeftWorkerHost {
    * A persistence that notes which rows moved on the way to the store, and whether the store took
    * them.
    *
-   * The obvious way to collect the keys — call `client.drainTouchedRows()` once the mutation has
-   * been applied — reads an empty set. Every mutator calls `persist()` itself, and
+   * The obvious way to collect the keys (call `client.drainTouchedRows()` once the mutation has
+   * been applied) reads an empty set. Every mutator calls `persist()` itself, and
    * `SqliteClientStore.save` takes the touched rows to decide what to write, so the keys are gone
    * before the request handler regains control. Reading them here, before delegating, is what
    * leaves the store its own reason to write them.
@@ -495,8 +495,8 @@ export class WeftWorkerHost {
   }
 
   async #mutate(mutation: WorkerMutation): Promise<null> {
-    // In a `finally`, because a mutation that throws partway — an `update` that wrote one field
-    // and was refused the next — has still moved rows, and the page would otherwise render a
+    // In a `finally`, because a mutation that throws partway (an `update` that wrote one field
+    // and was refused the next) has still moved rows, and the page would otherwise render a
     // state the worker no longer holds.
     try {
       await this.#apply(mutation);
@@ -506,7 +506,7 @@ export class WeftWorkerHost {
       // The session polls on a long interval while its socket is up, because a socket that is up
       // says when to sync. That covers what arrives and says nothing about what this device has
       // just written, so a write nobody told the session about sits in the outbox for a whole
-      // interval — a minute of "unsent" on screen over a live connection.
+      // interval (a minute of "unsent" on screen over a live connection).
       this.#session?.changed();
     }
     return null;
@@ -516,7 +516,7 @@ export class WeftWorkerHost {
    * Throws away a client the database refused a write from, and reads another out of the file.
    *
    * A mutator changes `rows`, `outbox` and `touchedRows` and then persists, so a write the database
-   * rejected — a quota refusal, an aborted transaction — leaves the client holding a state the file
+   * rejected (a quota refusal, an aborted transaction) leaves the client holding a state the file
    * does not have and holding it for the rest of the session. Rejecting the caller's promise tells
    * the caller; it repairs nothing here.
    *
@@ -553,7 +553,7 @@ export class WeftWorkerHost {
       case "delete":
         return client.delete(tableName, rowId, txnId);
       case "restore":
-        // No values on the wire, so none here: the row still exists in the scope and its fields
+        // No values on the wire, so none here. The row still exists in the scope and its fields
         // come back on the next pull.
         return client.restore(tableName, rowId, {}, txnId);
     }
@@ -567,11 +567,11 @@ export class WeftWorkerHost {
   ): Promise<readonly string[]> {
     const existing = this.#watched.get(cacheKey);
     // A second tab watching a list the first tab already watches. The compiled statement is the
-    // same — the cache key is derived from it — so the registration is shared rather than rebuilt,
+    // same (the cache key is derived from it), so the registration is shared rather than rebuilt,
     // and only the count moves.
     if (existing !== undefined) existing.refs += 1;
     else {
-      // Rebuilt rather than trusted: `reactiveSqlQuery` refuses a statement that does not constrain
+      // Rebuilt rather than trusted. `reactiveSqlQuery` refuses a statement that does not constrain
       // `scope_id`, and one database file holds every scope this device is signed into.
       this.#watched.set(cacheKey, { query: reactiveSqlQuery({ tableName: toTableName(tableName), query }), refs: 1 });
     }
@@ -585,8 +585,8 @@ export class WeftWorkerHost {
    * Hands one registration back, on behalf of the tab that took it.
    *
    * A port may only release what it is holding. Without that check a tab could decrement a
-   * registration another tab made — by unwatching twice, or by unwatching a cache key it never
-   * asked for — and retire a statement the other tab is still rendering from.
+   * registration another tab made (by unwatching twice, or by unwatching a cache key it never
+   * asked for) and retire a statement the other tab is still rendering from.
    */
   #unwatch(connection: HostConnection, cacheKey: string): void {
     const held = connection.watching.get(cacheKey) ?? 0;
@@ -633,7 +633,7 @@ export class WeftWorkerHost {
    * tab is the one typing.
    *
    * The results do not. A tab rendering one list has no use for the lists every other tab is
-   * rendering, and sending them anyway wakes it — the mirror notifies its engine on every delta —
+   * rendering, and sending them anyway wakes it (the mirror notifies its engine on every delta),
    * so a busy neighbour costs this tab a re-scan of its own subscriptions for nothing. The host
    * knows which port asked for what (`HostConnection.watching`), so it can simply not send them.
    *
@@ -643,12 +643,12 @@ export class WeftWorkerHost {
    */
   #push(): Promise<void> {
     // A sync that was already in flight when the page asked to close the database still runs its
-    // own teardown, and calls back here to say what moved — against a client this host has let go
+    // own teardown, and calls back here to say what moved, against a client this host has let go
     // of. There is nothing left to describe and nobody left to describe it to, so this is where it
     // stops rather than throwing out of a promise the poll started and nobody is holding.
     if (this.#client === undefined) return Promise.resolve();
-    // The rows are read before the wait, because `client.rows` is what the next mutation changes:
-    // a delta assembled afterwards would carry the keys of the change that started it and the row
+    // The rows are read before the wait, because `client.rows` is what the next mutation changes.
+    // A delta assembled afterwards would carry the keys of the change that started it and the row
     // values of every change that landed while it queued.
     const keys = [...this.#changed];
     this.#changed.clear();
@@ -660,7 +660,7 @@ export class WeftWorkerHost {
   async #deliver(moved: { readonly rows: readonly WireRow[]; readonly removed: readonly string[] }): Promise<void> {
     const answers = new Map<string, readonly string[]>();
     for (const cacheKey of this.#watched.keys()) answers.set(cacheKey, await this.#ids(cacheKey));
-    // Over a copy, for the reason `#broadcast` takes one: posting to a port is what makes a tab
+    // Over a copy, for the reason `#broadcast` takes one. Posting to a port is what makes a tab
     // notice its state has moved, and a tab is allowed to answer that by disconnecting.
     for (const connection of [...this.#connections]) {
       this.#post(connection, {
@@ -708,7 +708,7 @@ export class WeftWorkerHost {
 
   /**
    * Posts to one tab. Takes the connection rather than looking one up, and does not require it to
-   * still be in the set: `#disconnect` answers the request that retired it.
+   * still be in the set. `#disconnect` answers the request that retired it.
    */
   #post(connection: HostConnection, message: WorkerMessage): void {
     if (!this.#serving) return;
@@ -717,7 +717,7 @@ export class WeftWorkerHost {
 
   #broadcast(message: WorkerMessage): void {
     if (!this.#serving) return;
-    // Over a copy: posting to a port is what makes a tab notice its state has moved, and a tab is
+    // Over a copy. Posting to a port is what makes a tab notice its state has moved, and a tab is
     // allowed to answer that by disconnecting, which would otherwise skip whoever came after it.
     for (const connection of [...this.#connections]) connection.port.postMessage(message);
   }
@@ -752,7 +752,7 @@ function fieldValues(values: Readonly<Record<string, WireValue>>): Record<FieldN
 
 /**
  * A bind parameter as the executor takes it. A query builder types its parameters `unknown`,
- * and SQLite takes four kinds of which a boolean is not one — so `where("done", "=", false)`
+ * and SQLite binds no boolean, so `where("done", "=", false)`
  * would otherwise reach the driver as a boolean and fail at the binding rather than answering.
  * `executorRowSelect` does the same for the statements this host watches; this covers the raw
  * `execute` path, which does not go through it.

@@ -1,7 +1,7 @@
 // The DESIGN.md §9 invariants that hold continuously, checked after every generated
 // command, plus the ones that only hold once a history has settled.
 //
-// Invariants needing a specific arrangement rather than a generated history live in the
+// Invariants needing a specific arrangement instead of a generated history live in the
 // targeted property files:
 //
 //   property-convergence          §9.1, §9.2, §9.5, §9.6, §9.7
@@ -72,9 +72,9 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
         const emitted = device.emittedHlcs;
         const index = emitted.length - 1;
         if (index < 1) continue;
-        // Only the tail is new since the previous command. A skew correction deliberately
-        // drops the rejected future stamp (§5.5), and that op was never accepted anywhere,
-        // so it is the one place the sequence may step backwards.
+        // Only the tail is new since the previous command. A skew correction drops the rejected
+        // future stamp (§5.5), and that op was never accepted anywhere, so it is the one place
+        // the sequence may step backwards.
         if (device.restampedAt.has(index)) continue;
         assert.equal(
           compareHlc(at(emitted, index - 1), at(emitted, index)),
@@ -88,9 +88,9 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
     id: "§6.self",
     title: "an accepted write never carries a lower stamp than an accepted write the device emitted earlier",
     check: (world) => {
-      // The silent-loss shape: a device emits an edit, the server accepts it, and it still
+      // The silent-loss shape. A device emits an edit, the server accepts it, and it still
       // loses the field-wise comparison because its stamp sits under something the device
-      // itself wrote earlier — a skew correction pulling the clock back does exactly that.
+      // itself wrote earlier, exactly what a skew correction pulling the clock back does.
       // Delivery order is irrelevant here; a reordered batch is resolved by HLC, so the
       // ordering that matters is the one the device emitted in.
       for (const device of world.devices) {
@@ -105,12 +105,12 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
         ]
           .filter((hlc) => emission.has(hlc))
           .sort((left, right) => (emission.get(left) ?? 0) - (emission.get(right) ?? 0))
-          // A skew correction resets this device's baseline: it exists to drop a wall clock the
+          // A skew correction resets this device's baseline. It exists to drop a wall clock the
           // server refused, and work queued before it is legitimately left holding a higher
-          // stamp than the correction that followed. What must not happen — and what the
-          // correction consults the clock's own record of accepted writes to avoid — is landing
-          // under something the server had already taken, so each stretch between corrections is
-          // checked on its own.
+          // stamp than the correction that followed. What must not happen is landing under
+          // something the server had already taken, which is what the correction consults the
+          // clock's own record of accepted writes to avoid, so each stretch between corrections
+          // is checked on its own.
           .filter((hlc) => (emission.get(hlc) ?? 0) > lastRestampBefore(device, world));
 
         for (let index = 1; index < accepted.length; index += 1) {
@@ -247,8 +247,8 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
         if (device.client.resyncRequired) continue;
         for (const [key, row] of device.client.rows) {
           const { tableName: table, rowId: id } = parseLocalKey(key);
-          // Rows still holding outbox or quarantine entries have not synced: a locally
-          // created id the server refused as `row_exists` is diverged, not stamped.
+          // Rows still holding outbox or quarantine entries have not synced. A locally
+          // created id the server refused as `row_exists` is diverged and never gets stamped.
           if (!known.has(key) || pendingOps(device.client, table, id).length > 0) continue;
           assert.notEqual(row.internals._weft_first_synced_at, null, `${key} is synced with no first_synced_at`);
         }
@@ -299,8 +299,8 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
     title: "a field with an unsent write shows what this device wrote, not what the scope says",
     check: (world) => {
       // What a pull carries cannot include a write the relay has not been given, so applying it
-      // over an unsent local edit replaces what the person typed with the value they typed over
-      // — while their own edit waits its turn in the outbox, or sits in quarantine as a
+      // over an unsent local edit replaces what the person typed with the value they typed over,
+      // while their own edit waits its turn in the outbox, or sits in quarantine as a
       // divergence only the person can resolve (§5.5).
       for (const device of [...world.devices, world.neighbour]) {
         for (const [key, row] of device.client.rows) {
@@ -308,11 +308,11 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
           const pending = pendingOps(device.client, table, id);
           // Only while the row's existence is settled. A queued create, delete or restore means
           // the writes behind it belong to a life of the row that the scope may have already
-          // replaced — another device creating the same id hands this one a row whose values
-          // were never what the queued writes said.
+          // replaced, since another device creating the same id hands this one a row whose
+          // values were never what the queued writes said.
           if (pending.some((op) => op.kind !== "set")) continue;
-          // The outbox answers for every field it holds an entry for: it is ordered, and
-          // `update` supersedes an earlier unsent write to the same field rather than queueing
+          // The outbox answers for every field it holds an entry for, because it is ordered, and
+          // `update` supersedes an earlier unsent write to the same field instead of queueing
           // both, so its last entry for a field is the value that field ends on locally.
           const lastQueued = new Map<FieldName, WeftOp>();
           for (const op of device.client.outbox) {
@@ -327,16 +327,16 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
             );
           }
           // Quarantined work is unsent for good, and the value it left in the row is what the
-          // person is being asked to decide about — so a pull must not quietly settle it either.
+          // person is being asked to decide about, so a pull must not quietly settle it either.
           //
-          // This is a different assertion rather than a weaker one, and the difference is not
-          // optional: `update` supersedes an unsent write only in the outbox, because a
-          // quarantined transaction is the person's to retry or discard whole (§5.5). So a
-          // later edit to the same field leaves the quarantined op behind holding the older
-          // text, and demanding the row show that text would be demanding it resurrect what the
-          // person has since typed over. What the scope says is still excluded: the value has to
-          // be one this device produced — its latest write, or the rebase that replaced that
-          // write before the op was set aside.
+          // This is a different assertion than a weaker one, and the difference is not optional.
+          // `update` supersedes an unsent write only in the outbox, because a quarantined
+          // transaction is the person's to retry or discard whole (§5.5). A later edit to the
+          // same field leaves the quarantined op behind holding the older text, and demanding
+          // the row show that text would be demanding it resurrect what the person has since
+          // typed over. What the scope says is still excluded. The value has to be one this
+          // device produced, its latest write, or the rebase that replaced that write before
+          // the op was set aside.
           const quarantinedByField = new Map<FieldName, WireValue[]>();
           for (const op of device.client.quarantine) {
             if (op.kind !== "set" || op.tableName !== table || op.rowId !== id) continue;
@@ -361,7 +361,7 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
     title: "a row's revision never runs backwards while the row stays put",
     check: (world) => {
       // Subscriptions treat the revision as the row's identity, so one that decrements can land
-      // on a number the row already had — and a subscriber diffing on it sees no change at all.
+      // on a number the row already had, and a subscriber diffing on it sees no change at all.
       for (const device of [...world.devices, world.neighbour]) {
         const seen = new Set<string>();
         for (const [key, row] of device.client.rows) {
@@ -377,7 +377,7 @@ export const STEP_INVARIANTS: readonly WorldInvariant[] = [
           }
           world.trace.revHighWater.set(trackingKey, row.internals._weft_rev);
         }
-        // A row that has left this device is forgotten: the next life of that id starts over,
+        // A row that has left this device is forgotten. The next life of that id starts over,
         // and holding the old high-water mark against it would be comparing two different rows.
         for (const trackingKey of [...world.trace.revHighWater.keys()]) {
           if (trackingKey.startsWith(`${device.client.deviceId}\0`) && !seen.has(trackingKey)) {
@@ -461,12 +461,12 @@ export const SETTLED_INVARIANTS: readonly WorldInvariant[] = [
     id: "§5.1.acked",
     title: "the value a field ends on is the accepted write that should have won it",
     check: (world) => {
-      // Read-your-writes, stated where it can be checked: replay every write the server
-      // accepted through the rule it claims to resolve by, and the answer has to be what it is
-      // actually holding. A device is told its push succeeded, so a write that was accepted and
-      // then quietly beaten by nothing at all is a write that never happened as far as anyone
-      // can tell — and convergence cannot see it, because every device agrees on the wrong
-      // value just as readily as the right one.
+      // Read-your-writes, checked here directly. Replay every write the server accepted through
+      // the rule it claims to resolve by, and the answer has to be what it is actually holding.
+      // A device is told its push succeeded, so a write that was accepted and then quietly
+      // beaten by nothing at all is a write that never happened as far as anyone can tell.
+      // Convergence alone cannot see it, because every device agrees on the wrong value just as
+      // readily as the right one.
       // Replayed the way the server applies a push: grouped by transaction, and within one,
       // row operations before field writes. A batch that arrived rotated is resolved by the
       // server in this order, so a replay that followed the wire order instead would decide a
@@ -483,18 +483,18 @@ export const SETTLED_INVARIANTS: readonly WorldInvariant[] = [
       const winners = new Map<string, { readonly value: unknown; readonly hlc: HlcString }>();
       for (const op of applied) {
         if (op.kind !== "set") {
-          // A row created again is a different row: whatever a purged one held is not
+          // A row created again is a different row. Whatever a purged one held is not
           // something the server can still be holding. Only `create` and `append` start a
-          // life, and only they can — both are refused against a row that is present at all
-          // (§5.9), so an accepted one proves the id was purged and took every field with it.
+          // life, and only they can, since both are refused against a row that is present at
+          // all (§5.9), so an accepted one proves the id was purged and took every field with it.
           //
-          // `delete` and `restore` are deliberately not a new life. They move one row-level
-          // register on an axis of their own and leave every field value in place (§5.9), which
-          // is the whole reason a restored row "returns with every field it had at deletion,
-          // not a subset" (§9.23c). Forgetting the field history here would demand that a
-          // restore's opening writes beat concurrent writes they lose the stamp comparison to —
-          // a rule that reads differently depending on which of the two reached the relay
-          // first, and so contradicts commutativity (§9.1) rather than testing it.
+          // `delete` and `restore` are not a new life. They move one row-level register on an
+          // axis of their own and leave every field value in place (§5.9), which is the whole
+          // reason a restored row "returns with every field it had at deletion, not a subset"
+          // (§9.23c). Forgetting the field history here would demand that a restore's opening
+          // writes beat concurrent writes they lose the stamp comparison to, a rule that would
+          // read differently depending on which of the two reached the relay first, contradicting
+          // commutativity (§9.1) instead of testing it.
           if (op.kind !== "create" && op.kind !== "append") continue;
           for (const key of [...winners.keys()]) {
             if (key.startsWith(`${op.scopeId}\0${op.tableName}\0${op.rowId}\0`)) winners.delete(key);
@@ -532,9 +532,9 @@ export const SETTLED_INVARIANTS: readonly WorldInvariant[] = [
     title: "a device never quarantines a prose edit nobody else touched",
     check: (world) => {
       // `rebase_exhausted` means an edit could not be replayed onto the server's version of a
-      // field. That is a real outcome when two devices are writing the same prose — and a bug
+      // field. That is a real outcome when two devices are writing the same prose, and a bug
       // when nobody else was, because it can only mean the device's own writes were fighting
-      // each other. Convergence cannot see it: the work is set aside, everyone agrees on what
+      // each other. Convergence cannot see it. The work is set aside, everyone agrees on what
       // is left, and one device's edits have quietly stopped arriving.
       const writers = new Map<string, Set<string>>();
       for (const op of world.trace.accepted) {
@@ -571,9 +571,9 @@ export const SETTLED_INVARIANTS: readonly WorldInvariant[] = [
     title: "a settled device is holding no unsent work",
     check: (world) => {
       // Quiescing syncs every device until nothing moves, so anything still queued is work
-      // the client cannot push and has not surfaced either — it will sit there being retried
-      // forever. Quarantined work is the deliberate other outcome and is excluded: that has
-      // been shown to the user and is waiting on a decision (§5.5).
+      // the client cannot push and has not surfaced either. It will sit there being retried
+      // forever. Quarantined work is the other outcome and is excluded, since that has been
+      // shown to the user and is waiting on a decision (§5.5).
       for (const device of world.devices) {
         assert.deepEqual(
           device.client.outbox.map((op) => `${op.txnId}:${op.kind}`),
@@ -607,7 +607,7 @@ export const SETTLED_INVARIANTS: readonly WorldInvariant[] = [
     },
   },
   {
-    // Runs late and deliberately mutates the world: repairing is the last thing a settled
+    // Runs late and mutates the world, because repairing is the last thing a settled
     // history does, and everything after it observes the repaired state.
     id: "§5.5",
     title: "discarding quarantined work and re-pulling leaves every device equal to the server",

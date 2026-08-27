@@ -1,9 +1,8 @@
-// What is left of an application's data layer once the library and codegen have taken their
-// halves. Row types, decoding, queries, mutators and hooks come from `src/generated`, which
-// `weft generate` writes from the schema; the database, the worker that holds it and the sync
-// session all come from `openWeftDatabase`. What is genuinely this application's is here: which
-// scope this visitor is on, the heartbeat that keeps this tab's device record current, and what a
-// row looks like once the client's own knowledge is added to it.
+// What remains here, once the library and codegen have taken their share, is which scope this
+// visitor is on, the heartbeat that keeps this tab's device record current, and what a row looks
+// like once the client's own knowledge is added to it. Row types, decoding, queries, mutators and
+// hooks come from `src/generated`, which `weft generate` writes from the schema; the database,
+// the worker that holds it and the sync session all come from `openWeftDatabase`.
 import { deviceId as toDeviceId, rowId, type DeviceId, type RowId } from "weftdb/core";
 import type { SessionStatus, StorageLike, WeftClientMirror } from "weftdb/client";
 import {
@@ -41,7 +40,7 @@ export const HEARTBEAT_MS = 5_000;
 /** How long after its last heartbeat a device still counts as connected. */
 export const PRESENT_MS = 15_000;
 
-/** A message as the log needs it: the generated row type plus what only the client knows. */
+/** A message as the log needs it, the generated row type extended with what only the client knows. */
 export interface MessageView extends MessagesRow {
   /** Local work the server has not acknowledged. */
   readonly dirty: boolean;
@@ -49,7 +48,7 @@ export interface MessageView extends MessagesRow {
   readonly mine: boolean;
 }
 
-/** A device record with the two things the row itself cannot say. */
+/** A device record extended with what the row itself cannot say. */
 export interface DeviceView extends DevicesRow {
   readonly here: boolean;
   readonly self: boolean;
@@ -72,17 +71,17 @@ export class ChatStore {
   readonly identity: TabIdentity;
   readonly database: DemoDatabase;
   /**
-   * What the React hooks read from and what the mutators write through: the mirror of the client
-   * the storage worker holds. It is a `WeftSource`, so `use<Collection>` and `use<Collection>Query`
-   * both work over it — the second because there is a real SQLite on the other side of the port for
-   * a compiled statement to run against.
+   * The mirror of the client the storage worker holds. React hooks read from it and mutators
+   * write through it. It is a `WeftSource`, so both `use<Collection>` and `use<Collection>Query`
+   * work over it, the second because there is a real SQLite on the other side of the port for a
+   * compiled statement to run against.
    */
   readonly source: WeftClientMirror;
   /** This tab as the relay knows it, minted by `openWeftDatabase` under this tab's namespace. */
   readonly deviceId: DeviceId;
   readonly messages: MessagesMutators;
   readonly devices: DevicesMutators;
-  /** The status pills, the online toggle, and the two verbs the header's buttons call. */
+  /** The status pills, the online toggle, and the verbs the header's buttons call. */
   readonly connection: DemoSync;
   readonly now: () => number;
 
@@ -93,8 +92,9 @@ export class ChatStore {
     this.deviceId = toDeviceId(this.source.deviceId);
     this.connection = new DemoSync(options.database);
     this.now = options.now ?? (() => Date.now());
-    // No `notify` callback: the worker's echo wakes the subscriptions when the change arrives, and
-    // a callback fired when the mutator returned would wake them before there was anything new.
+    // A `notify` callback is not used, because the worker's echo wakes the subscriptions when the
+    // change arrives, and a callback fired when the mutator returns would wake them before there
+    // was anything new.
     this.messages = messagesMutators(this.source);
     this.devices = devicesMutators(this.source);
   }
@@ -104,8 +104,8 @@ export class ChatStore {
    *
    * The scope comes from local storage, so every tab of this browser joins the same room while
    * another visitor gets their own. The namespace comes from session storage, so **each tab is a
-   * database of its own** — its own client in the storage worker, its own file and its own
-   * device id — which is what puts a second chip on the device strip when you open a second tab.
+   * database of its own**, with its own client in the storage worker, its own file and its own
+   * device id, which is what puts a second chip on the device strip when you open a second tab.
    */
   static async open(window: WindowLike, overrides?: DemoOpenOverrides): Promise<ChatStore> {
     const identity = await tabIdentity(window.sessionStorage, window.localStorage, { demo: DEMO });
@@ -132,8 +132,7 @@ export class ChatStore {
 
   /**
    * Rewrites this tab's device record. The first one creates the row and every one after it is
-   * an update, which is the whole difference between this collection and the message log: a
-   * device record is a current value, a message is a fact that already happened.
+   * an update. A device record is a current value; a message is a fact that already happened.
    */
   async touch(): Promise<void> {
     const id = String(this.deviceId);
@@ -155,14 +154,14 @@ export class ChatStore {
   }
 
   /**
-   * The device strip: everything that has ever joined this room, in the order the statement that
+   * The device strip. Everything that has ever joined this room, in the order the statement that
    * selected it put them.
    *
-   * That order is a total one over a key the row cannot change — a device id is written when the
-   * row is created and is immutable after it — so the strip holds still while heartbeats land.
+   * That order is a total one over a key the row cannot change, since a device id is written when
+   * the row is created and is immutable after it, so the strip holds still while heartbeats land.
    * `last_seen` is the value every heartbeat rewrites, which makes it the one field a stable order
-   * cannot read. What is added here is the pair of facts the row itself cannot carry: whether the
-   * heartbeat is recent enough to call the device present, and whether it is this tab.
+   * cannot read. What is added here is what the row itself cannot carry, whether the heartbeat is
+   * recent enough to call the device present and whether it is this tab.
    */
   presence(rows: readonly DevicesRow[]): readonly DeviceView[] {
     const cutoff = this.now() - PRESENT_MS;

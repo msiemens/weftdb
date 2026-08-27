@@ -50,15 +50,15 @@ export interface SerializedRowRecord {
   readonly firstSeenAt: number;
   readonly class: "row" | "append";
   readonly deletedHlc: string | null;
-  /** Carried so a snapshot describes the liveness register completely, not just its value. */
+  /** Carried so a snapshot captures the whole liveness register, including which write's HLC currently holds it. */
   readonly registerHlc: string | null;
   readonly serverSeq: number;
 }
 
 /**
- * A snapshot on the wire: the bytes, and the digest of exactly those bytes. The structured
- * snapshot is not sent alongside them — it is the same records a second time, which doubles the
- * largest response the relay produces, and the receiver can read it back out of the body.
+ * A snapshot on the wire holds the bytes and the digest of exactly those bytes. The structured
+ * snapshot is not sent alongside them, because it is the same records a second time and would
+ * double the largest response the relay produces. The receiver reads it back out of the body.
  */
 export interface SnapshotEnvelope {
   readonly digest: string;
@@ -90,9 +90,8 @@ export function snapshotFromEnvelope(envelope: SnapshotEnvelope): Snapshot {
 /**
  * Reads a snapshot back, checking every line. This is the one place a device replaces its whole
  * dataset with something it was handed, and it runs after the client has fallen below the
- * tombstone floor — so anything not understood here is installed as the device's entire state
- * with nothing left to compare it against. A line whose type is not one of the three was
- * previously read as a row.
+ * tombstone floor, so anything not understood here is installed as the device's entire state
+ * with nothing left to compare it against.
  */
 export function snapshotFromNdjson(body: string): Snapshot {
   const fields: FieldRecord[] = [];
@@ -220,8 +219,9 @@ export function snapshotDigest(snapshot: Snapshot): string {
 }
 
 export function contentAddressSnapshot(snapshot: Snapshot): ContentAddressedSnapshot {
-  // Serialized once and hashed, rather than serialized for the digest and again for the body:
-  // the two must be the same bytes, and a snapshot is the largest thing this server builds.
+  // Serialized once and hashed, rather than serialized for the digest and again for the body,
+  // because the two must be the same bytes and a snapshot is the largest thing this server
+  // builds.
   const body = snapshotToNdjson(snapshot);
   return {
     digest: sha256Hex(body),
@@ -231,10 +231,10 @@ export function contentAddressSnapshot(snapshot: Snapshot): ContentAddressedSnap
 }
 
 export function snapshotLines(snapshot: Snapshot): SnapshotLine[] {
-  // Records are emitted in key order rather than storage order: the digest is a content
-  // address, so two servers holding the same state must produce the same bytes however their
-  // rows were inserted. Order is by code unit for the same reason it is everywhere else in the
-  // protocol — `localeCompare` weighs characters according to the machine's locale, so two
+  // Records are emitted in key order rather than storage order, because the digest is a
+  // content address, so two servers holding the same state must produce the same bytes however
+  // their rows were inserted. Order is by code unit for the same reason it is everywhere else in
+  // the protocol. `localeCompare` weighs characters according to the machine's locale, so two
   // relays holding identical state would content-address it differently.
   const fields = [...snapshot.fields].sort((left, right) => compareKeys(fieldKeyOf(left), fieldKeyOf(right)));
   const rows = [...snapshot.rows].sort((left, right) => compareKeys(rowKeyOf(left), rowKeyOf(right)));

@@ -18,8 +18,8 @@ export const schema = defineSchema({
     due_at: S.number({ nullable: true, retentionAnchor: true }),
     auto_delete_days: S.number({ nullable: true }),
   }),
-  // Append-only: rows are written once and are immutable from the next transaction on, so
-  // two tabs writing history at once always agree on it without anyone merging anything.
+  // Rows are written once and are immutable from the next transaction on, so two tabs writing
+  // history at once always agree on it without anyone merging anything.
   todo_events: S.eventLog({
     todo_id: S.string(),
     // The activity panel selects by kind, so the statement it runs after every mutation reads an

@@ -1,8 +1,9 @@
-// Typing is not one edit. A field that merges with diff3 carries the hash of the version it
-// was written against, and several edits queued before a sync are pushed together — so each
-// one's ancestor has to be the edit queued before it, not the last thing the server said. Take
-// the latter and a single device typing into a note cannot push at all: every op after the first
-// is rejected as `merge_required` against a value only that device has written.
+// Typing produces several edits before a sync ever runs. A field that merges with diff3 carries
+// the hash of the version it was written against, and several edits queued before a sync are
+// pushed together, so each one's ancestor has to be the edit queued before it. Chaining the
+// ancestor this way is what lets a single device typing into a note push at all, because taking
+// the last thing the server said as the ancestor instead would reject every op after the first as
+// `merge_required` against a value only that device has written.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import fc from "fast-check";
@@ -97,7 +98,7 @@ test("one device's edits to a diff3 field converge on what it last typed", async
         const { server, client } = await seeded();
         for (const [index, text] of edits.entries()) {
           await client.update(TODOS, ROW, values({ notes: text }), txnId(`edit-${index}`));
-          // Syncing at an arbitrary rhythm: what matters is that the queue may hold any number
+          // Syncing at an arbitrary rhythm. What matters is that the queue may hold any number
           // of edits when it is finally pushed.
           if ((index + 1) % syncEvery === 0) await client.syncWith(inProcessTransport(server), HASH);
         }
@@ -115,8 +116,8 @@ test("one device's edits to a diff3 field converge on what it last typed", async
 });
 
 test("a queued diff3 edit is still rebased against another device's write", async () => {
-  // The chained base must not paper over a real conflict: an edit from elsewhere landing
-  // between the queue and the push still has to be merged rather than overwritten.
+  // The chained base must not paper over a real conflict. An edit from elsewhere landing between
+  // the queue and the push still gets merged into the result.
   const { server, client } = await seeded();
   await client.update(TODOS, ROW, values({ notes: "Monday: nothing\nTuesday: nothing" }), txnId("seed"));
   await client.syncWith(inProcessTransport(server), HASH);
@@ -139,8 +140,8 @@ test("a queued diff3 edit is still rebased against another device's write", asyn
 
 test("a merge survives the field's last-writer-wins comparison", async () => {
   // The rebased write is stamped by a clock that has never seen the value it merged with, so
-  // without the server's stamp travelling back with the rejection the push accepts the merge
-  // and the field comparison then discards it — an edit the client was told had landed.
+  // without the server's stamp travelling back with the rejection, the push accepts the merge,
+  // and the field comparison then discards an edit the client had already been told had landed.
   const { server, client } = await seeded();
   await client.update(TODOS, ROW, values({ notes: "line one\nline two" }), txnId("seed"));
   await client.syncWith(inProcessTransport(server), HASH);
@@ -246,9 +247,9 @@ test("a create transaction may refine a diff3 field before it is pushed", async 
 
 test("prose written before the relay was ever heard from does not come back marked", async () => {
   // The ancestor a rebase merges against is recorded on every pull, applied or not. Record it
-  // only when the value is applied and a device that wrote the field before it ever received one —
-  // a row made offline, or one whose every pull is shadowed by the unsent write sitting on top of
-  // it — reaches `rebase` with no ancestor, where `diff3("", mine, theirs)` matches neither side
+  // only when the value is applied, and a device that wrote the field before it ever received one
+  // (a row made offline, or one whose every pull is shadowed by the unsent write sitting on top of
+  // it) reaches `rebase` with no ancestor, where `diff3("", mine, theirs)` matches neither side
   // and returns a conflict block. The markers are the signal that two writers contended (§6), so
   // producing them where the relay's copy is the very text this edit was made from makes the
   // signal a lie.

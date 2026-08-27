@@ -1,7 +1,7 @@
 // Everything an application has to do to keep a client in touch with a relay, once. Syncing on
 // a timer, syncing again a moment after a local change, preferring the socket while it is up
 // and HTTP when it is not, telling the other tabs in this browser, and publishing a status
-// object stable enough for `useSyncExternalStore` to compare — none of that is specific to a
+// object stable enough for `useSyncExternalStore` to compare. None of that is specific to a
 // schema or an application, and every application writing it again writes the same bugs into
 // it: a status object rebuilt on every read, a channel closed by a cleanup that runs twice, a
 // poll that never stops.
@@ -36,7 +36,7 @@ export interface BroadcastChannelLike {
 export interface SessionOptions {
   readonly client: WeftClient;
   readonly schemaHash: SchemaHash;
-  /** Used whenever the socket is not up — the same session, over HTTP. */
+  /** Used whenever the socket is not up, running the same session over HTTP. */
   readonly transport: AsyncSyncTransport;
   /** Opened by `start` and closed by its cleanup, so a reconnect is the session's business. */
   readonly openSocket?: (handlers: SocketHandlers) => SocketTransport;
@@ -88,15 +88,15 @@ export class WeftSession {
     this.client = options.client;
     this.#status = this.#read();
     options.channel?.addEventListener("message", () => {
-      // Another tab pushed something; pull it now rather than up to a poll later.
+      // Another tab pushed something, so pull it now.
       void this.sync();
     });
   }
 
   /**
-   * Opens the socket and starts the fallback timer. The returned function stops both. It does
-   * not close the channel: that belongs to the session, and an effect that runs twice — as
-   * React's do in development — would otherwise leave the second run posting to a closed one.
+   * Opens the socket and starts the fallback timer. The returned function stops both, but not
+   * the channel. The channel belongs to the session, and an effect that runs twice (as React's
+   * do in development) would otherwise leave the second run posting to a closed one.
    */
   start(): () => void {
     if (this.#options.openSocket !== undefined) {
@@ -170,14 +170,14 @@ export class WeftSession {
     this.#syncing = true;
     this.#publish();
     try {
-      // The socket while it is up, HTTP when it is not. Both run the same session: only the
+      // The socket while it is up, HTTP when it is not. Both run the same session; only the
       // way the four calls travel differs.
       const transport = this.#socket?.connected === true ? this.#socket : this.#options.transport;
       await this.#alone(() => this.client.syncWith(transport, this.#options.schemaHash));
       this.#lastError = undefined;
       this.#lastSyncedAt = (this.#options.now ?? Date.now)();
     } catch (error) {
-      // A relay that cannot be reached is an ordinary state for a local-first application: the
+      // A relay that cannot be reached is an ordinary state for a local-first application. The
       // work stays in the outbox and the page keeps taking edits.
       this.#lastError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -196,8 +196,8 @@ export class WeftSession {
    *
    * Applying a batch and running a sync both read the outbox, rebase against it and write the
    * result through, and neither can be suspended half way through and resumed against a client the
-   * other has moved: a subscribed socket routinely delivers a batch while the sync that provoked it
-   * is still draining the outbox, so the two overlap in ordinary use rather than under load.
+   * other has moved. A subscribed socket routinely delivers a batch while the sync that provoked it
+   * is still draining the outbox, so the two overlap in ordinary use.
    */
   #alone<Result>(work: () => Promise<Result>): Promise<Result> {
     const result = this.#serial.then(work, work);
@@ -240,7 +240,7 @@ export class WeftSession {
       : (this.#options.pollWhileBlindMs ?? BLIND_POLL_MS);
     this.#timer = setInterval(() => void this.sync(), interval);
     // Browsers have no `unref`; Node does, and a poll loop that keeps the process alive turns
-    // a test that forgets to stop a session into a hang rather than a failure.
+    // a test that forgets to stop a session into a hang instead of a clean failure.
     (this.#timer as { unref?: () => void }).unref?.();
   }
 
@@ -261,7 +261,7 @@ export class WeftSession {
 
   #publish(): void {
     // A fresh object every time would defeat `useSyncExternalStore`, which compares what it is
-    // given by identity — so the status is replaced only when something in it moved.
+    // given by identity, so the status is replaced only when something in it moved.
     const next = this.#read();
     if (sameStatus(this.#status, next)) return;
     this.#status = next;

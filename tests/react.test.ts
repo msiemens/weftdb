@@ -1,4 +1,4 @@
-// The React bindings, rendered by React itself rather than reasoned about.
+// The React bindings, rendered by React itself.
 //
 // §8 is mostly claims about rendering: `useSyncExternalStore` must not tear, an unchanged
 // `_weft_rev` must hand a component the identical object so `React.memo` can do its job,
@@ -47,8 +47,8 @@ let render: (element: ReactNode) => Promise<{ readonly text: () => string; reado
 beforeAll(async () => {
   // React needs a document before `react-dom/client` is imported.
   const dom = new JSDOM('<!doctype html><div id="root"></div>', { url: "https://weft.test" });
-  // `navigator` is a getter on the Node global, so these go on by definition rather than
-  // assignment.
+  // `navigator` is a read-only getter on the Node global, so plain assignment throws and
+  // this uses `Object.defineProperty` instead.
   for (const [name, value] of [
     ["window", dom.window],
     ["document", dom.window.document],
@@ -100,7 +100,6 @@ test("§8.3 a query re-renders when its source notifies, and not before", async 
   assert.equal(view.text(), "second", "the component did not see the published value");
   assert.equal(renders > rendersAfterMount, true, "publishing did not re-render the component");
 
-  // A publish to an unrelated key must not disturb this subscription.
   const rendersAfterUpdate = renders;
   await act(async () => {
     cache.publish("unrelated", "value");
@@ -118,7 +117,7 @@ test("§8.2 an unchanged revision hands the component the identical row object",
   const seen: MaterializedRow[] = [];
 
   const Row = memo(function Row({ row }: { readonly row: MaterializedRow }): ReactNode {
-    // Recording here rather than in the parent proves what `React.memo` actually received.
+    // Recording inside the memoized child proves what `React.memo` actually received.
     seen.push(row);
     return createElement("span", null, wireText(row.fields.get(TITLE) ?? ""));
   });
@@ -137,14 +136,14 @@ test("§8.2 an unchanged revision hands the component the identical row object",
   assert.equal(seen.length, 1);
 
   const { act } = await import("react");
-  // Re-render with the row untouched: the identity must survive, so memo skips the child.
+  // The row is untouched on this re-render, so its identity must survive and memo skips the child.
   await act(async () => {
     engine.notify();
   });
   const identical = engine.getSnapshot(key, rows.values()).rows[0];
   assert.equal(identical, seen[0], "an untouched row was handed to React as a new object");
 
-  // Now revise it: a new object, and the child re-renders.
+  // Revising the row produces a new object, so the child re-renders.
   first.fields.set(TITLE, "two");
   first.internals._weft_rev += 1;
   await act(async () => {
@@ -282,9 +281,10 @@ test("§8.3 a statement with no answer yet renders no rows, and fills when the a
   }
 
   const view = await render(createElement(List));
-  // A component has nowhere to put "pending", so a statement the source has no answer for paints
-  // an empty list exactly as one that matched nothing does. What must not happen is the source
-  // forgetting which of the two it is.
+  // A component has nowhere to render "pending", so a statement with no answer yet paints an
+  // empty list exactly like one that matched nothing. The assertions below check `source.select`
+  // directly, because that is where the two cases differ. Unanswered returns `undefined`;
+  // matched-nothing returns an empty array.
   assert.equal(view.text(), "empty", "a statement with no answer yet did not render as an empty list");
   assert.equal(source.select(query), undefined, "the source answered as though the statement had run");
   assert.deepEqual(source.registered, [query.cacheKey], "the statement being read was never registered");
@@ -301,10 +301,10 @@ test("§8.3 a statement with no answer yet renders no rows, and fills when the a
 
 test("§8.3 a source that says nothing about registration cannot be read as one that needs none", async () => {
   const source = new WorkerBackedSource(new Map());
-  // `watch` and `unwatch` are required members. A source that answers out of somewhere else and
-  // implements neither is the whole bug — every statement read through it has no answer for as long
-  // as the page is open — and optional members would make that a `source.watch?.(query)` skipping in
-  // silence. It is a compile error instead.
+  // `watch` and `unwatch` are required members. A source that implements neither answers from
+  // somewhere else, and every statement read through it has no answer for as long as the page
+  // stays open. Optional members would let `source.watch?.(query)` skip in silence; this is a
+  // compile error instead.
   const forgetful = {
     engine: source.engine,
     rows: source.rows,
@@ -314,11 +314,12 @@ test("§8.3 a source that says nothing about registration cannot be read as one 
   // @ts-expect-error a source that implements no registration is not a WeftSource
   const _unregistering: WeftSource = forgetful;
 
-  // And nothing reads one by accident at runtime either: the hook calls `watch` outright, so a
-  // source smuggled past the types fails loudly rather than rendering an empty list for ever.
+  // The hook calls `watch` outright, without a check, so a source smuggled past the types fails
+  // at the very first render.
   function List(): ReactNode {
-    // Through `unknown`, because the types already refuse the direct conversion: this is a source
-    // that could only reach a hook from JavaScript, or from a cast someone wrote to silence them.
+    // The cast goes through `unknown` because the types already refuse the direct conversion.
+    // This source could only reach the hook from JavaScript, or from a cast written to silence
+    // the compiler.
     const titles = useWeftSqlRows(forgetful as unknown as WeftSource, tasksQuery(), (task) => String(task.id));
     return createElement("span", null, titles.join(","));
   }
@@ -388,14 +389,14 @@ class CountingSuspenseCache {
 }
 
 /**
- * A source shaped like a worker-backed mirror: it holds the rows, and it has no answer for a
- * statement until it is told one. Nothing here runs SQL, which is the condition the page is in.
+ * A source shaped like a worker-backed mirror. It holds the rows and has no answer for a
+ * statement until it is told one; nothing here runs SQL.
  */
 class WorkerBackedSource implements WeftSource {
   readonly engine = new SubscriptionEngine();
   readonly rows: ReadonlyMap<string, LocalRow>;
   readonly scopeId = scopeId("react-scope");
-  /** The cache keys registered and handed back, in order, as only a source can see them. */
+  /** Cache keys registered and released, in the order the source saw them. */
   readonly registered: string[] = [];
   readonly released: string[] = [];
   #answer: readonly RowId[] | undefined;

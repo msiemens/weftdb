@@ -32,8 +32,8 @@ function device(name: string): WeftClient {
 test("a delete the scope has already carried out retires the queued one instead of quarantining it", async () => {
   // A subscribed socket is told about a delete by the same relay that is still answering the
   // push carrying it, so a device routinely hears about its own delete before that push has
-  // drained. Hearing it must retire the queued op: setting it aside would ask a person to
-  // resolve a divergence between what they asked for and what happened, which are the same.
+  // drained. Hearing it must retire the queued op, because setting it aside would ask a person
+  // to resolve a divergence between what they asked for and what happened, which are the same.
   const server = new WeftServer();
   const first = device("tab-1");
   const second = device("tab-2");
@@ -58,8 +58,8 @@ test("a delete the scope has already carried out retires the queued one instead 
 });
 
 test("a row whose only queued work was appended straight to the outbox still reads as dirty", async () => {
-  // Hydration appends to the outbox directly rather than going through the queueing path, so
-  // the per-row counts behind the dirty flag have to notice a length they did not cause.
+  // Hydration appends to the outbox directly, bypassing the queueing path, so the per-row
+  // counts behind the dirty flag have to notice a length they did not cause.
   const server = new WeftServer();
   const client = device("tab-1");
 
@@ -71,7 +71,7 @@ test("a row whose only queued work was appended straight to the outbox still rea
   await client.create(NOTES, restored, values({ title: "second" }), txnId("create-second"));
   await client.syncWith(inProcessTransport(server), HASH);
 
-  // What a store's `hydrate` does: put the op back where it was, without the client's help.
+  // What a store's `hydrate` does, putting the op back where it was, without the client's help.
   client.outbox.push({
     scopeId: SCOPE,
     tableName: NOTES,
@@ -84,7 +84,7 @@ test("a row whose only queued work was appended straight to the outbox still rea
   });
 
   // The next queued write is what decides whether the counts notice. It has to be one that
-  // queues without reading them first — an edit asks them what is already queued for its field,
+  // queues without reading them first. An edit asks them what is already queued for its field,
   // and that question rebuilds them on the way past, hiding the staleness this is about.
   await client.create(NOTES, rowId("row-3"), values({ title: "third" }), txnId("later"));
 
@@ -105,9 +105,9 @@ test("a snapshot rebuilds a row dirty for the work this device still holds", asy
   const client = device("tab-2");
   await client.syncWith(inProcessTransport(server), HASH);
 
-  // A row the scope has never heard of: a resync sets its unsent work aside, and the delete queued
-  // behind that is refused on the next push. The row is gone locally by then, so the removal that
-  // refusal makes is followed by no recompute for anything.
+  // A row the scope has never heard of. A resync sets its unsent work aside, and the delete
+  // queued behind that is refused on the next push. The row is gone locally by then, so the
+  // removal that refusal makes is followed by no recompute for anything.
   const local = rowId("row-local");
   await client.create(NOTES, local, values({ title: "never pushed" }), txnId("create-local"));
   await client.applySnapshot(server.snapshot(SCOPE));
@@ -179,7 +179,7 @@ test("a pull does not settle a field whose write is sitting in quarantine", asyn
   await client.create(NOTES, ROW, values({ title: "as created" }), txnId("create"));
   await client.update(NOTES, ROW, values({ title: "as edited" }), txnId("edit"));
 
-  // A resync finds the row absent, which sets every unsent op for it aside — the edit included.
+  // A resync finds the row absent, which sets every unsent op for it aside, the edit included.
   await client.applySnapshot(server.snapshot(SCOPE));
   assert.equal(
     client.listQuarantine().some((op) => op.txnId === txnId("edit")),
@@ -203,9 +203,9 @@ test("a pull does not settle a field whose write is sitting in quarantine", asyn
 
 test("a quarantined write does not withhold a field from the next life of its row", async () => {
   // The other edge of the rule above. A quarantined write protects the value it left in the row,
-  // and a row that has been deleted and had its id used again does not hold that value any more —
-  // the delete took it. Reading the quarantined op as a claim on the field regardless would leave
-  // the new row missing the field altogether: not the person's text, not the scope's, nothing.
+  // and a row that has been deleted and had its id used again no longer holds that value; the
+  // delete took it. Reading the quarantined op as a claim on the field regardless would leave the
+  // new row's field empty entirely, since neither the person's text nor the scope's ever lands there.
   const server = new WeftServer();
   const author = device("tab-1");
   const editor = device("tab-2");
@@ -340,9 +340,9 @@ test("a repaired creation still carries the base fields only it can deliver", as
 });
 
 test("a snapshot writes the client through to its store", async () => {
-  // §4.1 makes local storage the client's state rather than a cache of it. A snapshot replaces
-  // most of what a device holds, so a snapshot that is not written through is the largest
-  // possible divergence between what the client shows and what survives a reload.
+  // §4.1 makes local storage the client's actual state. A snapshot replaces most of what a
+  // device holds, so a snapshot that is not written through is the largest possible divergence
+  // between what the client shows and what survives a reload.
   const server = new WeftServer();
   const author = device("tab-1");
   await author.create(NOTES, ROW, values({ title: "shared" }), txnId("create"));

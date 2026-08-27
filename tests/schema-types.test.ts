@@ -3,17 +3,15 @@ import { test } from "vitest";
 import ts from "typescript";
 import { defineSchema, S, schemaHash } from "weftdb/schema";
 
-/**
- * What a schema is worth as a type, checked by compiling source that says so.
- *
- * A schema is read twice: `weft generate` reads it as a runtime value and writes the row and
- * mutation types out, while `FieldValue` and `DatabaseOf` read it as a type. The two
- * only agree if the builders carry the field's type and its nullability in what they return, and
- * nothing in a normal test run notices when they stop — `vitest` erases the types before it runs
- * anything. So the assertions here hand source to the compiler and check what it says about it.
- */
+// What a schema is worth as a type, checked by compiling source that says so.
+//
+// `weft generate` reads a schema as a runtime value and writes the row and mutation types out,
+// while `FieldValue` and `DatabaseOf` read it as a type. The two only agree if the builders carry
+// the field's type and its nullability in what they return, and a normal test run does not notice
+// when they stop, because `vitest` erases the types before running anything. So the assertions
+// here hand source to the compiler and check what it says about it.
 
-/** The whole point of the file: two types that are the same rather than merely assignable. */
+/** Uses `Exact` so a widened type that would still assign does not pass this file. */
 const PRELUDE = [
   'import { S, defineSchema, type FieldValue } from "weftdb/schema";',
   'import type { WireValue } from "weftdb/core";',
@@ -63,8 +61,8 @@ const FIELD_CASES: readonly FieldCase[] = [
 ];
 
 test("every builder carries the type and the nullability the field was declared with", () => {
-  // One program for the lot: each case is two lines, and a diagnostic names the line, so a
-  // regression still points at the declaration that stopped being worth what it says.
+  // Every case compiles as lines in one program, so a diagnostic's line number points straight
+  // at the declaration that stopped being worth what it says.
   assert.deepEqual(
     typeDiagnostics("fields.ts", fieldValueSource(FIELD_CASES)),
     [],
@@ -73,8 +71,8 @@ test("every builder carries the type and the nullability the field was declared 
 });
 
 test("the field-value assertions are capable of failing", () => {
-  // An `Exact` that held for everything would pass this file whatever the builders returned. Each
-  // half of the pair is checked: the type, and the `| null` that nullability adds.
+  // The type is checked and so is the `| null` that nullability adds, since an `Exact` that held
+  // for everything would pass this file whatever the builders returned.
   assert.notDeepEqual(typeDiagnostics("fields.ts", fieldValueSource([["S.string()", "number"]])), []);
   assert.notDeepEqual(typeDiagnostics("fields.ts", fieldValueSource([["S.string()", "string | null"]])), []);
   assert.notDeepEqual(typeDiagnostics("fields.ts", fieldValueSource([["S.number({ nullable: true })", "number"]])), []);
@@ -85,9 +83,9 @@ test("the field-value assertions are capable of failing", () => {
 });
 
 test("a schema assembled at runtime still compiles, at the precision it can be read at", () => {
-  // Not every schema is a literal: the CLI loads one from `.json`, and an application may build
-  // options from data. There is no literal `true` to capture there, so the field is worth whatever
-  // the widened type says — but it has to keep compiling, which the `json` overloads in particular
+  // Not every schema is a literal. The CLI loads one from `.json`, and an application may build
+  // options from data. With no literal `true` to capture there, the field is worth whatever the
+  // widened type says, and it still has to compile, which the `json` overloads in particular
   // could easily stop doing.
   assert.deepEqual(
     typeDiagnostics(
@@ -138,9 +136,9 @@ function mutationSource(body: string): string {
 }
 
 test("a nullable field accepts null through a mutation input", () => {
-  // The regression this file exists for. Making `type` literal without also making `nullable`
-  // literal stops `ScalarType` collapsing to `WireValue` and never adds the `| null` back, so a
-  // nullable field starts refusing the very value it was declared to hold.
+  // Making `type` literal without also making `nullable` literal stops `ScalarType` collapsing to
+  // `WireValue` and never adds the `| null` back, so a nullable field starts refusing the very
+  // value it was declared to hold.
   assert.deepEqual(
     typeDiagnostics(
       "mutation.ts",
@@ -157,8 +155,8 @@ test("a nullable field accepts null through a mutation input", () => {
 });
 
 test("a non-nullable field refuses null, and a scalar refuses the wrong type", () => {
-  // The other side of it: precision that only ever widens is no precision at all. `WireValue`
-  // swallows each of these.
+  // Precision that only ever widens is no precision at all; `WireValue` would accept every one
+  // of these without complaint.
   assert.match(
     typeDiagnostics("mutation.ts", mutationSource("export const wrong: Input = { title: null };")).join("\n"),
     /'null' is not assignable/u,
@@ -198,7 +196,6 @@ test("a declared json type is what the mutation input takes, and a bare one stil
     [],
     "a declared json type or a bare one stopped taking its own value",
   );
-  // The declaration is worth something only if it also refuses what it does not describe.
   assert.match(
     typeDiagnostics(
       "mutation.ts",
@@ -232,10 +229,11 @@ test("the row type a schema is read into is the type each field was declared wit
 });
 
 test("a more precise schema type hashes to exactly what it hashed to before", () => {
-  // The hash is protocol visible: two devices that disagree about it refuse to sync. Types are
-  // erased before `toWireSchema` sees anything, so precision that reached the runtime value —
-  // an extra property, a reordered key, a `nullable` that stopped being written — would take
-  // every deployed device offline. Pinned literals, captured before the builders changed.
+  // The hash is protocol visible, so two devices that disagree about it refuse to sync. Types are
+  // erased before `toWireSchema` sees anything, so a runtime regression (an extra property, a
+  // reordered key, a `nullable` that stopped being written) would take every deployed device
+  // offline. These are pinned literals, so any change to the value the builders return shows up
+  // as a failing assertion here.
   const cards = defineSchema({
     cards: S.collection({
       title: S.string(),
@@ -301,9 +299,9 @@ const libraryFiles = new Map<string, ts.SourceFile | undefined>();
 
 /**
  * Compiles one source in memory and returns what the compiler said about it, the same way
- * `tests/codegen.test.ts` checks a generated file. Everything it imports — `weftdb/schema`,
- * `weftdb/client` — resolves through the workspace's own `node_modules`, so what is checked is
- * the sources the suite runs against.
+ * `tests/codegen.test.ts` checks a generated file. Everything it imports, including
+ * `weftdb/schema` and `weftdb/client`, resolves through the workspace's own `node_modules`, so
+ * what is checked is the sources the suite runs against.
  */
 function typeDiagnostics(fileName: string, source: string): readonly string[] {
   const options = TYPE_OPTIONS;

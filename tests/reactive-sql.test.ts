@@ -1,7 +1,7 @@
-// The reactive SQL read path: a compiled statement decides which rows match and in what order,
-// and `client.rows` decides what a row is. The two halves are tested together because the point
-// of the split is that filtering gains `where`, `order by`, `limit` and `offset` without giving
-// up the row identity that `React.memo` and the query delta both rest on.
+// The reactive SQL read path. A compiled statement decides which rows match and in what order,
+// and `client.rows` decides what a row is; both are tested together because the split lets
+// filtering gain `where`, `order by`, `limit` and `offset` without giving up the row identity
+// that `React.memo` and the query delta both rest on.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { deviceId, fieldName, rowId, scopeId, tableName, txnId } from "weftdb/core";
@@ -112,8 +112,8 @@ test("an unchanged result is the same object, and an unchanged row is the same r
 
   const query = fixture.allTodos();
   const first = await fixture.snapshot(query);
-  // `useSyncExternalStore` re-renders whenever the snapshot is a new reference, so an unchanged
-  // answer has to be the same object rather than an equal one (§8.3).
+  // `useSyncExternalStore` re-renders whenever the snapshot is a new reference, so caching must
+  // return the identical object for an unchanged answer (§8.3).
   assert.equal(await fixture.snapshot(query), first, "an unchanged result came back as a new object");
 
   await fixture.update("todo-2", { title: "beta prime" });
@@ -129,9 +129,9 @@ test("the statement runs once per change rather than once per render", async () 
   await fixture.save();
 
   const query = fixture.allTodos();
-  // React asks for a snapshot more than once in one render pass. Asking again which rows matched
-  // per call is a re-scan of the answer in the render path, and answering from the cache is also
-  // what keeps two calls inside one pass tearing-free.
+  // React can ask for a snapshot more than once within one render pass, and answering from a
+  // cached result instead of re-scanning which rows matched is what keeps repeated calls inside
+  // one pass tearing-free.
   await fixture.snapshot(query);
   await fixture.snapshot(query);
   await fixture.snapshot(query);
@@ -169,9 +169,8 @@ test("a row the statement matched but the client does not hold is dropped", asyn
   await fixture.add("todo-1", { title: "alpha", done: false, rank: 1 });
   await fixture.save();
 
-  // The database outlives any one hydrate, and a scope holds only its own rows. A statement that
-  // names a row this client never loaded must answer with the rows it does hold rather than
-  // throwing or reporting a hole.
+  // The database outlives any one hydrate, and a scope holds only its own rows, so a statement
+  // that names a row this client never loaded must simply answer with the rows it does hold.
   const other = new WeftClient(scopeId("scope-2"), deviceId("device"), schema, () => 1_000);
   await other.create(TODOS, rowId("todo-9"), { [fieldName("title")]: "elsewhere" }, txnId("t9"));
   await fixture.store.save(other);
@@ -189,9 +188,9 @@ test("a generated-shape builder scopes the statement whatever the caller chains 
   await fixture.add("todo-2", { title: "walk dog", done: false, rank: 1 });
   await fixture.save();
 
-  // The shape `weft generate` emits: the scope predicate and the `id` projection are applied
-  // before the callback ever sees the statement, so a caller can only add to it. Scoping stops
-  // being something an application has to remember.
+  // `weft generate` applies the scope predicate and the `id` projection before the callback ever
+  // sees the statement, so a caller can only add to it, and scoping stops being something an
+  // application has to remember.
   const todosSqlQuery = (
     scope: string,
     build: (statement: ScopedRowQuery<Database, "todos">) => ScopedRowQuery<Database, "todos"> = (statement) =>
@@ -202,7 +201,8 @@ test("a generated-shape builder scopes the statement whatever the caller chains 
       query: build(fixture.db.selectFrom("todos").select("id").where("scope_id", "=", scope)),
     });
 
-  // A predicate over a string field is the case that matched nothing while columns held JSON.
+  // This predicate matches only because the column stores the raw string; an encoded column
+  // would silently match nothing here.
   const filtered = todosSqlQuery(SCOPE, (statement) => statement.where("title", "=", "buy milk"));
   assert.deepEqual(await fixture.ids(filtered), ["todo-1"], "a predicate over a string field did not match");
   assert.match(filtered.compiled.sql, /scope_id/u, "the builder handed over an unscoped statement");
@@ -232,8 +232,8 @@ class Fixture {
   readonly store: SqliteClientStore;
   readonly client: WeftClient;
   /**
-   * How many times the engine has asked which rows a statement matched, to prove the caching
-   * claim: a snapshot it can reuse is answered without consulting the selection again.
+   * Counts how many times the engine re-ran the row selection. A cached snapshot must not
+   * increment this.
    */
   selects = 0;
   readonly #select: ReturnType<typeof executorRowSelect>;
@@ -291,9 +291,9 @@ class Fixture {
   }
 
   /**
-   * The statement's ids, then the snapshot they materialize into. Running the statement is a
-   * promise and a snapshot is read during render, so the two are separate steps: the ids are the
-   * answer this fixture holds, and the closure below is what a render reads it through.
+   * Runs the statement for its ids, then materializes them into a snapshot. Running the
+   * statement is async while a snapshot is read synchronously during render, so the two are
+   * kept as separate steps.
    */
   async snapshot(query: ReturnType<typeof reactiveSqlQuery>) {
     const ids = await this.#select(query);

@@ -1,4 +1,4 @@
-// The worker's front door: the other half of `openWeftDatabase`, and the whole of what a storage
+// The worker's front door. The other half of `openWeftDatabase`, and the whole of what a storage
 // worker has to say.
 //
 // A module of its own rather than another export of `worker-host.ts` because it reaches for
@@ -13,10 +13,11 @@
 // `./database-key.ts`). So this module reads a port until that first request, opens what it names,
 // and hands the port and everything it read to the host that owns it.
 //
-// Two maps, because the two things are keyed differently. A file belongs to a namespace: one
-// application in this origin, one IndexedDB database, one connection. A client belongs to a
-// namespace and a scope together, because `SqliteClientStore.hydrate` filters every read by scope
-// and a client that read the lot would push another scope's rows under this device's id.
+// Files and clients are keyed differently, so each has a map of its own. A file belongs to a
+// namespace: one application in this origin, one IndexedDB database, one connection. A client
+// belongs to a namespace and a scope together, because `SqliteClientStore.hydrate` filters every
+// read by scope and a client that read the lot would push another scope's rows under this device's
+// id.
 import { schemaHash, type SchemaDefinition } from "weftdb/schema";
 import { weftDatabaseKey, type WeftDatabaseIdentity } from "./database-key.ts";
 import { SqliteClientStore } from "./sqlite.ts";
@@ -39,9 +40,9 @@ export interface WeftWorkerRelayTuning {
 /**
  * The relay at a URL, which is the case a deployment is.
  *
- * The credential is not here: the page holds it, because the page is the only place a
+ * The credential is not here. The page holds it, because the page is the only place a
  * token can be got, and it arrives over the port. What is here is what the worker builds a transport
- * out of — and it is here rather than on the page because the worker is where the transport is
+ * out of, and it is here rather than on the page because the worker is where the transport is
  * built. A base URL declared on both sides that had to agree is a value nothing checks, wrong only
  * at runtime and only sometimes.
  */
@@ -59,12 +60,12 @@ export interface WeftWorkerRelayUrl extends WeftWorkerRelayTuning {
 /**
  * The relay as a transport this worker was handed, for a relay that is not at a URL at all.
  *
- * The two members are the ones `WeftWorkerSessionOptions` already declares, because this is the
- * general case and `WeftWorkerRelayUrl` is the shorthand for the common one — so an
- * application that outgrows the shorthand keeps everything else `serveWeftStorageWorker` does —
- * opening the file its namespace names, installing the schema, serving each arriving port — instead
+ * The members are the ones `WeftWorkerSessionOptions` already declares, because this is the
+ * general case and `WeftWorkerRelayUrl` is the shorthand for the common one, so an
+ * application that outgrows the shorthand keeps everything else `serveWeftStorageWorker` does
+ * (opening the file its namespace names, installing the schema, serving each arriving port) instead
  * of assembling the worker by hand to change one line. `transport` is a function of the credential
- * for the same reason it is one there: a transport carries its token, so signing in as somebody
+ * for the same reason it is one there. A transport carries its token, so signing in as somebody
  * else is a new transport rather than a mutated one.
  *
  * The case it exists for is a relay reachable over a `MessagePort`. No URL describes that, and
@@ -75,8 +76,8 @@ export interface WeftWorkerRelayUrl extends WeftWorkerRelayTuning {
  * only reach through something one tab handed over, has no other way to tell one session's
  * connection from another's.
  *
- * `baseUrl` and `transport` are each `never` on the other side, so the two ways of saying where the
- * relay is cannot be given at once and silently have one of them ignored.
+ * `baseUrl` and `transport` are each `never` on the other side, so giving both at once is a type
+ * error instead of quietly having one of them ignored.
  */
 export interface WeftWorkerRelaySupplied extends WeftWorkerRelayTuning {
   /** Built per credential, for one database. Called again whenever the token changes. */
@@ -106,7 +107,7 @@ export type WeftWorkerRelayOptions = WeftWorkerRelayUrl | WeftWorkerRelaySupplie
  * ```
  *
  * The two lines are written out rather than done here, so a worker that has something of its own to
- * say to each arriving port — a demo handing over a relay it can only reach as a `MessagePort` —
+ * say to each arriving port (a demo handing over a relay it can only reach as a `MessagePort`)
  * listens on that port before passing it on.
  */
 export interface WeftWorkerScope {
@@ -117,11 +118,11 @@ export interface ServeWeftStorageWorkerOptions {
   readonly schema: SchemaDefinition;
   /**
    * This application's SQLite build, uninitialised. The module is the application's to supply, so
-   * which build of SQLite ships — and which VFS its databases live in — stays its decision and this
+   * which build of SQLite ships, and which VFS its databases live in, stays its decision and this
    * package keeps no SQLite runtime dependency.
    */
   readonly sqlite: () => Promise<WaSqliteBuild>;
-  /** Left out for a device that never syncs: the three session verbs are then refused, not ignored. */
+  /** Left out for a device that never syncs. The three session verbs are then refused instead of ignored. */
   readonly relay?: WeftWorkerRelayOptions;
 }
 
@@ -140,7 +141,7 @@ interface OpenDatabase {
  * One `(namespace, scope)`'s client, as the host that owns it.
  *
  * The namespace sits beside the promise rather than inside what it resolves to, so `#release` can
- * ask which other clients share a file without awaiting: a port that arrives while it is deciding
+ * ask which other clients share a file without awaiting. A port that arrives while it is deciding
  * would otherwise be handed a connection it is about to close.
  */
 interface OpenClient {
@@ -195,7 +196,7 @@ export class WeftStorageWorker {
    * Every statement this worker is still recomputing after each mutation, across every database.
    *
    * For a test to read. A registration nobody released is a statement recomputed for the life of
-   * the browser, and no individual port can see one: a push carries only that port's own
+   * the browser, and no individual port can see one. A push carries only that port's own
    * statements.
    */
   get watching(): readonly string[] {
@@ -255,8 +256,8 @@ export class WeftStorageWorker {
       name: storageNameFor(namespace),
     });
     const store = new SqliteClientStore(executor, this.#options.schema);
-    // Every open, not only the first: this is also what adds the columns a schema edit introduced
-    // since the database was last opened.
+    // Run on every open, including after the first. This is also what adds the columns a schema
+    // edit introduced since the database was last opened.
     await store.installSchema();
     return { executor, store };
   }
@@ -297,14 +298,14 @@ export class WeftStorageWorker {
 }
 
 /**
- * What one namespace's storage is called: the name of its IndexedDB database, and — with
- * `.sqlite3` after it — the name of the file inside it.
+ * What one namespace's storage is called: the name of its IndexedDB database, and the name of
+ * the file inside it (with `.sqlite3` after it).
  *
  * The namespace has to be in the file name as well as in the store's, because a browser VFS names
  * what it shares after the file path alone and what it shares is origin-wide. `IDBMirrorVFS` takes
  * Web Locks called `<path>@@write` and posts every committed transaction to a `BroadcastChannel`
  * called `mirror:<path>`, so two namespaces opening a file of one name in one origin contend for a
- * single lock and deliver each other's transactions into each other's mirrors — which reads as
+ * single lock and deliver each other's transactions into each other's mirrors, which reads as
  * `database is locked` on one tab and `missing tx` on the next.
  *
  * Encoded because a namespace is a string an application chose and this names storage.
@@ -316,9 +317,8 @@ function storageNameFor(namespace: string): string {
 }
 
 /**
- * The two members that say how this worker talks to the relay about one database, from whichever
- * half of the union named it. A supplied factory is bound to that database; a URL is turned into
- * the same pair.
+ * How this worker talks to the relay about one database, from whichever half of the union named
+ * it. A supplied factory is bound to that database; a URL is turned into the same pair.
  */
 function reach(
   relay: WeftWorkerRelayOptions,
@@ -340,7 +340,7 @@ function reach(
   const socketUrl = relay.socketUrl;
   const baseUrl = relay.baseUrl;
   return {
-    // Per credential rather than per session: a transport carries its token, so signing in as
+    // Per credential rather than per session. A transport carries its token, so signing in as
     // somebody else is a new transport rather than a mutated one.
     transport: (token) =>
       httpTransport({

@@ -1,10 +1,10 @@
-// The asynchronous SQL port: what "one transaction at a time" has to mean once a body can `await`.
+// The asynchronous SQL port tests what "one transaction at a time" has to mean once a body can
+// `await`.
 //
 // One connection serves every tab of an origin, so a mutation in one tab and a sync applying a
 // batch for another overlap in ordinary use. SQLite answers a second `BEGIN` on an open connection
-// with an error, and a write that landed inside somebody else's transaction would be rolled back
-// with it having already told its caller it had committed — which is the guarantee an awaited
-// mutator is sold on.
+// with an error, and a write that landed inside somebody else's transaction would roll back after
+// already telling its caller it had committed, breaking the guarantee an awaited mutator promises.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { asyncSqlExecutor, type AsyncSqlExecutor } from "weftdb/shared";
@@ -44,8 +44,8 @@ test("a statement from outside waits for the transaction in flight and survives 
 
 test("a read from outside answers only once the transaction in flight has settled", async () => {
   // One connection shows a statement its own open transaction has written, so a read that ran
-  // alongside would answer with rows that are not committed and may never be — and a watched
-  // statement answering from those pushes ids for a row the file does not hold.
+  // alongside would answer with rows that are not committed and may never be. A watched statement
+  // answering from those pushes ids for a row the file does not hold.
   using file = openSqliteExecutor(":memory:");
   const executor = asyncSqlExecutor(file);
   await executor.run({ sql: "CREATE TABLE probe (value TEXT)", parameters: [] });
@@ -95,7 +95,7 @@ test("a nested transaction runs inside the one that holds it", async () => {
   // Both writes are gone, so the inner one was part of the outer transaction and went back with it.
   assert.deepEqual(await values(executor), []);
 
-  // And the connection is still usable: a rollback that left a transaction open would fail the
+  // The connection is still usable, because a rollback that left a transaction open would fail the
   // next write instead of this one.
   await executor.run({ sql: "INSERT INTO probe (value) VALUES (?)", parameters: ["after"] });
   assert.deepEqual(await values(executor), ["after"]);

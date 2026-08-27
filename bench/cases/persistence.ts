@@ -1,6 +1,6 @@
-// Local durability: what it costs to write the client through to a real SQLite file and to read
+// Local durability, what it costs to write the client through to a real SQLite file and to read
 // it back at startup. §4.1 makes that file the client's state rather than a cache of it, so the
-// write-through happens on every mutation — which is what the per-edit case measures.
+// write-through happens on every mutation, which is what the per-edit case measures.
 import { deviceId } from "weftdb/core";
 import { asyncSqlExecutor } from "weftdb/shared";
 import { SqliteClientStore } from "weftdb/client/sqlite";
@@ -58,7 +58,7 @@ async function saveCase(config: BenchConfig, rows: number, nextPath: () => strin
   );
 }
 
-/** One edit on a device whose store is attached — the write-through a keystroke pays for. */
+/** One edit on a device whose store is attached, the write-through a keystroke pays for. */
 async function editCase(config: BenchConfig, rows: number, nextPath: () => string): Promise<CaseResult> {
   const client = await syncedClient(rows);
   const row = todoId(0);

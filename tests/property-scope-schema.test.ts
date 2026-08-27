@@ -1,4 +1,4 @@
-// DESIGN.md §9 "Authorization and scope" and "Schema lifecycle" — the invariants that need
+// DESIGN.md §9 "Authorization and scope" and "Schema lifecycle", the invariants that need
 // a specific arrangement. §9.30 (a client database only holds its own scope) and §9.31
 // (row ids never collide across scopes) are checked continuously by the world model.
 import assert from "node:assert/strict";

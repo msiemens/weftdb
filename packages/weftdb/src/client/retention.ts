@@ -56,16 +56,15 @@ export function planRetentionDeletes(
 /**
  * Plans retention deletes and issues them through the client's own delete path, so the writes
  * land in the outbox and sync out like any edit an application makes itself. Retention stays on
- * the client for the same reason the planner does: the relay never learns which field means a
+ * the client for the same reason the planner does. The relay never learns which field means a
  * timestamp, so it has no basis for deciding a row has expired.
  *
  * Each candidate gets its own transaction id, the same as an unqualified `client.delete()` call
  * would give it. A retention sweep's candidates are unrelated rows expiring for unrelated
- * reasons, not steps of one logical change, so there is nothing for a shared transaction id to
- * mean here. Bundling them under one would also cost the whole sweep every time a single row
- * turned out already gone by another path: `pushOps` validates a transaction's ops together and
- * rejects all of them together, so one stale candidate would quarantine every row in the batch
- * instead of just itself.
+ * reasons, so there is nothing for a shared transaction id to mean here. Bundling them under one
+ * would also cost the whole sweep every time a single row turned out already gone by another
+ * path, because `pushOps` validates a transaction's ops together and rejects all of them together,
+ * so one stale candidate would quarantine every row in the batch instead of just itself.
  *
  * The deletes are issued one after another. A sweep can name thousands of rows, and one connection
  * serialises its transactions, so opening them all at once would queue that many writes with
@@ -85,10 +84,10 @@ export async function applyRetentionDeletes(
 /**
  * The children whose parent is still live.
  *
- * Deleting a row does nothing to the rows that reference it: `listRows` answers with every row of
- * a collection, so a child of a deleted parent goes on appearing in reads until something drops
- * it. Nothing calls this for you and no query path applies it implicitly — it belongs where the
- * application reads.
+ * Deleting a row does nothing to the rows that reference it, because `listRows` answers with every
+ * row of a collection, so a child of a deleted parent goes on appearing in reads until something
+ * drops it. Nothing calls this for you and no query path applies it implicitly. It belongs where
+ * the application reads.
  */
 export function visibleChildren(
   liveParents: readonly MaterializedRow[],

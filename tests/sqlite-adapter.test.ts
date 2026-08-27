@@ -33,11 +33,11 @@ const tokenArb = fc.stringMatching(/^[a-z][a-z0-9_-]{0,8}$/u);
 
 test("the generated SQL runs on a SQLite that is not the Node binding", async () => {
   // The one test that pays for the `sqlite3` binary. Everything else here runs on
-  // `openSqliteExecutor`, which is what a device and a relay actually use — but running only on
-  // that would leave the generated DDL and statements free to depend on whatever `node:sqlite`
-  // happens to accept, and nothing would say so until someone ported the store. This installs the
-  // schema, writes a row through the store, and reads it back with a separate `sqlite3` process
-  // per statement.
+  // `openSqliteExecutor`, which is what a device and a relay actually use. Running only on that
+  // would leave the generated DDL and statements free to depend on whatever `node:sqlite` happens
+  // to accept, and nothing would say so until someone ported the store. This installs the schema,
+  // writes a row through the store, and reads it back with a separate `sqlite3` process per
+  // statement.
   using db = TempCliSqlite.open();
   const store = new SqliteClientStore(db.executor, schema);
 
@@ -216,8 +216,9 @@ test("client SQLite hydrate filters framework tables for the requested scope", a
       { [fieldName("title")]: title },
       txnId(`create-${scope}`),
     );
-    // Remove the row state so this assertion isolates framework tables: outbox, quarantine,
-    // tombstones and sync_state must still be scoped even when no domain rows are involved.
+    // Remove the row state so this assertion isolates framework tables, because outbox,
+    // quarantine, tombstones and sync_state must still be scoped even when no domain rows are
+    // involved.
     client.rows.clear();
     client.drainTouchedRows();
     await store.save(client);
@@ -311,9 +312,9 @@ function maxHlc(left: HlcString, right: HlcString): HlcString {
 /**
  * A throwaway database on the binding a deployed device and server actually run.
  *
- * Both ports over the one connection: the server takes the synchronous executor, the client store
- * takes the asynchronous one. A second `asyncSqlExecutor` over the same connection would hold a
- * second transaction queue, and the two would issue overlapping `BEGIN`s.
+ * Both ports run over the one connection. The server takes the synchronous executor, and the
+ * client store takes the asynchronous one. A second `asyncSqlExecutor` over the same connection
+ * would hold a second transaction queue, and the two would issue overlapping `BEGIN`s.
  */
 class TempSqlite implements Disposable {
   readonly dir: string;
@@ -338,7 +339,7 @@ class TempSqlite implements Disposable {
   }
 }
 
-/** The same, on the `sqlite3` command line. One test uses it; see what that test says. */
+/** The same, over the `sqlite3` command line. */
 class TempCliSqlite implements Disposable {
   readonly dir: string;
   readonly path: string;
@@ -364,10 +365,9 @@ class TempCliSqlite implements Disposable {
  *
  * It exists to run the generated SQL through a SQLite that is not `node:sqlite`, which is the
  * only way to tell a portable statement from one the Node binding happens to accept. It is not a
- * general substitute for `openSqliteExecutor`, and `transaction` is where that shows: a `BEGIN`
- * in one process does not reach the next, so there is no transaction to be had, and the method
- * below says so rather than pretending. Anything whose meaning depends on atomicity, isolation
- * or rollback belongs on `node:sqlite`.
+ * general substitute for `openSqliteExecutor`. A `BEGIN` in one process does not reach the next,
+ * so `transaction` has no transaction to give, and the method below reports that truthfully.
+ * Anything whose meaning depends on atomicity, isolation or rollback belongs on `node:sqlite`.
  */
 class SqliteCliExecutor implements AsyncSqlExecutor {
   readonly path: string;
@@ -395,7 +395,8 @@ class SqliteCliExecutor implements AsyncSqlExecutor {
   async transaction<Result>(body: (tx: AsyncSqlTransaction) => Result | PromiseLike<Result>): Promise<Result> {
     // Each statement is its own process and therefore its own implicit transaction. Emitting a
     // `BEGIN` here would be a lie the next `execFileSync` immediately breaks, so the handle the
-    // body is given is this executor: a statement issued through it is one more process.
+    // body is given is this executor, and a statement issued through it is simply one more
+    // process.
     return body(this);
   }
 }

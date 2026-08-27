@@ -13,15 +13,15 @@ export interface FieldDefinition {
    * Whether the generated client DDL carries an index on this field.
    *
    * Codegen cannot tell which fields an application filters or orders on, so the schema says. Like
-   * `jsonType` it is read only by the generator and stays out of the wire schema and out of the
-   * hash: an index is a fact about how one device reads its own file, and hashing it would make a
-   * device that added one look like a device on another schema.
+   * `jsonType`, it is read only by the generator and stays out of the wire schema and out of the
+   * hash, because an index is a fact about how one device reads its own file, and hashing it would
+   * make a device that added one look like a device on another schema.
    */
   index?: boolean;
   /**
-   * The TypeScript type a `json` field holds. Only the generator reads it, and only to write a
-   * name where it would otherwise write `unknown`: it is not part of what two devices have to
-   * agree on, so it stays out of the wire schema and out of the schema hash. What travels is a
+   * The TypeScript type a `json` field holds. Only the generator reads it, to write a name where
+   * it would otherwise write `unknown`. It stays out of the wire schema and out of the schema
+   * hash, because it is not part of what two devices have to agree on. What travels is a
    * `WireValue` either way.
    */
   jsonType?: JsonTypeReference;
@@ -31,14 +31,14 @@ declare const jsonValue: unique symbol;
 
 /**
  * The TypeScript type a `json` field holds, carried on the definition's type and nowhere in its
- * value. Nothing reads this property, and nothing sets it: it exists so `FieldValue` can recover
+ * value. Nothing reads this property, and nothing sets it. It exists so `FieldValue` can recover
  * the declared type, which the generated files get from `JsonTypeReference.as` instead.
  *
- * Both are needed, and neither replaces the other. `as` is a string, and a string cannot become a
- * type, so it is no use to the hand-written types that read a schema, `FieldValue` among them. A
+ * `as` and the type parameter say the same thing twice in `S.json<SortConfig>({ as: "SortConfig"
+ * })`, because neither can substitute for the other. `as` is a string, and a string cannot become
+ * a type, so it is no use to the hand-written types that read a schema, `FieldValue` among them. A
  * type parameter is a type, and it is erased before the generator, which reads the schema as a
- * runtime value, ever sees it. So `S.json<SortConfig>({ as: "SortConfig" })` says the same thing
- * twice because the two halves are read by different things.
+ * runtime value, ever sees it.
  */
 export interface JsonValued<Value> {
   readonly [jsonValue]: (value: Value) => void;
@@ -49,9 +49,9 @@ export interface JsonTypeReference {
   /** The type expression the generated files use: `Tags`, or `readonly string[]`. */
   readonly as: string;
   /**
-   * Where to import {@link as} from, written the way the generated files import it — so relative
-   * to the output directory `weft generate --out` was given, next to `bindings.ts`. Left off for
-   * a type expression that needs no import.
+   * Where to import {@link as} from, written the way the generated files import it. The path is
+   * relative to the output directory `weft generate --out` was given, next to `bindings.ts`. Left
+   * off for a type expression that needs no import.
    */
   readonly from?: string;
 }
@@ -70,10 +70,9 @@ export interface RelationshipDefinition {
 }
 
 /**
- * A relationship that still remembers the three names it was written with. `S.hasMany("issues",
- * "id", "project_id")` is a `RelationshipDefinition` whose `table` is `"issues"` rather than
- * `string`, which is what lets {@link defineSchema} check the join against the rest of the schema
- * at the point it is declared instead of at the point it fails to match anything.
+ * A relationship that still remembers the names it was written with. `S.hasMany("issues", "id",
+ * "project_id")` is a `RelationshipDefinition` whose `table` is literally `"issues"`, which lets
+ * {@link defineSchema} check the join against the rest of the schema at the point it is declared.
  */
 export type RelationshipTo<
   Table extends string,
@@ -97,9 +96,9 @@ export interface SchemaDefinition {
  *
  * `CollectionDefinition["fields"]` is `Record<string, FieldDefinition>`, and `keyof` on anything
  * carrying an index signature is `string`. A mapped type written over it therefore collapses into
- * an index signature of its own, and every field's type becomes the constraint rather than the one
- * it was declared with: a json field with a declared type reads back as `WireValue`, an enum reads
- * back as `string`. Dropping the index signature first is what keeps the declaration.
+ * an index signature of its own, and every field's type becomes the constraint instead of the
+ * declared one: a json field with a declared type reads back as `WireValue`, and an enum reads
+ * back as `string`. Dropping the index signature first keeps the declaration.
  */
 export type DeclaredFieldNames<Collection extends CollectionDefinition> = Extract<
   keyof {
@@ -122,9 +121,9 @@ export type FieldValue<Field extends FieldDefinition> = Field["nullable"] extend
   : DeclaredValue<Field>;
 
 /**
- * A declared json type first: a field that carries one is worth exactly that type, and everything
- * reading a schema should say so, because falling back to `WireValue` makes the caller assert its
- * way out on every read and every write.
+ * A field with a declared json type is worth exactly that type and is checked before the enum's
+ * literal values, because everything reading a schema should say so. Falling back to `WireValue`
+ * would force the caller to assert its way out on every read and every write.
  */
 type DeclaredValue<Field extends FieldDefinition> =
   Field extends JsonValued<infer Value>
@@ -133,7 +132,7 @@ type DeclaredValue<Field extends FieldDefinition> =
       ? Value
       : ScalarType<Field["type"]>;
 
-/** A `date` is an ISO-8601 string: what the client writes and what the column holds. */
+/** A `date` is an ISO-8601 string, which is what the client writes and what the column holds. */
 export type ScalarType<Type extends FieldDefinition["type"]> = Type extends "number"
   ? number
   : Type extends "boolean"
@@ -143,17 +142,15 @@ export type ScalarType<Type extends FieldDefinition["type"]> = Type extends "num
       : string;
 
 /**
- * A field definition that still remembers the two things its declaration said about it.
+ * A field definition that keeps the literal `type` and `nullable` it was declared with, rather
+ * than the general shape `FieldDefinition` gives every field.
  *
- * `FieldDefinition` is the shape every field has, and both of the facts a schema author writes
- * down are flattened in it: `type` is the whole union, and `nullable` is `boolean`. That is enough
- * for the generator, which reads a schema as a runtime value and sees the real ones — and it is
- * exactly not enough for everything that reads a schema as a type. `ScalarType` distributes over
- * the union and collapses to `WireValue`, so `S.string()` read back as anything the wire can
- * carry; `boolean` does not extend `true`, so a nullable field read back as not nullable. The two
- * halves have to be carried together, because fixing either one alone makes the other wrong:
- * a literal `type` stops the collapse to `WireValue`, and a `boolean` `nullable` then never adds
- * the `| null` that a nullable field exists to hold.
+ * `FieldDefinition` flattens both: `type` is the whole union, and `nullable` is `boolean`. That is
+ * enough for the generator, which reads a schema as a runtime value, but not enough for anything
+ * that reads a schema as a type, because `ScalarType` distributes over the whole union and
+ * collapses to `WireValue`, and `boolean` does not extend `true`, so a nullable field reads back
+ * as not nullable. Narrowing only `type` or only `nullable` leaves the other wrong, so both are
+ * carried as literals together.
  */
 export type FieldOf<Type extends FieldDefinition["type"], Nullable extends boolean> = Omit<
   FieldDefinition,
@@ -181,9 +178,9 @@ const TS_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 
 /**
  * A declared json type has to survive being written into an import and a type position. The name
- * is emitted verbatim, so an empty one produces `readonly : string` and an unparseable one
- * produces a generated file nothing can compile — errors that surface as a syntax error in
- * machine-written code rather than as a mistake in the schema, which is where it was made.
+ * is emitted verbatim, so an empty one produces `readonly : string`, and an unparseable one
+ * produces a generated file nothing can compile. The mistake then surfaces as a syntax error in
+ * machine-written code, far from the schema where it was made.
  */
 function assertDeclaredJsonType(reference: JsonTypeReference): void {
   if (reference.as.trim().length === 0) throw new Error("a json field's declared type cannot be empty");
@@ -191,7 +188,7 @@ function assertDeclaredJsonType(reference: JsonTypeReference): void {
   if (reference.from.trim().length === 0)
     throw new Error(`json type ${reference.as} declares an empty module to import from`);
   // Only what goes inside `import type { … }` has to be a bare identifier. A type expression
-  // written inline — `readonly string[]` — needs no import and is free to be an expression.
+  // written inline, such as `readonly string[]`, needs no import and is free to be an expression.
   if (!TS_IDENTIFIER.test(reference.as)) {
     throw new Error(
       `json type ${JSON.stringify(reference.as)} is imported from ${JSON.stringify(reference.from)}, so it has to be ` +
@@ -201,11 +198,11 @@ function assertDeclaredJsonType(reference: JsonTypeReference): void {
 }
 
 /**
- * The three keys every field has, in that order, plus each optional one only where it was given.
- * `schemaHash` is computed from `toWireSchema` rather than from this, and it is protocol visible —
- * two devices that disagree on it refuse to sync. The cast is what the compiler is told about the
- * value: `nullable` is a `boolean` at runtime and the literal `Nullable` in the type, and the
- * boolean written is `options.nullable` itself, which is what `Nullable` was inferred from.
+ * Builds the fixed keys every field has, in order, plus each optional one only where it was
+ * given. `schemaHash` computes the protocol-visible hash from `toWireSchema`, and two devices that
+ * disagree on it refuse to sync. The cast tells the compiler that `nullable` is a `boolean` at
+ * runtime and the literal `Nullable` in the type, using the same `options.nullable` value that
+ * `Nullable` was inferred from.
  */
 function field<Type extends FieldDefinition["type"], const Nullable extends boolean = false>(
   type: Type,
@@ -222,23 +219,24 @@ function field<Type extends FieldDefinition["type"], const Nullable extends bool
 }
 
 /**
- * A value JSON can carry. `as` names the TypeScript type it holds — `S.json({ as: "Tags", from:
- * "../types.ts" })` — and the generated row type, mutation type and decoder say `Tags` where
- * they would otherwise say `unknown`, which is what an application would have to cast its way
- * out of on every read. Declaring nothing keeps `unknown`, which is the honest answer for a
- * field whose shape the schema does not fix.
+ * A value JSON can carry. `as` names the TypeScript type it holds, as in `S.json({ as: "Tags",
+ * from: "../types.ts" })`, and the generated row type, mutation type and decoder use that name
+ * where they would otherwise use `unknown`, saving the application from casting its way out on
+ * every read. Declaring nothing keeps `unknown`, the honest answer for a field whose shape the
+ * schema does not fix.
  *
- * The type is the author's to keep JSON-serialisable. The generated bindings check what they
- * can — a declared type that reduces to methods, as a `Date` or a `Map` does, has no wire form
- * and fails to compile there — but nothing here can see through a name to what it will hold.
+ * The declared type is the author's responsibility to keep JSON-serialisable. The generated
+ * bindings check what they can, because a declared type that reduces to methods, as `Date` or
+ * `Map` do, has no wire form and fails to compile there. Nothing here can check a name against
+ * the shape it names.
  *
- * Overloaded rather than generic in the nullability, because this is the one builder anybody
- * writes an explicit type argument on. Supplying one type argument stops the rest being inferred
- * and falls back to their defaults, so a second type parameter would have made
- * `S.json<SortConfig>({ nullable: true })` quietly non-nullable — the half-fix this whole shape
- * exists to avoid. Overloads choose on the argument instead, and each carries the one type
- * parameter `Value` that a call may name. The last is the widened case: options assembled at
- * runtime say `boolean`, which pins nothing either way and is accepted as it stands.
+ * Overloaded rather than generic in the nullability, because this is the one builder callers
+ * write an explicit type argument on. Supplying one type argument to a generic stops the rest
+ * from being inferred and falls back to their defaults, so a second type parameter would make
+ * `S.json<SortConfig>({ nullable: true })` silently non-nullable. Overloads pick a branch on the
+ * options argument instead, each carrying the one type parameter `Value` a call may name. The
+ * last overload is the widened case, where options assembled at runtime type as plain `boolean`,
+ * which pins nothing and is accepted as it stands.
  */
 function jsonField<Value = WireValue>(
   options: JsonFieldOptions & { readonly nullable: true },
@@ -249,7 +247,7 @@ function jsonField<Value = WireValue>(
 function jsonField<Value = WireValue>(options?: JsonFieldOptions): FieldOf<"json", boolean> & JsonValued<Value>;
 function jsonField<Value = WireValue>(options?: JsonFieldOptions): FieldDefinition & JsonValued<Value> {
   const definition = field("json", options);
-  // Cast because the brand is a type and not a value: nothing sets the property, nothing reads
+  // Cast because the brand is a type and not a value. Nothing sets the property, nothing reads
   // it, and it is keyed by a symbol nothing outside this module can name.
   if (options?.as === undefined) return definition as FieldDefinition & JsonValued<Value>;
   const reference: JsonTypeReference =
@@ -270,8 +268,8 @@ export const S = {
     field("date", options),
   /**
    * A string from a fixed set. The values are carried on the definition, so the generated row
-   * type is the union rather than `string`, the mutators refuse anything else before it can be
-   * written, and the column gets a `CHECK` that says the same thing to the database.
+   * type is the literal union, the mutators refuse anything else before it can be written, and
+   * the column gets a `CHECK` that says the same thing to the database.
    */
   enum: <const Values extends readonly [string, ...string[]], const Nullable extends boolean = false>(
     values: Values,
@@ -309,9 +307,9 @@ export const S = {
     relationships,
   }),
   /**
-   * The rows of `table` whose `foreignField` holds this row's `localField`. The three names are
-   * kept as the literals they were written as, so `defineSchema` can refuse a join that names a
-   * collection or a field the schema does not have — see {@link ValidRelationships}.
+   * The rows of `table` whose `foreignField` holds this row's `localField`. The names are kept as
+   * the literals they were written as, so `defineSchema` can refuse a join that names a collection
+   * or a field the schema does not have. See {@link ValidRelationships}.
    */
   hasMany: <const Table extends string, const LocalField extends string, const ForeignField extends string>(
     table: Table,
@@ -337,16 +335,17 @@ export const S = {
 };
 
 /**
- * The names a relationship is allowed to have named, said as types: its `table` is one of the
- * schema's collections, its `localField` a field of the collection declaring it, and its
- * `foreignField` a field of the collection it names. The constraint rides on `defineSchema`'s
- * parameter rather than on the type parameter's own `extends` clause — inferring `Collections`
- * from something that is itself computed from `Collections` goes circular, and every collection
- * collapses to `never` — and `NoInfer` keeps this half of the intersection out of inference
- * entirely, so what a schema is worth is decided by the schema alone.
+ * The names a relationship is allowed to have, said as types. Its `table` is one of the schema's
+ * collections, its `localField` a field of the collection declaring it, and its `foreignField` a
+ * field of the collection it names.
  *
- * Only `relationships` is mentioned, so a collection that declares none is constrained by nothing
- * and a schema without relationships is inferred exactly as it was before.
+ * The constraint rides on `defineSchema`'s parameter, because inferring `Collections` from
+ * something computed from `Collections` goes circular and collapses every collection to `never`.
+ * `NoInfer` keeps this half of the intersection out of inference entirely, so what a schema is
+ * worth is decided by the schema alone.
+ *
+ * Only `relationships` is mentioned, so a collection that declares none is constrained by
+ * nothing, and a schema without relationships infers exactly as it did before.
  */
 export type ValidRelationships<Collections extends Record<string, CollectionDefinition>> = {
   readonly [Table in keyof Collections]: {
@@ -363,8 +362,9 @@ export type ValidRelationships<Collections extends Record<string, CollectionDefi
 /**
  * The keys a type declares by name, with an index signature's `string` left out. What
  * `S.collection` returns is intersected with `CollectionDefinition`, whose `fields` is a
- * `Record<string, FieldDefinition>` — and `keyof` an intersection that includes an index signature
- * is `string`, which would have checked every field name against everything and caught nothing.
+ * `Record<string, FieldDefinition>`. `keyof` an intersection that includes an index signature is
+ * `string`, so without this, every field name would be checked against everything and nothing
+ * would be caught.
  */
 type DeclaredKeys<Type> = keyof {
   [Key in keyof Type as string extends Key ? never : number extends Key ? never : Key]: Key;
@@ -373,10 +373,10 @@ type DeclaredKeys<Type> = keyof {
 
 /**
  * Each name is constrained to the union of the names that would resolve, so the compiler reports
- * the typo itself — `Type '"issus"' is not assignable to type '"projects" | "issues"'` — rather
- * than a wall of structural text. A `foreignField` whose `table` did not resolve is left as
- * `string`: the table is already being reported, and a second error about the fields of a
- * collection that does not exist would only bury it.
+ * the typo itself: `Type '"issus"' is not assignable to type '"projects" | "issues"'`. A
+ * `foreignField` whose `table` did not resolve is left as `string`, because the table is already
+ * being reported, and a second error about the fields of a collection that does not exist would
+ * only bury it.
  */
 type ValidRelationship<
   Collections extends Record<string, CollectionDefinition>,
@@ -399,9 +399,9 @@ type ValidRelationship<
 
 /**
  * A name the compiler can still read as the literal it was written as is held to `Allowed`. One
- * it cannot — a `RelationshipDefinition` assembled where the strings are only known at runtime —
- * is left exactly as it is: there is nothing to check it against, and refusing it would refuse
- * every schema built from data, which `defineSchema` accepts and checks itself.
+ * it cannot, such as a `RelationshipDefinition` assembled where the strings are only known at
+ * runtime, is left exactly as it is, because there is nothing to check it against, and refusing
+ * it would refuse every schema built from data, which `defineSchema` accepts and checks itself.
  */
 type CheckedName<Declared, Allowed extends string> = string extends Declared ? Declared : Allowed;
 
@@ -416,8 +416,8 @@ export function defineSchema<const Collections extends Record<string, Collection
     }
   }
   assertDistinctSqlNames(collections);
-  // A second pass, so a schema that is wrong in both ways is told about its names first: a
-  // relationship into a collection whose own name is unusable is the lesser of the two problems.
+  // A second pass, so a schema wrong in more than one way is told about its names first, because
+  // a relationship into a collection whose own name is unusable is the lesser problem.
   for (const [tableName, collection] of Object.entries(collections)) {
     for (const [relationshipName, relationship] of Object.entries(collection.relationships)) {
       assertResolvableRelationship(collections, tableName, relationshipName, relationship);
@@ -427,10 +427,10 @@ export function defineSchema<const Collections extends Record<string, Collection
 }
 
 /**
- * A relationship is three names into the rest of the schema, and nothing downstream catches a typo
- * in one: the join matches no row at runtime, and — since the generator reads the target collection
- * to type the result — the result is quietly typed `unknown` rather than the build failing. Here is
- * the last point at which the mistake is still a line in the schema.
+ * A relationship names a table and two fields into the rest of the schema, and nothing downstream
+ * catches a typo in one. The join matches no row at runtime, and because the generator reads the
+ * target collection to type the result, the result quietly types as `unknown` instead of the
+ * build failing. This is the last point where the mistake is still a line in the schema.
  */
 function assertResolvableRelationship(
   collections: Record<string, CollectionDefinition>,
@@ -458,14 +458,14 @@ function assertResolvableRelationship(
 }
 
 /**
- * A name has to survive being written down. Quoting handles punctuation, but a control
- * character does not survive the trip: SQLite truncates an identifier at a NUL, so a field
- * named with one silently becomes a different, shorter column — and two such names can become
- * the same one. Refusing here is the only point at which that is still obvious.
+ * A name has to survive being written down. Quoting handles punctuation, but a control character
+ * does not survive the trip, because SQLite truncates an identifier at a NUL, so a field named
+ * with one silently becomes a different, shorter column, and two such names can become the same
+ * one. Refusing here is the only point at which that is still obvious.
  */
 function assertUsableName(path: string, name: string): void {
   if (name.length === 0) throw new Error(`${path || "a collection"} has an empty name`);
-  // The control characters are what this is looking for, so the rule has nothing to warn about.
+  // Control characters are the intended match, so the rule has nothing to warn about.
   // eslint-disable-next-line no-control-regex
   if (/[\u0000-\u001f\u007f]/u.test(name)) {
     throw new Error(`${path} contains a control character, which cannot survive as a column name`);
@@ -490,18 +490,18 @@ const FRAMEWORK_TABLES: ReadonlySet<string> = new Set(["outbox", "outbox_quarant
  *
  * Two identifiers that fold together are one identifier. Two columns of one table are a
  * `duplicate column name`, so the `CREATE TABLE` fails, the install script fails with it, and the
- * device is left with no database at all. Two tables are quieter and worse: every framework table
- * and every collection is created `IF NOT EXISTS` in one file, so the second `CREATE TABLE` does
- * nothing and that collection spends the life of the database reading and writing the first
- * one's columns — a collection named `outbox` is the outbox.
+ * device is left with no database at all. Two tables are quieter and worse, because every
+ * framework table and every collection is created `IF NOT EXISTS` in one file, so the second
+ * `CREATE TABLE` does nothing, and that collection spends the life of the database reading and
+ * writing the first one's columns, so a collection named `outbox` is the outbox.
  *
  * Indexes share the table namespace, so `CREATE INDEX "a_b"` against a table named `a_b` is an
  * outright error. An index name is a collection joined to one of its fields and either half may
  * already carry the separator, so a collection `a_b` and an indexed `a.b` arrive as one name
  * without either declaration looking unusual.
  *
- * `_weft_` covers the columns the generator adds per field — `_weft_hlc_<field>`,
- * `_weft_base_<field>` — as well as the four fixed ones, and folding the prefix is what keeps
+ * `_weft_` covers the columns the generator adds per field, `_weft_hlc_<field>` and
+ * `_weft_base_<field>`, as well as the four fixed columns, and folding the prefix is what keeps
  * `_WEFT_rev` out.
  */
 export function assertDistinctSqlNames(collections: Readonly<Record<string, CollectionDefinition>>): void {
@@ -588,15 +588,15 @@ function toWireSchema(schema: SchemaDefinition): WireValue {
                 merge: field.merge,
                 nullable: field.nullable,
                 retentionAnchor: field.retentionAnchor ?? false,
-                // The allowed values are part of what the schema says. Two devices that disagree
-                // about them disagree about which writes are legal, and a value one accepts
-                // fails the other's `CHECK` — which is the situation the hash exists to catch.
+                // The allowed values are part of what the schema says, because two devices that
+                // disagree about them disagree about which writes are legal, and a value one
+                // accepts fails the other's `CHECK`, which is the situation the hash exists to
+                // catch.
                 values: field.values === undefined ? null : [...field.values],
-                // `jsonType` is deliberately absent. The hash exists to catch two devices that
-                // disagree about which writes are legal, and a json field carries a `WireValue`
-                // whatever name one device's generated code puts on it. Hashing it would make a
-                // device that only renamed a TypeScript type look like a device on another
-                // schema, and force a resync for a change no row can tell apart.
+                // `jsonType` names only a TypeScript type. It plays no part in what two devices
+                // must agree on, because a json field holds a `WireValue` whatever name one
+                // device's generated code gives it. Hashing the name would fail devices that
+                // only renamed a type, over a change no row can tell apart.
               },
             ]),
           ),
@@ -618,8 +618,8 @@ function toWireSchema(schema: SchemaDefinition): WireValue {
 }
 
 /**
- * Written out rather than left as three bare `FieldDefinition`s: a row's `id` is a string, and a
- * reader that had to treat it as anything the wire can carry was being told less than the
+ * Written out rather than left as bare `FieldDefinition`s, because a row's `id` is a string, and
+ * a reader that had to treat it as anything the wire can carry was being told less than the
  * framework knows. These are the definitions {@link withBaseFields} actually writes.
  */
 type BaseFieldDefinitions = {
@@ -630,10 +630,10 @@ type BaseFieldDefinitions = {
 
 /**
  * Base fields are declared last, so a collection that names one of them gets the framework's
- * definition rather than its own. They are the row's identity: the server refuses a write to
- * any of them, the client fills them in, and the generated table keys on `(scope_id, id)`. A
- * schema that could redefine `id` as a nullable number would describe a table the rest of the
- * system does not implement.
+ * definition instead. They are the row's identity: the server refuses a write to any of them,
+ * the client fills them in, and the generated table keys on `(scope_id, id)`. A schema that could
+ * redefine `id` as a nullable number would describe a table the rest of the system does not
+ * implement.
  */
 function withBaseFields<const Fields extends Record<string, FieldDefinition>>(
   fields: Fields,
@@ -644,9 +644,8 @@ function withBaseFields<const Fields extends Record<string, FieldDefinition>>(
     created: field("date", { merge: "immutable" }),
     ...fields,
   };
-  // Written again after the spread. Assigning a key an object already has leaves it where it
-  // was, so the base fields keep their place at the front and a collection that declares one of
-  // them gets the framework's definition rather than its own.
+  // Reassigned after the spread, because assigning a key an object already has leaves it in its
+  // original position, and this keeps the base fields at the front.
   merged["id"] = field("string", { merge: "immutable" });
   merged["scope_id"] = field("string", { merge: "immutable" });
   merged["created"] = field("date", { merge: "immutable" });

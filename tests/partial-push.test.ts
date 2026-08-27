@@ -1,7 +1,7 @@
-// A push carries several transactions and is validated one at a time, so it can half succeed:
-// the transactions before the rejected one are applied and stay applied. If the response says
+// A push carries several transactions and is validated one at a time, so it can half succeed.
+// The transactions before the rejected one are applied and stay applied. If the response says
 // only "rejected", the client re-sends work the server already has, and the server answers the
-// second copy with `row_exists` for a create and `merge_required` for a prose edit — a device
+// second copy with `row_exists` for a create and `merge_required` for a prose edit, a device
 // manufacturing conflicts with itself out of a push that partly worked.
 import assert from "node:assert/strict";
 import { test } from "vitest";
@@ -32,12 +32,12 @@ function skewedPair(): { readonly server: WeftServer; readonly client: WeftClien
 }
 
 test("a write that loses the comparison leaves the device holding what the scope holds", async () => {
-  // Losing is not rejection: the write was valid and it arrived, so the transaction is
-  // acknowledged and the device drops it from its outbox. What it must not do is keep the value
-  // it wrote. The record that beat it kept the sequence it already had, which is below this
-  // device's cursor, so nothing it pulls afterwards carries the winner.
+  // Losing means the write was valid and arrived, so the transaction is acknowledged and the
+  // device drops it from its outbox. What it must not do is keep the value it wrote. The record
+  // that beat it kept the sequence it already had, which is below this device's cursor, so
+  // nothing it pulls afterwards carries the winner.
   //
-  // The cursor gets past the winner because of the device's own queued write: a pull skips a
+  // The cursor gets past the winner because of the device's own queued write. A pull skips a
   // field the outbox is holding, so the sequence advances while the value does not.
   const now = Date.parse("2026-03-01T09:00:00.000Z");
   const server = new WeftServer(() => now);
@@ -59,7 +59,7 @@ test("a write that loses the comparison leaves the device holding what the scope
   await ahead.update(TODOS, ROW, values({ title: "ahead" }), txnId("ahead-edit"));
   await ahead.syncWith(transport, HASH);
 
-  // Pulled before the push, which is the order that strands the device: the winner arrives while
+  // Pulled before the push, which is the order that strands the device. The winner arrives while
   // the outbox is still holding a write for that field, so the value is skipped and the cursor
   // moves past it regardless.
   await behind.applyPull(server.pull(SCOPE, behind.lastServerSeq));

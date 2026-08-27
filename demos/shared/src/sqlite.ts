@@ -1,10 +1,11 @@
-// The SQLite build every demo ships: `wa-sqlite`'s asynchronous WebAssembly module over
+// The SQLite build every demo ships. `wa-sqlite`'s asynchronous WebAssembly module over
 // `IDBMirrorVFS`, which keeps each open database in memory and mirrors it into IndexedDB.
 //
-// The asynchronous build, because the VFS is: an IndexedDB read is a request and an event, so
-// SQLite has to be able to suspend inside a page fault. `wa-sqlite-async.mjs` is the Asyncify build
-// that can, and it locates its `.wasm` relative to its own module URL — which is why every demo's
-// Vite config keeps this package out of dependency prebundling.
+// The build is the asynchronous one, because the VFS has to be too. An IndexedDB read is a
+// request and an event, so SQLite has to be able to suspend inside a page fault.
+// `wa-sqlite-async.mjs` is the Asyncify build that can, and it locates its `.wasm` relative to its
+// own module URL, which is why every demo's Vite config keeps this package out of dependency
+// prebundling.
 import SQLiteESMFactory from "wa-sqlite/dist/wa-sqlite-async.mjs";
 import * as SQLite from "wa-sqlite";
 import { IDBMirrorVFS } from "wa-sqlite/src/examples/IDBMirrorVFS.js";
@@ -29,13 +30,13 @@ const MIRROR_STORES = ["blocks", "tx"];
 /**
  * Deletes a mirror database that exists without the stores the mirror keeps everything in.
  *
- * Reaching version 1 with a store missing is a state nothing recovers from on its own: no upgrade
+ * Reaching version 1 with a store missing is a state nothing recovers from on its own. No upgrade
  * runs on the next open, so nothing creates what is absent, and every `jOpen` after it throws
  * `NotFoundError`. Such a database also holds nothing, which is what makes deleting it the repair
  * and costs no data.
  *
  * The listing is what keeps this from being the bug it is fixing. Opening a database that does not
- * exist creates it at version 1, and creating it empty here is exactly the state above — so a
+ * exist creates it at version 1, and creating it empty here is exactly the state above, so a
  * database nothing has listed is left for `IDBMirrorVFS.create` to make, and the upgrade an open
  * runs against one that has been deleted since the listing is aborted.
  */

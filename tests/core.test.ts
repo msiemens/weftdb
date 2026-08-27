@@ -75,7 +75,7 @@ test("append rows reject later mutation, whoever sends it", async () => {
   await client.append(eventTable, rowId("event-1"), { [fieldName("status")]: "open" }, txnId("append"));
   await client.flushWith(inProcessTransport(server));
 
-  // A well-behaved client refuses to queue this at all, so the op is built by hand: the rule
+  // A well-behaved client refuses to queue this at all, so the op is built by hand. The rule
   // is the server's to enforce, against any client, including one older than this rule or one
   // that does not care for it (§9.23).
   const result = server.push(scope, [

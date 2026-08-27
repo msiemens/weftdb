@@ -4,9 +4,9 @@
 // device acting as one it is not.
 //
 // The example-based suite next to this one covers the attacks by name. These cover the space
-// around them — every mutation of a valid token, every algorithm a header can name, every
-// position of `now` against a validity window — because an attacker picks the case, and the
-// cases nobody thought to write down are the ones left.
+// around them: every mutation of a valid token, every algorithm a header can name, every
+// position of `now` against a validity window. An attacker picks the case, and the cases nobody
+// thought to write down are the ones left.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { createHmac, createSign, generateKeyPairSync, type KeyObject } from "node:crypto";
@@ -47,8 +47,8 @@ test("a token signed as the deployment expects resolves to exactly the scope and
       const verifier = verifierFor([algorithm]);
       const token = sign(algorithm, { scope, device, exp: NOW_SECONDS + 3600 });
 
-      // Exactly: a verifier that resolved a token to any other scope would be handing one
-      // person's device another person's data.
+      // A verifier that resolved a token to any other scope would be handing one person's
+      // device another person's data.
       assert.deepEqual(verify(verifier, token), { scopeId: scopeId(scope), deviceId: deviceId(device) });
     }),
     { numRuns: Math.min(RUNS, 200) },
@@ -57,8 +57,8 @@ test("a token signed as the deployment expects resolves to exactly the scope and
 
 test("no single-character change to a token goes unnoticed", () => {
   // A signature is over the encoded header and payload as text, so any change to either is a
-  // different message. The one thing a change can be is invisible: base64url leaves spare bits
-  // in a final character, and two spellings of the same bytes are the same signature.
+  // different message. The one thing a change can be is invisible, because base64url leaves
+  // spare bits in a final character, and two spellings of the same bytes are the same signature.
   fc.assert(
     fc.property(
       algorithmArb,
@@ -83,8 +83,8 @@ test("no single-character change to a token goes unnoticed", () => {
 test("the algorithm is the deployment's to choose, never the token's", () => {
   fc.assert(
     fc.property(algorithmArb, algorithmArb, nameArb, nameArb, (configured, claimed, scope, device) => {
-      // The token is signed correctly for the algorithm its header names. That is the whole
-      // point: a verifier that trusts the header will check it, find it sound, and let it in.
+      // The token is signed correctly for the algorithm its header names, so a verifier that
+      // trusts the header will check it, find it sound, and let it in.
       const verifier = verifierFor([configured]);
       const token = sign(claimed, { scope, device, exp: NOW_SECONDS + 3600 });
       assert.equal(verify(verifier, token) === undefined, claimed !== configured);
@@ -124,8 +124,9 @@ test("a header naming anything else at all is refused", () => {
 });
 
 test("a public key is not a shared secret", () => {
-  // Algorithm confusion: the attacker knows the public key, because it is public, and offers it
-  // back as the HMAC secret. It only works on a verifier that lets the token pick the algorithm.
+  // Algorithm confusion, where the attacker knows the public key, because it is public, and
+  // offers it back as the HMAC secret. It only works on a verifier that lets the token pick the
+  // algorithm.
   fc.assert(
     fc.property(nameArb, fc.constantFrom("RS256" as const, "ES256" as const), (scope, algorithm) => {
       const key = algorithm === "RS256" ? rsa.publicKey : ec.publicKey;
@@ -227,8 +228,8 @@ test("issuer and audience are matched, not merely present", () => {
           scope: "shared-list",
           device: "laptop",
           iss: tokenIssuer,
-          // A list is the awkward case: membership, not equality, and a list that merely contains
-          // something similar is not membership.
+          // A list is the awkward case, since membership rather than equality decides it, and a
+          // list that merely contains something similar is not membership.
           aud: asList ? [`${tokenAudience}-other`, tokenAudience] : tokenAudience,
           exp: NOW_SECONDS + 3600,
         });
@@ -344,7 +345,7 @@ function sign(algorithm: JwtAlgorithm, claims: JwtClaims): string {
   return `${signed}.${signer.sign(signed)}`;
 }
 
-/** Whether two tokens are the same message: the same text signed, over the same signature bytes. */
+/** Two tokens are the same message when the same text was signed over the same signature bytes. */
 function sameMessage(left: string, right: string): boolean {
   const [leftHeader, leftPayload, leftSignature] = left.split(".");
   const [rightHeader, rightPayload, rightSignature, extra] = right.split(".");

@@ -1,11 +1,12 @@
-// A durable relay writes what the last operation touched rather than the whole scope, which
-// makes the cost of accepting an edit independent of how much has been written before it. The
-// risk that buys is silence: a mutation nobody recorded as touched is simply not written, and
-// nothing goes wrong until the process restarts and the change is gone.
+// A durable relay writes only what the last operation touched, instead of rewriting the whole
+// scope, which makes the cost of accepting an edit independent of how much has been written
+// before it. The risk that buys is silence. A mutation nobody recorded as touched is simply not
+// written, and nothing goes wrong until the process restarts and the change is gone.
 //
-// So the property is not "a reload works" — that can pass while a record quietly lags — but
-// that the database and the server's own memory agree, record for record, after every history.
-// A full rewrite would satisfy that by construction; an incremental one has to earn it.
+// The property checked here is that the database and the server's own memory agree, record for
+// record, after every history, a stronger claim than "a reload works," which can pass while a
+// record quietly lags. A full rewrite would satisfy that by construction; an incremental one has
+// to earn it.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -68,7 +69,7 @@ test("a reloaded server answers as the one that was running", async () => {
       const reloaded = new SqliteWeftServer(database.connection, () => world.now);
 
       // Answering the same pull with the same records is what a device would notice, and it
-      // covers the state a comparison of tables alone would not — the scope's cursor and floor.
+      // covers state a comparison of tables alone would not, the scope's cursor and floor.
       const before = world.server.pull(world.scopeId, 0);
       const after = reloaded.pull(world.scopeId, 0);
       assert.equal(after.serverSeq, before.serverSeq, "the reloaded server is at another sequence");
@@ -82,7 +83,7 @@ test("a reloaded server answers as the one that was running", async () => {
 
 test("everything a device holds is everything its database holds", async () => {
   // The client store writes per changed row for the same reason the relay does, and carries the
-  // same risk: a mutation nobody recorded is a row that silently stops being written, and the
+  // same risk. A mutation nobody recorded is a row that silently stops being written, and the
   // device only finds out when it reloads.
   await fc.assert(
     fc.asyncProperty(worldCommands(40), async (commands) => {
@@ -93,8 +94,8 @@ test("everything a device holds is everything its database holds", async () => {
 
       const store = new SqliteClientStore(database.executor, propertySchema);
       await store.installSchema();
-      // Attach rather than save: from here on the client writes itself through on every change,
-      // which is the incremental path rather than the opening full write.
+      // Attaching here means the client writes itself through on every subsequent change,
+      // following the incremental path instead of repeating the opening full write.
       await store.attach(source);
       for (const command of REPLAY) await command(source);
 
@@ -158,7 +159,7 @@ function rowsOf(client: WeftClient): readonly string[] {
 }
 
 /**
- * Both ports over the one connection: the server and the table readers below take `connection`,
+ * Both ports over the one connection. The server and the table readers below take `connection`,
  * the client store takes `executor`. A second `asyncSqlExecutor` over the same connection would
  * hold a second transaction queue, and the two would issue overlapping `BEGIN`s.
  */

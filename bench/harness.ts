@@ -89,7 +89,7 @@ export async function repeatAsync(sample: () => Promise<number>, budget: Budget)
 }
 
 /**
- * The smallest sample at or above the requested fraction of the distribution — nearest-rank,
+ * The smallest sample at or above the requested fraction of the distribution, taken nearest-rank
  * with no interpolation, so every published number is a measurement that actually happened
  * rather than an average of two that did.
  */
@@ -115,7 +115,7 @@ export function duration(spec: CaseSpec, samples: readonly number[]): CaseResult
 
 /**
  * A rate, derived from the duration distribution rather than from a mean. `p95` is the rate at
- * the 95th-percentile *duration*, so it is the slow tail of the throughput — the number a reader
+ * the 95th-percentile *duration*, so it is the slow tail of the throughput, the number a reader
  * should plan against, not the best one observed.
  */
 export function throughput(
@@ -137,7 +137,7 @@ export function throughput(
   };
 }
 
-/** A size rather than a time: measured once because it is the same every run. */
+/** A size rather than a time, measured once because it is the same every run. */
 export function constant(spec: CaseSpec, unit: Unit, value: number): CaseResult {
   return {
     id: spec.id,

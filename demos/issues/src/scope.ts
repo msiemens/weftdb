@@ -10,6 +10,6 @@ export const DEMO = "issues";
 
 /**
  * A fixed scope, for tests and for a local run where a predictable id is easier to find in the
- * relay's SQLite file. The page does not use it: a visitor gets their own.
+ * relay's SQLite file. The page does not use it, because a visitor gets a scope of their own.
  */
 export const ISSUES_SCOPE: ScopeId = scopeId("issues-fixed");

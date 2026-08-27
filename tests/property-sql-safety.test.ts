@@ -1,9 +1,9 @@
 // Generated SQL, built from names and values this process did not choose. Two of the three
 // generators here are handed data from outside: `weft rehydrate` turns a snapshot from a server
 // into SQL an operator then runs against their own database, and the client's store writes rows
-// whose field names arrived over the wire. Escaping by hand is correct for SQLite — doubling
+// whose field names arrived over the wire. Escaping by hand is correct for SQLite (doubling
 // `'` closes a literal and doubling `"` closes an identifier, and there are no backslash
-// escapes to work around — but "correct as far as I can reason" is not the same as "checked",
+// escapes to work around), but "correct as far as I can reason" is not the same as "checked",
 // so the SQL is executed and the database is asked what happened to it.
 import assert from "node:assert/strict";
 import { test } from "vitest";
@@ -17,7 +17,7 @@ import { DatabaseSync } from "node:sqlite";
 
 const RUNS = Number(process.env["WEFT_SQL_RUNS"] ?? 200);
 
-/** Written as code points rather than a regex, so no control character sits literally in this file. */
+/** Written as code points, so no control character sits literally in this file. */
 function hasControlCharacter(name: string): boolean {
   return [...name].some((character) => {
     const code = character.codePointAt(0) ?? 0;
@@ -65,9 +65,9 @@ const hostileArb = fc.oneof(
 );
 
 /**
- * Runs generated SQL the way an operator does: as a script, parsed by SQLite itself. Splitting
+ * Runs generated SQL the way an operator does, as a script, parsed by SQLite itself. Splitting
  * it on semicolons here would be the test cutting statements apart at a `;` inside a quoted
- * value — which manufactures the injection it is supposed to be looking for.
+ * value, which manufactures the injection it is supposed to be looking for.
  */
 function runScript(database: DatabaseSync, sql: string): void {
   try {
@@ -86,7 +86,7 @@ function tables(database: DatabaseSync): readonly string[] {
     .sort();
 }
 
-/** A name as SQLite compares it: the case of an ASCII letter is folded and nothing else is. */
+/** A name as SQLite compares it, with the case of an ASCII letter folded and nothing else. */
 function sqlIdentity(name: string): string {
   return name.replaceAll(/[A-Z]/gu, (letter) => letter.toLowerCase());
 }
@@ -95,7 +95,7 @@ function sqlIdentity(name: string): string {
  * Whether the pair of names reaches SQLite as one name. A field that folds onto one of the three
  * the framework adds to every collection is a second `id` column, and the `CREATE TABLE` does not
  * run at all; a collection that folds onto a framework table is created `IF NOT EXISTS` over that
- * table and never exists. Writing one of the three exactly is not this: the framework's own
+ * table and never exists. Writing one of the three exactly is different. The framework's own
  * definition wins and there is one column.
  */
 function foldsOntoAName(table: string, field: string): boolean {
@@ -104,7 +104,7 @@ function foldsOntoAName(table: string, field: string): boolean {
   return frameworkTables().includes(sqlIdentity(table));
 }
 
-/** The tables the client DDL creates whatever the schema says: the outbox, quarantine and so on. */
+/** The tables the client DDL creates whatever the schema says, the outbox, quarantine and so on. */
 function frameworkTables(): readonly string[] {
   const baseline = defineSchema({ baseline_only: S.collection({ value: S.string() }) });
   using database = new DatabaseSync(":memory:");
@@ -139,8 +139,7 @@ test("a hostile snapshot cannot make `weft rehydrate` emit SQL that does somethi
           title: String((row as Record<string, unknown>)["title"]),
         }));
       for (const row of stored) {
-        // Whatever was inserted has to be exactly what the snapshot said, not a fragment of it
-        // that stopped at a quote.
+        // Whatever was inserted has to be exactly, and completely, what the snapshot said.
         assert.equal(row.id, rowId, "the row id was altered on the way through the generated SQL");
         assert.equal(row.title, JSON.stringify(title), "the value was altered on the way through the generated SQL");
       }
@@ -194,12 +193,12 @@ test("`weft set-schema-hash` cannot be steered by its arguments", () => {
 test("a schema written with hostile names generates DDL that means what it says", () => {
   fc.assert(
     fc.property(hostileArb, hostileArb, (table, field) => {
-      // The schema is the application's own code rather than anything from outside, so this is
-      // a robustness claim rather than a boundary: a name that needs quoting has to survive
-      // quoting, and must not silently become two columns or a second statement.
+      // The schema is the application's own code, so this test checks robustness instead of a
+      // security boundary: a name that needs quoting has to survive quoting, and must not
+      // silently become two columns or a second statement.
       fc.pre(table.trim().length > 0 && field.trim().length > 0 && !sqlIdentity(field).startsWith("_weft_"));
-      // A name with a control character in it cannot be a column, and the schema says so
-      // rather than generating something that quietly means something else.
+      // A name with a control character in it cannot be a column, and the schema refuses it
+      // outright instead of generating something that quietly means something else.
       // eslint-disable-next-line no-control-regex -- matching control characters is the point
       if (/[\u0000-\u001f\u007f]/u.test(table) || /[\u0000-\u001f\u007f]/u.test(field)) {
         assert.throws(() => defineSchema({ [table]: S.collection({ [field]: S.string() }) }), /control character/u);
@@ -216,7 +215,7 @@ test("a schema written with hostile names generates DDL that means what it says"
       using database = new DatabaseSync(":memory:");
       database.exec(generateClientDdl(schema));
 
-      // The declared table plus the framework's own — an outbox, a quarantine, the sync state.
+      // The declared table plus the framework's own (an outbox, a quarantine, the sync state).
       // What must not appear is anything a name talked the generator into creating.
       assert.deepEqual(
         tables(database),
@@ -236,10 +235,10 @@ test("a schema written with hostile names generates DDL that means what it says"
 test("a name carrying a statement terminator survives the adapter's split", async () => {
   await fc.assert(
     fc.asyncProperty(hostileArb, async (field) => {
-      // The property above runs the whole script through `exec`, which no adapter can do: a
-      // `SqlExecutor` takes one statement per call, so the stores divide the script first and
+      // The property above runs the whole script through `exec`, which no adapter can do. A
+      // `SqlExecutor` takes one statement per call, so the stores divide the script first, and
       // that split is what a hostile name actually reaches. It went unchecked, and a semicolon
-      // is a legal field name — quoting is the only thing standing between one and the split —
+      // is a legal field name; quoting is the only thing standing between one and the split,
       // so splitting on every semicolon cut `CREATE TABLE` in half inside its own quotes and
       // handed both halves to SQLite as statements.
       // A control character cannot be a column at all, and neither can a name SQLite folds onto

@@ -67,9 +67,9 @@ export type MessagesQueryBuilder = (statement: ScopedRowQuery<Database, "message
 
 /**
  * A statement over `messages`, scoped and selecting `id` before the callback sees it. Chain
- * `where`, `orderBy`, `limit`, and `offset` onto it. Scoping is not the caller's to get
- * right: one database file holds every scope, and a row id is unique only within its
- * collection, so an unscoped statement can match another scope's row.
+ * `where`, `orderBy`, `limit`, and `offset` onto it. One database file holds every scope,
+ * and a row id is unique only within its collection, so an unscoped statement can match
+ * another scope's row; scoping it here means the caller never has to get that right itself.
  */
 export function messagesSqlQuery(scopeId: string, build: MessagesQueryBuilder = (statement) => statement): ReactiveSqlQuery {
   const scoped = weftStatements.selectFrom("messages").select("id").where("scope_id", "=", scopeId);
@@ -129,9 +129,9 @@ export type DevicesQueryBuilder = (statement: ScopedRowQuery<Database, "devices"
 
 /**
  * A statement over `devices`, scoped and selecting `id` before the callback sees it. Chain
- * `where`, `orderBy`, `limit`, and `offset` onto it. Scoping is not the caller's to get
- * right: one database file holds every scope, and a row id is unique only within its
- * collection, so an unscoped statement can match another scope's row.
+ * `where`, `orderBy`, `limit`, and `offset` onto it. One database file holds every scope,
+ * and a row id is unique only within its collection, so an unscoped statement can match
+ * another scope's row; scoping it here means the caller never has to get that right itself.
  */
 export function devicesSqlQuery(scopeId: string, build: DevicesQueryBuilder = (statement) => statement): ReactiveSqlQuery {
   const scoped = weftStatements.selectFrom("devices").select("id").where("scope_id", "=", scopeId);

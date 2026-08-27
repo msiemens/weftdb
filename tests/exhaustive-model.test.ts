@@ -1,11 +1,10 @@
 // Bounded exhaustive model checking, complementing the random search in the property suite.
 //
-// fast-check samples the space of histories; this walks *all* of it, breadth-first, for a
-// deliberately tiny world — two devices, two rows, and a clock that only moves when an action
-// says so. Every reachable state is checked, and states already seen are not re-explored, so
-// the search terminates on the state space rather than on the number of sequences. Anything
-// that needs only a handful of steps to go wrong is found here deterministically, on every
-// run, with the shortest sequence that produces it.
+// fast-check samples the space of histories; this walks *all* of it, breadth-first, for a tiny
+// world: two devices, two rows, and a clock that only moves when an action says so. Every
+// reachable state is checked, states already seen are not re-explored, and the search terminates
+// once every reachable state has been seen. Anything that needs only a handful of steps to go
+// wrong is found here deterministically, on every run, with the shortest sequence that produces it.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { rowId, txnId, wireText, type DeviceId, type RowId } from "weftdb/core";
@@ -43,11 +42,10 @@ type Action =
   | { readonly kind: "device"; readonly name: DeviceActionName; readonly device: number }
   | { readonly kind: "world"; readonly name: WorldActionName };
 
-// The clock only moves when an action says so. Leaving it still is the point: HLCs then differ
-// by counter alone, which is where ordering mistakes hide — a model that advanced time on
-// every step would paper over them. `prune` is the exception, and has to be: the server only
-// purges a tombstone once it is older than the floor, which a millisecond `tick` would take
-// thirty days of steps to reach.
+// The clock only moves when an action says so, so HLCs differ by counter alone, which is where
+// ordering mistakes hide; a model that advanced time on every step would paper over them.
+// `prune` is the one exception. The server only purges a tombstone once it is older than the
+// floor, which a millisecond `tick` would take thirty days of steps to reach.
 const ACTIONS: readonly Action[] = [
   ...Array.from({ length: DEVICES }, (_, device): readonly Action[] => [
     ...ROWS.flatMap((row) =>
@@ -126,7 +124,7 @@ async function check(universe: Universe, history: readonly Action[]): Promise<vo
       );
     }
     for (const [key, row] of client.rows) {
-      // Dirtiness is a question about one row: pending work on the other row must not mark it.
+      // Dirtiness is a question about one row. Pending work on the other row must not mark it.
       const { tableName, rowId: id } = parseLocalKey(key);
       assert.equal(
         row.internals._weft_dirty === 1,
@@ -138,7 +136,7 @@ async function check(universe: Universe, history: readonly Action[]): Promise<vo
 
   await settle(universe, trail);
   // Quarantined work is allowed to differ from the server until someone repairs it (§5.5),
-  // so convergence is asserted after the repair the UI must offer: discard and re-pull.
+  // so convergence is asserted after the repair the UI must offer, discard and re-pull.
   for (const client of universe.clients) {
     for (const transaction of new Set(client.quarantine.map((op) => op.txnId)))
       await client.discardQuarantinedTxn(transaction);
@@ -285,9 +283,9 @@ function describe(action: Action): string {
 }
 
 /**
- * How a row stands. Liveness is three-way rather than two because the three states admit
- * different moves: an absent row can be created, a tombstoned one can only be restored, and
- * on the server a purged row accepts a `create` that a tombstoned one rejects.
+ * How a row stands. Liveness is three-way because the three states admit different moves: an
+ * absent row can be created, a tombstoned one can only be restored, and on the server a purged
+ * row accepts a `create` that a tombstoned one rejects.
  */
 type RowView = { readonly liveness: "absent" | "tomb" } | { readonly liveness: "live"; readonly title: string };
 
@@ -308,10 +306,10 @@ function serverRowView(snapshot: Snapshot, row: RowId): RowView {
 }
 
 /**
- * The state a device would show a user: liveness plus the visible value. Timestamps and
- * sequence numbers are deliberately excluded, or every path would look distinct and the
- * search would never collapse. A tombstone and a purge look identical from here, which is the
- * point — the user is shown "gone" either way, and the server must agree.
+ * The state a device would show a user, liveness plus the visible value. Timestamps and
+ * sequence numbers are excluded, or every path would look distinct and the search would never
+ * collapse. A tombstone and a purge look identical from here. The user is shown "gone" either
+ * way, and the server must agree.
  */
 function view(client: WeftClient, row: RowId): string {
   const local = clientRowView(client, row);
@@ -331,8 +329,9 @@ function fingerprint(universe: Universe): string {
   );
   const clients = universe.clients.map((client) =>
     [
-      // Op order across rows is kept: the server stops at the first rejected transaction, so
-      // what sits behind it in the outbox decides what the next flush manages to deliver.
+      // Op order across rows is kept, because the server stops at the first rejected
+      // transaction, so what sits behind it in the outbox decides what the next flush manages
+      // to deliver.
       client.outbox.map((op) => `${ROWS.indexOf(op.rowId)}${op.kind}`).join(","),
       client.quarantine.map((op) => `${ROWS.indexOf(op.rowId)}${op.reason}`).join(","),
       cursor(universe, client),
@@ -343,10 +342,10 @@ function fingerprint(universe: Universe): string {
 }
 
 /**
- * Titles are minted fresh at every step, so which strings a state holds carries no meaning —
- * only which of the holders agree. Relabelling them by first appearance collapses the
- * histories that differ in spelling alone; without it almost nothing would dedupe and two
- * rows would put the search far out of budget.
+ * Titles are minted fresh at every step, so which strings a state holds carries no meaning; only
+ * which of the holders agree does. Relabelling them by first appearance collapses the histories
+ * that differ in spelling alone; without it almost nothing would dedupe and two rows would put
+ * the search far out of budget.
  */
 function relabel(views: readonly RowView[]): string {
   const labels = new Map<string, string>();
@@ -361,9 +360,9 @@ function relabel(views: readonly RowView[]): string {
 }
 
 /**
- * Where a device's cursor sits relative to the scope. Below the floor is its own class rather
- * than more "behind": what the device missed has been hard-purged, so its next handshake is
- * answered with a resync instead of an incremental batch (§5.9).
+ * Where a device's cursor sits relative to the scope. Below the floor is its own class, because
+ * what the device missed has been hard-purged, so its next handshake is answered with a resync
+ * instead of an incremental batch (§5.9).
  */
 function cursor(universe: Universe, client: WeftClient): "current" | "behind" | "purged" {
   const scope = universe.server.scopes.get(propertyScope);

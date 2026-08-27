@@ -1,10 +1,10 @@
-// The sync session under §8.7, on the side of the boundary the client is on.
+// The sync session under §8.7, on the client's side of the worker boundary.
 //
 // The session drives `syncWith` against a `WeftClient` and reads its outbox and quarantine to say
-// what is pending, so under OPFS it has to run in the worker beside the client. What the page keeps
-// is the credential, because the page is the only place a token can be got: a worker has no
+// what is pending, so under OPFS it has to run in the worker beside the client. The page keeps
+// only the credential, because the page is the only place a token can be got; a worker has no
 // `localStorage` and no redirect to read one out of. Everything between the two is these three
-// verbs and one push, rather than the side-channel every application would otherwise write.
+// verbs and one push, so an application never has to build its own side channel for it.
 import assert from "node:assert/strict";
 import { MessageChannel } from "node:worker_threads";
 import { test } from "vitest";
@@ -46,8 +46,8 @@ test("§8.7 the page hands over a token and the worker starts syncing under it",
   using bridge = await Bridge.open();
   await bridge.mirror.hydrate();
 
-  // Nothing has been signed in, so there is no session and nothing to report. That is a state, not
-  // a failure: a device with no credential is exactly where an application starts.
+  // Nothing has been signed in, so there is no session and nothing to report, because a device
+  // with no credential is exactly where an application starts.
   assert.equal(bridge.mirror.status(), undefined, "a device that has not signed in reported a session");
 
   await bridge.mirror.setToken("token-1");
@@ -100,9 +100,8 @@ test("§8.7 a manual sync pushes this device's work and answers when it has land
 
   await bridge.mirror.sync();
 
-  // Answering when the sync has finished rather than when the message was sent is the whole point
-  // of the verb: a pull-to-refresh that resolved on delivery would stop spinning before the relay
-  // had been spoken to.
+  // The verb answers only once the sync has finished, because a pull-to-refresh that resolved on
+  // delivery would stop spinning before the relay had been spoken to.
   assert.equal(
     bridge.server.snapshot(SCOPE).fields.some((record) => record.value === "alpha"),
     true,
@@ -111,8 +110,8 @@ test("§8.7 a manual sync pushes this device's work and answers when it has land
 });
 
 test("§8.7 a local write is sent without waiting for the next poll", async () => {
-  // The poll is a minute long here, as it is in a browser whose socket is up: a live connection
-  // says when to sync, and what it says nothing about is what this device has just written.
+  // The poll is a minute long here, as it is in a browser whose socket is up, because a live
+  // connection says when to sync but says nothing about what this device has just written.
   using bridge = await Bridge.open({ pollMs: 60_000 });
   await bridge.mirror.hydrate();
   await bridge.mirror.setToken("token-1");
@@ -161,9 +160,9 @@ test("§8.7 status is published when it moves and not when it repeats", async ()
   await bridge.mirror.sync();
   await bridge.mirror.sync();
 
-  // Not a count: a sync legitimately moves `syncing` twice, and the poll runs in the background,
-  // so how many arrive is not the property. The property is that none of them repeats the one
-  // before it — a status per poll would wake every component reading it for nothing.
+  // A sync legitimately moves `syncing` twice, and the poll runs in the background, so how many
+  // times it moves is not the property. The property is that none of them repeats the one before
+  // it, because a status published per poll would wake every component reading it for nothing.
   for (const [index, status] of seen.entries()) {
     if (index === 0) continue;
     assert.notDeepEqual(status, seen[index - 1], "a status identical to the one before it was published");
@@ -187,13 +186,13 @@ test("§8.7 signing out stops the session and leaves the unsent work where it is
   await bridge.mirror.setToken(null);
   await bridge.settle(() => bridge.mirror.status()?.online === false);
 
-  // Unsent work belongs to the device rather than to the session that would have pushed it (§4.1),
-  // so signing out keeps it and signing back in pushes it. Dropping it is `discardQuarantine`,
-  // which is a decision for whoever is holding it.
+  // Unsent work belongs to the device across a session change (§4.1), so signing out keeps it and
+  // signing back in pushes it. Dropping it is `discardQuarantine`, which is a decision for whoever
+  // is holding it.
   assert.equal(bridge.host.client?.outbox.length, queued, "signing out threw away work this device had not sent");
   assert.equal(bridge.host.session, undefined, "the session outlived the credential it was running under");
-  // Said rather than merely stopped: a page whose status stream went quiet would go on showing the
-  // connection it had before it signed out.
+  // The status explicitly reports going offline, because a page whose status stream simply went
+  // quiet would go on showing the connection it had before it signed out.
   assert.equal(bridge.mirror.status()?.live, false);
 });
 
@@ -258,7 +257,7 @@ class Bridge {
   readonly server = new WeftServer();
   /** Every token a transport was built from, in order, so "per credential" is an assertion. */
   readonly tokens: string[] = [];
-  /** Set to cut the relay off, which is an ordinary state rather than an error (§10). */
+  /** Set to cut the relay off, one of the ordinary states a transport can be in (§10). */
   offline = false;
   readonly #close: () => void;
   readonly #channel: MessageChannel;
@@ -333,8 +332,8 @@ class Bridge {
   async quarantine(id: string): Promise<void> {
     const client = this.host.client;
     if (client === undefined) throw new Error("the worker has not hydrated");
-    // A row the scope already holds: this device's create is refused as `row_exists`, and the whole
-    // transaction is set aside for the person to decide about.
+    // This device's create targets a row the scope already holds, so it is refused as
+    // `row_exists`, and the whole transaction is set aside for the person to decide about.
     await this.neighbourWrites(id, "theirs");
     await client.create(
       TODOS,
@@ -356,7 +355,7 @@ class Bridge {
     };
   }
 
-  /** A port delivers on a later turn, so a test waits on the condition rather than on a tick count. */
+  /** A port delivers on a later turn, so this polls the condition until it holds. */
   async settle(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (!condition()) {

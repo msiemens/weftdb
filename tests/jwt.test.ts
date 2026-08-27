@@ -1,5 +1,5 @@
 // The JWT verifier. Authorization is scope equality and nothing more (§1.4), so everything a
-// token decides comes down to which `AuthContext` it resolves to — and every way of getting a
+// token decides comes down to which `AuthContext` it resolves to, and every way of getting a
 // token accepted that should not be is a way into somebody else's scope.
 import assert from "node:assert/strict";
 import { test } from "vitest";
@@ -68,8 +68,8 @@ test("a token whose payload was edited after signing is refused", async () => {
 });
 
 test("a token may not choose its own algorithm", async () => {
-  // `alg: none` and algorithm confusion are the two classic ways a token talks a verifier out
-  // of checking it, so the accepted algorithms come from the deployment and the header is only
+  // `alg: none` and algorithm confusion are classic ways a token talks a verifier out of
+  // checking it, so the accepted algorithms come from the deployment and the header is only
   // ever matched against them.
   const unsigned = `${encode({ alg: "none", typ: "JWT" })}.${encode(valid)}.`;
   assert.equal(await verifier.verify(unsigned), undefined);

@@ -2,9 +2,9 @@
 //
 // A demo gives every tab a namespace of its own, so one storage worker holds a client per tab and
 // each of those clients wants a session of its own. What a session runs over is the port its tab
-// transferred in, and the three things that follow from that are what this file is about: a tab
-// reaches the relay over its own port, a tab is woken when another tab pushes, and a tab that has
-// gone offline is the only device that stops syncing.
+// transferred in, and what follows from that is what this file is about: a tab reaches the relay
+// over its own port, a tab is woken when another tab pushes, and a tab that has gone offline is
+// the only device that stops syncing.
 //
 // Everything is the shipped assembly except the browser: the demo's storage worker, the demo's
 // relay and the library's client and session are real, and `node:worker_threads` channels carry
@@ -31,7 +31,7 @@ test("a tab is woken by another tab's push, and pulls it without being asked", a
   await first.database.weft.source.sync();
 
   // Neither of these syncs. The relay tells every connected tab but the one that pushed, and being
-  // told is the whole of why a tab updates while nobody is touching it: the notice arrives on that
+  // told is the whole of why a tab updates while nobody is touching it. The notice arrives on that
   // tab's own port, so a tab reaches this state only if the worker is holding the port it handed in.
   for (const [name, tab] of [
     ["second", second],
@@ -61,8 +61,8 @@ test("one tab going offline leaves every other tab syncing", async (t) => {
   );
   await waitFor(() => titles(third).includes("still connected"), "the third tab never saw the second tab's row", 3_000);
 
-  // And the tab that clicked offline is the one device that is offline: its work piles up where a
-  // device with the network gone would pile it up.
+  // The tab that clicked offline is the one device that is offline, so its work piles up exactly
+  // where a device with the network gone would pile it up.
   await add(first, "todo-3", "written offline");
   await first.database.weft.source.sync();
   await waitFor(() => (first.database.weft.source.status()?.pending ?? 0) > 0, "an offline tab pushed anyway", 5_000);
@@ -75,8 +75,8 @@ test("a tab whose storage worker the browser restarted hands the new one a line 
   const first = await browser.tab("first");
 
   await browser.restartStorage();
-  // The page hears a closed port, connects again, and says which database it is for — which is the
-  // point the worker it reached has a line for this device or has nothing.
+  // The page hears a closed port, connects again, and says which database it is for. That is the
+  // point where the worker it reached either has a line for this device or has nothing.
   await waitFor(() => browser.storage.serving.length === 1, "the tab never reconnected to the new worker", 5_000);
 
   const second = await browser.tab("second");

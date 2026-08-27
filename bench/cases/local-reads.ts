@@ -1,5 +1,5 @@
 // Reading a list back out. The subscription engine is what a React binding calls on every
-// render, so its cost per query — not per row — is the number that decides whether a list feels
+// render, so its cost per query, not per row, is the number that decides whether a list feels
 // instant at a given size.
 import { SubscriptionEngine, queryKey, WeftClient, type QueryKey } from "weftdb/client";
 import { TITLE, TODOS, schema, syncedClient, todoId, updateTxn } from "../fixtures.ts";
@@ -35,7 +35,7 @@ export const localReads: BenchGroup = {
   },
 };
 
-/** The render path: the same query asked again with nothing changed underneath it. */
+/** The render path is the same query asked again with nothing changed underneath it. */
 function warmQuery(config: BenchConfig, rows: number, key: QueryKey, client: WeftClient): CaseResult {
   const engine = new SubscriptionEngine();
   const samples = repeat(() => {
@@ -56,7 +56,7 @@ function warmQuery(config: BenchConfig, rows: number, key: QueryKey, client: Wef
   );
 }
 
-/** The first query of a session: nothing is cached, so every row is materialized. */
+/** The first query of a session finds nothing cached, so every row is materialized. */
 function coldQuery(config: BenchConfig, rows: number, key: QueryKey, client: WeftClient): CaseResult {
   const samples = repeat(() => {
     const engine = new SubscriptionEngine();

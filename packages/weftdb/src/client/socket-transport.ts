@@ -1,9 +1,9 @@
 // The sync session over a WebSocket. One connection carries both directions: the requests a
-// session makes, and the relay's unsolicited "this scope moved" — so a device is told when to
+// session makes, and the relay's unsolicited "this scope moved". A device is told when to
 // sync and does it without opening anything.
 //
-// This is a `AsyncSyncTransport` like any other. The session logic above it — what a handshake
-// outcome means, what to do with a rejection, when a snapshot is needed — is the same code the
+// This is an `AsyncSyncTransport` like any other. The session logic above it (what a handshake
+// outcome means, what to do with a rejection, when a snapshot is needed) is the same code the
 // HTTP transport runs, which is the same code the specification and the property suite are
 // about. Only the way bytes move changes.
 import type { ScopeId, WeftOp } from "weftdb/core";
@@ -55,7 +55,7 @@ interface IncomingMessage {
   readonly index?: number;
   readonly last?: boolean;
   readonly data?: string;
-  /** Set on chunks that reassemble into an unsolicited batch rather than an answer. */
+  /** Says what these chunks reassemble into, so `"batch"` selects an unsolicited batch and anything else selects an answer. */
   readonly for?: string;
 }
 
@@ -66,8 +66,8 @@ export interface SocketTransportOptions {
   readonly onWake?: (advanced: ScopeAdvanced | undefined) => void;
   /**
    * Called with a batch the relay sent unasked, once this connection has subscribed. It is the
-   * same batch a pull would have returned, so a caller applies it the same way — which is what
-   * keeps one path responsible for merging, however the records arrived.
+   * same batch a pull would have returned, so a caller applies it the same way, keeping one path
+   * responsible for merging however the records arrived.
    */
   readonly onBatch?: (batch: PullBatch) => void;
   /**
@@ -109,8 +109,9 @@ export class SocketRequestError extends Error {
 }
 
 /**
- * Opens the socket and keeps it open. Requests made while it is down fail rather than queue:
- * the outbox is already the queue, and a sync that failed is one the client will run again.
+ * Opens the socket and keeps it open. Requests made while it is down fail instead of queuing,
+ * because the outbox is already the queue, and a sync that failed is one the client will run
+ * again.
  */
 export function connectSocketTransport(options: SocketTransportOptions): SocketTransport {
   const factory =
@@ -253,9 +254,8 @@ export function connectSocketTransport(options: SocketTransportOptions): SocketT
   };
 
   /**
-   * Asks for one of the protocol's four calls by name. The socket carries the operation, not a
-   * description of a route to fetch — so the result's type follows from the operation asked for
-   * rather than from what a caller believes a path returns.
+   * Asks for one of the protocol's four calls by name. The socket carries the operation itself,
+   * so the result's type follows from the operation asked for.
    */
   const send = async <Op extends SyncOperation>(op: Op, argument: SyncArguments[Op]): Promise<SyncResults[Op]> => {
     const current = socket;
@@ -266,7 +266,7 @@ export function connectSocketTransport(options: SocketTransportOptions): SocketT
       const timer = setTimeout(() => {
         pending.delete(id);
         // A request that never came back means the connection is not carrying traffic, whatever
-        // its state says; dropping it forces a reconnect rather than waiting forever.
+        // its state says, so dropping it forces a reconnect instead of waiting forever.
         reject(new SocketClosedError("request timed out"));
         current.close();
       }, timeoutMs);
@@ -297,7 +297,7 @@ export function connectSocketTransport(options: SocketTransportOptions): SocketT
     push: async (_scopeId: ScopeId, ops: WeftOp[]) => await send("push", { ops }),
     pull: async (_scopeId: ScopeId, lastServerSeq: number) => await send("pull", { lastServerSeq }),
     // The relay sends the bytes and their digest; the records are read back out of them here,
-    // which also checks the content address rather than taking it on trust.
+    // which also checks the content address.
     snapshot: async () => snapshotFromEnvelope(await send("snapshot", {})),
     close: () => {
       state.closed = true;

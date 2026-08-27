@@ -1,6 +1,6 @@
-// The demo talks to the relay over HTTP, so the sync session has to survive JSON: every op,
-// rejection, ack and snapshot crosses a Request/Response boundary here rather than being handed
-// between two objects in the same heap.
+// The demo talks to the relay over HTTP, so the sync session has to survive JSON. Every op,
+// rejection, ack and snapshot crosses a real Request/Response boundary here, instead of being
+// handed directly between two objects in the same heap.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import {
@@ -27,8 +27,8 @@ const TITLE = fieldName("title");
 const NOTES = fieldName("notes");
 const HASH = schemaHash(schema);
 
-// A token names the scope it may reach, so these are built rather than written out: the last test
-// here turns on a client whose scope is not the one its token names.
+// A token names the scope it may reach, so these are built here instead of written out plainly.
+// The last test turns on a client whose scope is not the one its token names.
 const ALPHA = demoToken(DEMO_SCOPE, "alpha");
 const BETA = demoToken(DEMO_SCOPE, "beta");
 
@@ -130,7 +130,7 @@ test("a rejection survives the wire and quarantines the diverged work", async ()
   const quarantined = alpha.listQuarantine();
   assert.ok(quarantined.length > 0, "the diverged edit was neither applied nor surfaced");
   assert.equal(alpha.outbox.length, 0, "quarantine is a move, not a copy");
-  // The edit stays visible until somebody decides what to do with it — losing it quietly at
+  // The edit stays visible until somebody decides what to do with it. Losing it quietly at
   // this point would be the same data loss the quarantine exists to prevent (§5.5).
   assert.equal(alpha.getRow(TODOS, rowId("todo-1"))?.fields.get(TITLE), "plan (edited)");
 
@@ -171,8 +171,9 @@ test("a token the relay does not recognise fails loudly instead of silently not 
 });
 
 test("the asynchronous session ends where the synchronous one does", async () => {
-  // The two paths share every decision and differ only in sequencing, which is worth pinning:
-  // a divergence here is a bug the whole property suite would miss, since it only drives sync.
+  // The two paths share every decision and differ only in sequencing. Pinning this matters
+  // because a divergence here is a bug the whole property suite would miss, since it only
+  // drives sync.
   const overHttp = new WeftServer();
   const inProcess = new WeftServer();
   const remote = client("alpha");

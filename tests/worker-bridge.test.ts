@@ -1,10 +1,10 @@
-// The page-to-worker bridge under §8.7: a `WeftClient` in the worker, a mirror of its rows on the
-// page, and a row delta between them.
+// The page-to-worker bridge under §8.7 is a `WeftClient` in the worker, a mirror of its rows on
+// the page, and a row delta between them.
 //
 // The whole bridge is exercised in Node. `serveWeftWorker` takes its executor and its store as
 // options, so `openSqliteExecutor(":memory:")` behind `asyncSqlExecutor` stands in for OPFS, and a
-// `node:worker_threads` MessageChannel stands in for the worker port. That is not a shortcut around
-// a browser test: the messages really are structured-cloned and really do arrive on a later turn,
+// `node:worker_threads` MessageChannel stands in for the worker port. The messages are
+// structured-cloned and arrive on a later turn just as they would through a real worker port,
 // which is where the ordering mistakes live.
 import assert from "node:assert/strict";
 import { MessageChannel } from "node:worker_threads";
@@ -75,8 +75,8 @@ test("§8.7 a hydrate brings the worker's rows to the page with their revisions 
   using bridge = await Bridge.open();
   await bridge.seed("todo-1", { title: "alpha", done: false, rank: 1 });
   await bridge.seed("todo-2", { title: "beta", done: true, rank: 2 });
-  // Edited in that earlier session, so the two rows come back on different revisions and a mirror
-  // that started every row at one would be caught here rather than three tests later.
+  // Edited in that earlier session, so the two rows come back on different revisions, and a
+  // mirror that started every row at one is caught right here.
   await bridge.seedUpdate("todo-1", "alpha prime");
 
   await bridge.mirror.hydrate();
@@ -106,17 +106,15 @@ test("§8.7 a mutator applies nothing here, and the row appears when the worker 
     txnId("txn-1"),
   );
   // Nothing is applied on this side, so the row is absent until the worker echoes it back. A mirror
-  // that wrote optimistically would have a row here and nothing to roll it back with (DESIGN.md
-  // §259).
+  // that wrote optimistically would have a row here and nothing to roll it back with (§3.5).
   assert.equal(bridge.mirror.rows.size, 0, "the page applied the mutation itself rather than waiting for the echo");
 
   await writing;
   await bridge.settle(() => bridge.mirror.rows.size === 1);
 
   assert.equal(bridge.mirror.rows.get("todos\0todo-1")?.fields.get(fieldName("title")), "alpha");
-  // And it is on disk, not merely in the worker's memory: the point of moving the client across
-  // the boundary is that `ClientPersistence.save` gets the live client on the thread that holds
-  // the database.
+  // It is on disk, because the point of moving the client across the boundary is that
+  // `ClientPersistence.save` gets the live client on the thread that holds the database.
   assert.equal(
     (await bridge.stored("todo-1"))?.["title"],
     "alpha",
@@ -134,8 +132,8 @@ test("§8.7 a watched statement's id list moves as rows start and stop matching 
   await bridge.mirror.watch(open);
   assert.deepEqual(bridge.ids(open), ["todo-1"], "the watch did not answer with the ids it matched");
 
-  // Leaving the result set and joining it are the two directions, and a mirror that only ever
-  // added would keep showing a row the statement no longer matches.
+  // A row can leave a watched result set as well as join it, and a mirror that only ever added
+  // would keep showing one the statement stopped matching.
   await bridge.mirror.update(TODOS, rowId("todo-1"), { done: true }, txnId("txn-close"));
   await bridge.settle(() => bridge.ids(open).length === 0);
 
@@ -158,7 +156,7 @@ test("§8.7 a row that did not change is the same row after a push", async () =>
   await bridge.settle(() => bridge.snapshot(all) !== before);
   const after = bridge.snapshot(all);
 
-  // The delta carries only the rows that moved, so the untouched row keeps the object it had —
+  // The delta carries only the rows that moved, so the untouched row keeps the object it had,
   // and with it the revision `RowIdentityCache` decides identity by. Rebuilding the whole row map
   // on every push would compile and pass every value assertion, and quietly re-render every row
   // of the list on every keystroke.
@@ -199,17 +197,16 @@ test("§8.7 unwatching stops the worker running the statement at all", async () 
 
   const all = bridge.query((statement) => statement.orderBy("rank"));
   await bridge.mirror.watch(all);
-  // No wait between the two: one port delivers in the order things were posted, so the worker
-  // has retired the registration before it ever sees the mutation.
+  // There is no wait between the two, because one port delivers in the order things were posted,
+  // so the worker has retired the registration before it ever sees the mutation.
   bridge.mirror.unwatch(all);
 
   bridge.counted.reset();
   await bridge.mirror.update(TODOS, rowId("todo-1"), { title: "alpha prime" }, txnId("txn-1"));
   await bridge.settle(() => bridge.pushes.length > 0);
 
-  // Not merely "the page stopped reading it": the worker re-runs every watched statement after
-  // every mutation, so a registration it never dropped is a SQLite query per keystroke for a list
-  // nothing is rendering.
+  // The worker re-runs every watched statement after every mutation, so a registration it never
+  // dropped is a SQLite query per keystroke for a list nothing is rendering.
   assert.equal(bridge.counted.ran(all.compiled.sql), 0, "the worker still ran a statement nobody is watching");
   assert.deepEqual(
     bridge.pushes
@@ -227,8 +224,8 @@ test("§8.7 a push naming a statement the page never registered is ignored", asy
   await bridge.mirror.hydrate();
 
   // A worker that is a version ahead, or a result for a statement unwatched while the push was on
-  // the wire. Neither is an error, and neither may be cached: the mirror would then answer a query
-  // nothing had asked it to watch, out of ids it can never refresh.
+  // the wire. Neither is an error, and neither may be cached, because the mirror would then answer
+  // a query nothing had asked it to watch, out of ids it can never refresh.
   bridge.pushToPage({
     push: "delta",
     rows: [],
@@ -250,15 +247,15 @@ test("§8.7 a statement nobody registered is not a statement that matched nothin
   // A statement that would match the seeded row if anyone had asked the worker to run it, and one
   // the worker did run and that matched nothing. The mirror answers out of what the worker pushed,
   // so reporting both as an empty list is a list that will never fill wearing the appearance of a
-  // list that is legitimately empty — which is what makes a missing registration invisible.
+  // list that is legitimately empty, which is what makes a missing registration invisible.
   const unregistered = bridge.query((statement) => statement.orderBy("rank"));
   const matchedNothing = bridge.query((statement) => statement.where("done", "=", true).orderBy("rank"));
   await bridge.mirror.watch(matchedNothing);
 
   assert.equal(bridge.mirror.select(unregistered), undefined, "an unregistered statement answered as an empty one");
   assert.deepEqual(bridge.mirror.select(matchedNothing), [], "a statement that ran and matched nothing had no answer");
-  // And they still paint the same, which is the point: the states differ where something can act on
-  // the difference, not in what a component renders.
+  // They still paint the same, because a component only reflects where something can act on a
+  // difference, and there is nothing here for it to act on.
   assert.deepEqual(bridge.ids(unregistered), []);
   assert.deepEqual(bridge.ids(matchedNothing), []);
 });
@@ -271,7 +268,7 @@ test("§8.7 a registration still in flight is not an answer of no rows", async (
   const open = bridge.query((statement) => statement.where("done", "=", false).orderBy("rank"));
   const ready = bridge.mirror.watch(open);
   // Registered, but the round trip has not come back. The worker will answer with `todo-1`, so an
-  // empty list here is not this statement's answer — it is the absence of one.
+  // empty list here means the answer is still pending.
   assert.equal(
     bridge.mirror.select(open),
     undefined,
@@ -285,9 +282,9 @@ test("§8.7 a registration still in flight is not an answer of no rows", async (
 
 test("§8.7 the mirror is a weft source as it stands", async () => {
   using bridge = await Bridge.open();
-  // The point of the mirror is that a component reads it the same way it reads a client that has
-  // the database on this thread: a row map, a `select`, and a scope. If this stops compiling, the
-  // hooks and the worker path have drifted apart and every generated component on OPFS is broken.
+  // A component reads the mirror the same way it reads a client that has the database on this
+  // thread, through a row map, a `select`, and a scope. If this stops compiling, the hooks and the
+  // worker path have drifted apart, and every generated component on OPFS is broken.
   const source: WeftSource = bridge.mirror;
   assert.equal(typeof source.select, "function");
   assert.equal(source.scopeId, SCOPE);
@@ -304,7 +301,7 @@ test("§8.7 the worker transport ignores a push rather than mis-correlating it",
   });
 
   // The push carries no request id. A transport that read `event.data.id` unconditionally would
-  // look `undefined` up in its pending map — and any push that happened to carry a numeric field
+  // look `undefined` up in its pending map, and any push that happened to carry a numeric field
   // named `id` would settle whichever request was wearing that number.
   worker.push({ push: "delta", rows: [], removed: [], results: [] });
   await delay(1);
@@ -399,8 +396,8 @@ class Bridge {
           serverSeq: 1,
         },
       ],
-      // Every declared field, because the generated columns are NOT NULL: a row the scope hands
-      // over arrives whole or not at all.
+      // Every declared field, because the generated columns are NOT NULL, so a row the scope
+      // hands over arrives whole or not at all.
       fields: [
         pulledField(id, "title", title, hlc),
         pulledField(id, "done", false, hlc),
@@ -443,9 +440,9 @@ class Bridge {
   }
 
   /**
-   * A `MessagePort` delivers on a later turn of the loop and a push crosses after the mutation
-   * that caused it has been answered, so a test waits on the condition rather than on a guessed
-   * number of ticks. The engine's own listener fan-out is a microtask on top of that.
+   * A `MessagePort` delivers on a later turn of the loop, and a push crosses after the mutation
+   * that caused it has been answered, so this polls the condition until it holds. The engine's
+   * own listener fan-out is a microtask on top of that.
    */
   async settle(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
@@ -462,8 +459,8 @@ class Bridge {
     this.mirror.dispose();
     this.transport.dispose();
     this.host.stop();
-    // An open port keeps Node's event loop alive, so a failing run that skipped this would hang
-    // the whole file rather than report a failure.
+    // An open port keeps Node's event loop alive, so closing this is what lets a failing run
+    // report its failure.
     this.#channel.port1.close();
     this.#channel.port2.close();
     this.#close();
@@ -538,8 +535,8 @@ class PushingWorker {
     // Requests are answered by hand, from the test.
   }
 
-  // Kept by type: the transport listens for `close` as well as `message`, and one field for both
-  // leaves the responses going to whichever was registered last.
+  // Kept by type, because the transport listens for `close` as well as `message`, and one field
+  // for both would leave the responses going to whichever was registered last.
   addEventListener(type: "message" | "close", listener: (event: MessageEvent<WorkerMessage>) => void): void {
     if (type === "message") this.#listener = listener;
   }

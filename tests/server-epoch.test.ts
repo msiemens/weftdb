@@ -34,9 +34,9 @@ function serverNamed(epoch: string): WeftServer {
 test("a device whose cursor was counted in another epoch is told to resync", async () => {
   const first = serverNamed("epoch-1");
   const author = device("tab-1");
-  // Enough work that this device's cursor ends up above anything the replacement will reach, which
-  // is what makes the cursor assertion below say something: keeping the higher of the two leaves
-  // the device asking for records after a point the replacement never gets to.
+  // Enough work that this device's cursor ends up above anything the replacement will reach,
+  // because keeping the higher of the two leaves the device asking for records after a point the
+  // replacement never gets to.
   await author.create(TODOS, rowId("todo-1"), values("seeded", 1), txnId("txn-1"));
   await author.create(TODOS, rowId("todo-3"), values("also seeded", 3), txnId("txn-3"));
   await author.syncWith(inProcessTransport(first), HASH);
@@ -65,7 +65,7 @@ test("a device whose cursor was counted in another epoch is told to resync", asy
 });
 
 test("a cursor above the server's head is refused even where the epoch matches", async () => {
-  // A restore that lands below where a device had reached, with the epoch preserved: the records
+  // A restore that lands below where a device had reached, with the epoch preserved. The records
   // are the same run of history, and the device is still ahead of everything the server holds.
   const server = serverNamed("epoch-1");
   const author = device("tab-1");

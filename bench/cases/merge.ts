@@ -1,6 +1,6 @@
-// The two ways a field can be reconciled: the prose merge that runs on the client when the
-// server refuses a stale ancestor, and the last-writer-wins comparison every other field write
-// goes through on the server.
+// A field reconciles through the prose merge that runs on the client when the server refuses a
+// stale ancestor, or through the last-writer-wins comparison every other field write goes
+// through on the server.
 import { HlcClock, diff3, txnId, type SetOp, type WeftOp } from "weftdb/core";
 import { WeftServer, fieldKey } from "weftdb/server";
 import { HASH, SCOPE, TITLE, TODOS, benchClient, seedRows, todoId } from "../fixtures.ts";

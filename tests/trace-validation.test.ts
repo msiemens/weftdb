@@ -1,14 +1,13 @@
-// Trace validation: the link between the specification and the code.
+// Trace validation links the specification to the code.
 //
-// The TLA+ model in spec/ proves things about a protocol. On its own it says nothing about
-// this implementation, because nothing connects the two. This does: it drives the real client
-// and server through the actions the specification models, records the abstract state after
-// every step, and hands the resulting behaviour to TLC — which checks that each recorded
-// transition is one the specification permits, and that the invariants hold at every step.
+// The TLA+ model in spec/ proves things about a protocol, but on its own it says nothing about
+// this implementation, because nothing connects the two. This file does. It drives the real
+// client and server through the actions the specification models, records the abstract state
+// after every step, and hands the resulting behaviour to TLC, which checks that each recorded
+// transition is one the specification permits and that the invariants hold at every step.
 //
-// A failure here means one of two things, and both are worth knowing: the implementation does
-// something the protocol does not allow, or the specification does not describe the protocol
-// that was built.
+// A failure here means either the implementation does something the protocol does not allow, or
+// the specification does not describe the protocol that was built.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { execFileSync } from "node:child_process";
@@ -50,7 +49,7 @@ function tlcCommand(): { readonly command: string; readonly leading: readonly st
 }
 const SPEC_DIRECTORY = join(process.cwd(), "spec");
 
-/** The specification's constants: two devices, two rows, named as the model names them. */
+/** The specification's constants are two devices and two rows, named as the model names them. */
 const DEVICES = ["d1", "d2"] as const;
 const ROWS = ["r1", "r2"] as const;
 const ROW_IDS: Readonly<Record<(typeof ROWS)[number], RowId>> = { r1: rowId("r1"), r2: rowId("r2") };
@@ -109,8 +108,8 @@ test("recorded implementation behaviour is behaviour the specification allows", 
     return;
   }
 
-  // Generated modules live beside WeftSync.tla: TLA+ resolves an INSTANCE from the module
-  // search path, and TLC's is the directory it runs in.
+  // Generated modules live beside WeftSync.tla, because TLA+ resolves an INSTANCE from the
+  // module search path, and TLC's is the directory it runs in.
   const traceDirectory = SPEC_DIRECTORY;
   mkdirSync(traceDirectory, { recursive: true });
   // WEFT_KEEP_TRACES=1 leaves the generated modules behind, which is the only practical way
@@ -122,8 +121,8 @@ test("recorded implementation behaviour is behaviour the specification allows", 
     }
   });
 
-  // A handful of independent histories rather than one long one: each is checked end to end,
-  // and a short counterexample is worth more than a long one.
+  // Sampled as many independent histories, each checked end to end, because a short
+  // counterexample is worth more than a long one.
   const histories = fc.sample(fc.array(actionArb, { minLength: 16, maxLength: 40 }), { numRuns: 12, seed: 20_260_824 });
 
   for (const [index, history] of histories.entries()) {
@@ -162,8 +161,9 @@ async function record(history: readonly Action[]): Promise<readonly SpecState[]>
     (device) => new WeftClient(propertyScope, device as never, propertySchema, () => clock.now),
   );
 
-  // Raw first, abstract second: sequence numbers are ranked against the set of transaction
-  // boundaries the whole history went through, which is not known until it has run.
+  // Recorded raw before abstracting it, because sequence numbers are ranked against the set of
+  // transaction boundaries the whole history goes through, and that set is not known until the
+  // run finishes.
   const raw: RawState[] = [observe(server, clients)];
   for (const [step, action] of history.entries()) {
     await apply(server, clients, clock, action, step);
@@ -214,11 +214,11 @@ async function apply(
       return;
     case "push": {
       // The specification models a push as one row's one pending operation, while `flush`
-      // sends the whole outbox — potentially several transactions across several rows in a
-      // single step, which matches no single specification step. Those pushes are skipped
-      // rather than recorded, so these traces cover single-transaction batches only. That is
-      // a real gap in what trace validation says, and the reason the model-checking
-      // configurations exist beside it: they explore batching the traces cannot reach.
+      // sends the whole outbox, potentially several transactions across several rows in a
+      // single step, matching no single specification step. Those pushes are skipped, so
+      // these traces cover only single-transaction batches. That is a real gap in what trace
+      // validation shows, and it is why the model-checking configurations exist alongside it,
+      // exploring the batching these traces cannot reach.
       const rows = new Set(client.outbox.map((op) => op.rowId));
       const transactions = new Set(client.outbox.map((op) => op.txnId));
       if (rows.size > 1 || transactions.size > 1) return;
@@ -296,12 +296,12 @@ function observe(server: WeftServer, clients: readonly WeftClient[]): RawState {
 }
 
 /**
- * Sequence numbers are ranked by transaction boundary, not copied. The implementation hands
- * out one number per field written, so a row's record sits *below* the head its transaction
- * ended on, while the specification counts one per accepted operation and has them equal.
- * Ranking each number to the first observed head at or above it collapses a transaction's
- * numbers onto that transaction — which is exactly the distinction the protocol relies on,
- * because a device's cursor is only ever a head.
+ * Sequence numbers are ranked by transaction boundary. The implementation hands out one number
+ * per field written, so a row's record sits *below* the head its transaction ended on, while
+ * the specification counts one per accepted operation and has them equal. Ranking each number
+ * to the first observed head at or above it collapses a transaction's numbers onto that
+ * transaction, which is exactly the distinction the protocol relies on, because a device's
+ * cursor is only ever a head.
  */
 function abstract(raw: RawState, rank: (value: number) => number): SpecState {
   return {
@@ -342,8 +342,8 @@ function pendingOp(client: WeftClient, row: RowId): SpecOp {
 
 /**
  * Ranks a sequence number as the position of the first transaction boundary at or above it.
- * Heads are the boundaries: a cursor is always a head, so this preserves every comparison the
- * specification makes while collapsing a transaction's several numbers into one.
+ * Heads are the boundaries, because a cursor is always a head, so this preserves every
+ * comparison the specification makes while collapsing a transaction's several numbers into one.
  */
 function rankingOver(heads: readonly number[]): (value: number) => number {
   const boundaries = [...new Set([0, ...heads])].sort((left, right) => left - right);
@@ -454,8 +454,8 @@ TraceConsistent == Sync!Consistent
 }
 
 function checkConfig(): string {
-  // The bounds are irrelevant here: TLC follows one recorded behaviour rather than exploring,
-  // so MaxSeq only has to be large enough to type-check the ranked sequence numbers.
+  // TLC follows one recorded behaviour instead of exploring the state space, so MaxSeq only has
+  // to be large enough to type-check the ranked sequence numbers.
   return `SPECIFICATION TraceSpec
 
 CONSTANTS
@@ -482,9 +482,9 @@ CHECK_DEADLOCK FALSE
 }
 
 /**
- * A TLA+ *function* keyed by model values, written with `:>` and `@@` from the TLC module —
- * not a record. The specification indexes by the model values `d1`, `r1` and so on, and a
- * record's fields are strings, which those are not.
+ * A TLA+ *function* keyed by model values, written with `:>` and `@@` from the TLC module. The
+ * specification indexes by model values like `d1` and `r1`, whose type is not a string, and a
+ * record's fields must be strings, so this needs a function instead.
  */
 function record_<Value>(entries: Readonly<Record<string, Value>>, format: (value: Value) => string): string {
   const pairs = Object.entries(entries).map(([key, value]) => `${key} :> ${format(value)}`);

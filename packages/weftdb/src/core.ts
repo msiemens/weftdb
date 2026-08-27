@@ -74,8 +74,8 @@ export function schemaHashValue(value: string): SchemaHash {
 }
 
 /**
- * Ranks come back from storage as plain strings — SQLite has no brands and neither does JSON —
- * so reading one back needs the same constructor every other identifier has.
+ * SQLite and JSON have no brands, so a rank read back from storage is a plain string that needs
+ * the same constructor every other identifier has.
  */
 export function rankString(value: string): RankString {
   return value as RankString;
@@ -119,8 +119,8 @@ export interface Rejection {
   /**
    * The stamp on the value the client is being asked to merge with. Without it the retry is
    * stamped by a clock that has never seen the write it lost to, so the merge can be accepted
-   * by the push and then dropped by the field's last-writer-wins comparison — an edit the
-   * client was told had landed.
+   * by the push and then dropped by the field's last-writer-wins comparison, discarding an edit
+   * the client was told had landed.
    */
   serverHlc?: HlcString;
 }
@@ -131,20 +131,21 @@ export const HLC_MAX_WALL_MS = 36 ** HLC_WALL_WIDTH - 1;
 export const HLC_MAX_COUNTER = 36 ** HLC_COUNTER_WIDTH - 1;
 
 /**
- * Canonical form, and nothing else. The widths are what makes string comparison equivalent to
- * tuple comparison, so a stamp of any other shape is not a smaller or larger reading — it is
- * one that orders against every other reading arbitrarily.
+ * Canonical form, and nothing else. The widths are what make string comparison equivalent to
+ * tuple comparison, so a stamp of any other shape does not read as smaller or larger. It orders
+ * against every other reading arbitrarily.
  *
- * Only the first two separators delimit anything. A device id may contain them — `device-0`,
- * `tab-2-a3f1` — so the rest of the string is the id, however many separators it holds.
+ * Only the first two separators delimit anything. A device id may contain more of them, such as
+ * `device-0` or `tab-2-a3f1`, so the rest of the string is the id, however many separators it
+ * holds.
  */
 const CANONICAL_HLC = new RegExp(`^[0-9a-z]{${HLC_WALL_WIDTH}}-[0-9a-z]{${HLC_COUNTER_WIDTH}}-.+$`, "u");
 
 /**
  * Whether a string is a stamp this build would have written. Anything crossing a trust boundary
- * as an HLC goes through here first: a reading that parses to `NaN` is folded into a clock with
- * `Math.max` and makes every later stamp on that device `NaN` too, which no later valid write
- * recovers from.
+ * as an HLC goes through here first, because a reading that parses to `NaN` folds into a clock
+ * through `Math.max` and makes every later stamp on that device `NaN` too, and no later valid
+ * write recovers from that.
  */
 export function isHlcString(value: string): value is HlcString {
   if (!CANONICAL_HLC.test(value)) return false;
@@ -169,9 +170,9 @@ function splitHlc(value: string): ParsedHlc {
 
 /**
  * Whether a value decoded from a request is an operation this protocol defines. Every surface
- * validates before handing anything to the server: the server's own checks assume an op has the
- * fields it is typed as having, and a batch of half-shaped objects reaching them is a protocol
- * transaction being run over data that never was one.
+ * validates before handing anything to the server, because the server's own checks assume an op
+ * has the fields it is typed as having, and a batch of half-shaped objects would violate that
+ * assumption.
  */
 export function isWeftOp(value: unknown): value is WeftOp {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -200,8 +201,7 @@ export function isWireValue(value: unknown): value is WireValue {
 export function encodeHlc(input: HlcState): HlcString {
   // Fixed-width base36 segments make string comparison equivalent to tuple ordering, which holds
   // only while both segments fit. A seven-digit counter shifts every column after it and sorts
-  // below six-digit counters a tenth its size, so a reading that does not fit is a caller error
-  // rather than a stamp to write down.
+  // below six-digit counters a tenth its size, so a reading that does not fit is a caller error.
   if (!Number.isSafeInteger(input.wallMs) || input.wallMs < 0 || input.wallMs > HLC_MAX_WALL_MS) {
     throw new Error(`HLC wall clock out of range: ${input.wallMs}`);
   }
@@ -218,7 +218,7 @@ export function encodeHlc(input: HlcState): HlcString {
 
 /**
  * A reading in range. A counter that has run out of digits carries into the wall clock, the way
- * a decimal column does: the stamp is still strictly above the one it came from, still fits its
+ * a decimal column does. The stamp stays strictly above the one it came from, still fits its
  * columns, and the clock keeps running instead of throwing at whoever happened to be typing.
  */
 function carry(wallMs: number, counter: number, device: DeviceId): HlcState {
@@ -250,9 +250,10 @@ export class HlcClock {
 
   next(observed?: HlcString): HlcString {
     const localNow = this.#now();
-    // Everything the clock has been told was accepted counts, not only what this call names.
-    // After a reload the emitted state starts at zero while the outbox still holds writes this
-    // device made, and a stamp below one of those loses the comparison against it.
+    // The comparison includes every stamp the clock has been told was accepted, whether from
+    // this call or from an earlier acknowledgement. After a reload the emitted state starts at
+    // zero while the outbox still holds writes this device made, and a stamp below one of those
+    // loses the comparison against it.
     const highest =
       observed === undefined || (this.#observed !== undefined && compareHlc(this.#observed, observed) > 0)
         ? this.#observed
@@ -279,10 +280,9 @@ export class HlcClock {
 
   /**
    * Records a stamp the clock must stay above without emitting anything. This device's own
-   * accepted writes belong here: a later skew correction may drop the inflated wall clock it
-   * was rejected for, but never land under something the server has already taken. Observing
-   * would do as well, except that it also advances the clock, which turns an acknowledgement
-   * into a write that never happened.
+   * accepted writes belong here. A later skew correction may drop the inflated wall clock it
+   * was rejected for, but never land under something the server has already taken. This method
+   * does not advance the clock, so it never manufactures a write that did not happen.
    */
   acknowledge(hlc: HlcString): void {
     if (this.#observed === undefined || compareHlc(hlc, this.#observed) > 0) this.#observed = hlc;
@@ -305,9 +305,9 @@ export class HlcClock {
   restampAfterSkew(serverWallMs: number): HlcString {
     // Skew-rejected ops were not accepted anywhere, so the client may drop the rejected
     // future wall clock and re-stamp against server time. It may not drop to or below
-    // anything it has already seen accepted, though — including its own earlier writes at
-    // the same millisecond — or the correction loses the field-wise comparison and silently
-    // discards the newer edit. That is why the counter matters as much as the wall clock.
+    // anything it has already seen accepted, though, including its own earlier writes at
+    // the same millisecond, or the correction loses the field-wise comparison and silently
+    // discards the newer edit.
     const observed = this.#observed === undefined ? undefined : parseHlc(this.#observed);
     const wallMs = Math.max(serverWallMs, observed?.wallMs ?? 0);
     this.#state = carry(
@@ -324,11 +324,11 @@ export function stableHash(value: WireValue): SchemaHash {
 }
 
 /**
- * Text for a value that arrived as a `WireValue`. The places that want one — a diff3 merge, an
- * `orderBy` comparison, a rendered cell — are declared as string fields in the schema, but nothing
- * at this level enforces that, and a plain `String(...)` would turn a collection or an array field
- * into `[object Object]` and then compare or merge that. Scalars stringify exactly as `String`
- * would; anything else keeps the shape it arrived in.
+ * Text for a value that arrived as a `WireValue`. The places that want one, such as a diff3
+ * merge, an `orderBy` comparison, or a rendered cell, are declared as string fields in the
+ * schema, but nothing at this level enforces that, and a plain `String(...)` would turn a
+ * collection or an array field into `[object Object]` and then compare or merge that. Scalars
+ * stringify exactly as `String` would; anything else keeps the shape it arrived in.
  */
 export function wireText(value: WireValue): string {
   return typeof value === "string" ? value : stableStringify(value);
@@ -407,11 +407,11 @@ export function rankBetween(
 ): RankString {
   const leftCore = stripRankSuffix(left);
   const rightCore = stripRankSuffix(right);
-  // Two rows can share a core: that is what happens when two devices insert into the same gap,
+  // Two rows can share a core. That is what happens when two devices insert into the same gap,
   // and the device suffix is all that orders them. There is no core between those two, so a
-  // rank between them has to be found in the whole string — which is what a sort compares
-  // anyway. Refusing here would mean a perfectly ordinary reorder throwing at the person doing
-  // it, some time after two devices happened to insert in the same place.
+  // rank between them has to be found in the whole string, which is what a sort compares
+  // anyway. Refusing here would throw at whoever triggers an ordinary reorder, sometime after
+  // two devices happened to insert in the same place.
   if (left != null && right != null && leftCore === rightCore) {
     return betweenRanks(left, right);
   }
@@ -424,8 +424,8 @@ const LOWEST_RANK_CHAR = 0x21;
 const MID_RANK_CHAR = "m";
 
 /**
- * A string strictly between two others, working on the characters themselves rather than the
- * rank alphabet — the parts being separated here are device ids, which are not written in it.
+ * A string strictly between two others, worked out on raw characters because the parts compared
+ * here can include device ids, which the rank alphabet does not cover.
  */
 function betweenRanks(left: string, right: string): RankString {
   if (left >= right) throw new Error(`rank bounds out of order: ${left} >= ${right}`);
@@ -448,7 +448,7 @@ function betweenRanks(left: string, right: string): RankString {
     return `${prefix}${String.fromCharCode(Math.floor((leftCode + rightCode) / 2))}` as RankString;
   }
   // Adjacent characters leave no room at this position, so the answer keeps the left rank
-  // whole and grows past it — still below the right one, which differs earlier.
+  // whole and grows past it. It still sorts below the right one, which differs earlier.
   return `${left}${MID_RANK_CHAR}` as RankString;
 }
 
@@ -459,7 +459,7 @@ function stripRankSuffix(value?: string | null): string {
 }
 
 function midpoint(left: string, right: string): string {
-  // Bounds are open when empty: no `left` means "before everything", no `right` means "after
+  // Bounds are open when empty. No `left` means "before everything"; no `right` means "after
   // everything". A core never ends in the first alphabet character, which is what guarantees
   // there is always room to descend one more digit between two adjacent ones.
   if (right !== "" && left >= right) throw new Error(`rank bounds out of order: ${left} >= ${right}`);

@@ -1,8 +1,7 @@
-// Generated code, over schemas nobody wrote by hand. Everything about codegen has been checked
-// against two or three schemas somebody thought of, which tests the schemas rather than the
-// generator: the interesting inputs are the ones with names that collide once punctuation is
-// dropped, collections that are event logs, fields that are nullable or immutable, and tables
-// whose names need quoting.
+// Generated code, over schemas nobody wrote by hand, because testing only two or three schemas
+// somebody thought of would just be testing those schemas. The interesting inputs are the ones
+// with names that collide once punctuation is dropped, collections that are event logs, fields
+// that are nullable or immutable, and tables whose names need quoting.
 //
 // What the generated artifacts have to be is checkable without reading them: the DDL has to be
 // SQL that SQLite accepts and that produces the columns the types promise, the emitted names
@@ -26,7 +25,7 @@ const RUNS = Number(process.env["WEFT_CODEGEN_RUNS"] ?? 40);
 const identifierArb = fc.constantFrom(
   "todos",
   "todo_events",
-  // The pair that matters: two names that differ only in punctuation collapse to the same
+  // The pair that matters. Two names that differ only in punctuation collapse to the same
   // camel case, and a generator that emits members named after them has to say so.
   "todoEvents",
   "notes",
@@ -76,9 +75,9 @@ const schemaArb = fc
 
 /**
  * The statements in generated SQL, with the comment lines stripped. Comments are removed line
- * by line rather than by dropping whatever chunk starts with one: generated SQL opens with a
- * comment and the first real statement follows it on the next line, so discarding the chunk
- * discards the statement too.
+ * by line, because generated SQL opens with a comment and the first real statement follows
+ * immediately on the next line, so dropping the whole leading chunk would discard the statement
+ * too.
  */
 function statements(ddl: string): readonly string[] {
   return ddl
@@ -101,7 +100,7 @@ function runSql(sql: string, into?: ReturnType<typeof openSqliteExecutor>): Retu
   return executor;
 }
 
-/** Names the generator cannot tell apart, which it refuses rather than generates. */
+/** Names the generator refuses instead of generating, because it cannot tell them apart. */
 function generatedNames(schema: ReturnType<typeof defineSchema>): readonly string[] {
   return Object.keys(schema.collections).map((name) =>
     name
@@ -126,8 +125,8 @@ function parseDiagnostics(fileName: string, source: string): readonly string[] {
 test("the client DDL is SQL that SQLite accepts, and declares every field, for any schema", () => {
   fc.assert(
     fc.property(schemaArb, (schema) => {
-      // A schema whose names collide is refused rather than generated, which the test below
-      // covers; this one is about the SQL for schemas that get that far.
+      // A schema whose names collide is refused before it is generated; that refusal is covered
+      // by the test below, and this one is about the SQL for schemas that get that far.
       const names = generatedNames(schema);
       fc.pre(new Set(names).size === names.length);
       using executor = runSql(generateClientDdl(schema));
@@ -142,8 +141,8 @@ test("the client DDL is SQL that SQLite accepts, and declares every field, for a
         for (const field of Object.keys(collection.fields)) {
           assert.ok(columns.has(field), `${table}.${field} is in the schema but not in the table`);
         }
-        // The base fields every collection carries, mandated by the framework rather than
-        // declared per schema (§2).
+        // The base fields every collection carries, mandated by the framework for every schema
+        // (§2).
         for (const base of ["id", "scope_id", "created"]) {
           assert.ok(columns.has(base), `${table} has no ${base} column`);
         }
@@ -200,9 +199,9 @@ test("the emitted names are unambiguous, or generating refuses", () => {
       const names = Object.keys(schema.collections);
       // `todo_events` and `todoEvents` are different tables that produce the same member name.
       // Emitting both would silently give one of them the other's query, decoder and hook, so
-      // the generator has to refuse rather than pick. The collision is computed the way the
-      // generator names things — capitalise each punctuation-separated part and join — because
-      // a cruder rule would demand a refusal for names it has no trouble telling apart.
+      // the generator refuses instead. The collision is computed the way the generator names
+      // things, capitalise each punctuation-separated part and join, because a cruder rule would
+      // demand a refusal for names it has no trouble telling apart.
       const collapsed = new Set(generatedNames(schema));
       if (collapsed.size === names.length) {
         const bindings = generateBindings(schema);

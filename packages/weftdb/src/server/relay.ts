@@ -16,7 +16,7 @@ export interface RelayOptions {
   readonly verifier: TokenVerifier;
 }
 
-/** What a device asks for during a session, named — the same four things over either surface. */
+/** What a device asks for during a session, named alike whichever surface carries it. */
 export interface SyncArguments {
   readonly handshake: {
     readonly schemaHash: SchemaHash;
@@ -38,9 +38,9 @@ export interface SyncResults {
 export type SyncOperation = keyof SyncArguments;
 
 /**
- * The protocol itself, with no surface attached. HTTP and the socket are two ways of reaching
- * these four calls; neither implements them, so there is one place a request is carried out and
- * one place — the `AuthContext` its caller had to obtain — where the scope is decided.
+ * The protocol itself, with no surface attached. HTTP and the socket both reach these calls and
+ * neither implements them, so there is one place a request is carried out and one place (the
+ * `AuthContext` its caller had to obtain) where the scope is decided.
  */
 export type SyncOperations = {
   readonly [Op in SyncOperation]: (auth: AuthContext, argument: SyncArguments[Op]) => SyncResults[Op];
@@ -59,8 +59,8 @@ export function syncOperations(options: RelayOptions): SyncOperations {
     push: (auth, argument) => options.server.push(auth.scopeId, [...argument.ops]),
     pull: (auth, argument) => options.server.pull(auth.scopeId, argument.lastServerSeq),
     snapshot: (auth) => {
-      // The envelope only: the records are in the body, and sending them structured as well
-      // would double the largest response this relay produces.
+      // Only the envelope goes here. The records are in the body, and sending them structured
+      // as well would double the largest response this relay produces.
       const { snapshot: _snapshot, ...envelope } = contentAddressSnapshot(options.server.snapshot(auth.scopeId));
       return envelope;
     },
@@ -68,7 +68,7 @@ export function syncOperations(options: RelayOptions): SyncOperations {
 }
 
 export function createRelayHandler(options: RelayOptions): (request: Request) => Promise<Response> {
-  // The HTTP surface: a route and a body become one of the four calls, and nothing else.
+  // The HTTP surface turns a route and a body into one of the calls, and nothing else.
   const operations = syncOperations(options);
   return async (request) => {
     const auth = await authenticate(request, options.verifier);
@@ -129,9 +129,9 @@ function json(value: unknown, status = 200): Response {
 }
 
 /**
- * A sequence number, which is a count of records rather than an arbitrary number. `NaN` and both
- * infinities pass every comparison a cursor is used in, so one accepted here is a client that
- * silently receives nothing for the rest of its life.
+ * A sequence number that counts records. `NaN` and both infinities pass every comparison a
+ * cursor is used in, so one accepted here is a client that silently receives nothing for the
+ * rest of its life.
  */
 export function requiredCount(value: unknown, name: string, minimum: number): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {

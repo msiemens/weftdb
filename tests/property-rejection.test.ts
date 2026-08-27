@@ -1,4 +1,4 @@
-// DESIGN.md §9 "Rebase and rejection" — invariants 9 through 14. §9.15 (an acknowledged
+// DESIGN.md §9 "Rebase and rejection", invariants 9 through 14. §9.15 (an acknowledged
 // transaction never leaves outbox entries behind) is checked continuously by the world
 // model instead.
 import assert from "node:assert/strict";
@@ -344,8 +344,8 @@ test("§5.3 a malformed HLC is never accepted or stored", async () => {
 /**
  * §5.3 restated: scope, then skew, then row existence, then the field-level rules. The
  * design lists the base-field and append-class checks before existence, which agrees with
- * this order on every reachable input — an absent row has neither a base field to protect
- * nor a class to violate.
+ * this order on every reachable input, since an absent row has neither a base field to
+ * protect nor a class to violate.
  */
 function expectedRejection(shape: GeneratedOp): Rejection["reason"] | undefined {
   const exists = shape.fixture === "live" || shape.fixture === "tombstoned" || shape.fixture === "append";
@@ -455,7 +455,7 @@ const QUARANTINE_SCENARIOS: readonly QuarantineScenario[] = [
       );
       await client.syncWith(inProcessTransport(world.server), propertySchemaHash);
       // A current client refuses to queue an edit to an append row at all, so the op is put on
-      // the outbox directly: this is what reaches a server from a build that predates the rule,
+      // the outbox directly. This is what reaches a server from a build that predates the rule,
       // and what happens to it afterwards is the point of the test.
       client.outbox.push({
         scopeId: world.scopeId,
@@ -536,9 +536,9 @@ function serverField(world: PropertyWorld, row: RowId, field: FieldName): WireVa
 }
 
 /**
- * Values and liveness only: re-stamped HLCs differ from a clean run by construction, and so
+ * Values and liveness only. Re-stamped HLCs differ from a clean run by construction, and so
  * does `created`, which the application stamps from the device's own clock before any push
- * happens — a skewed device writes a skewed timestamp whether or not it was ever rejected.
+ * happens; a skewed device writes a skewed timestamp whether or not it was ever rejected.
  */
 function valueState(world: PropertyWorld): readonly string[] {
   const snapshot = world.server.snapshot(world.scopeId);

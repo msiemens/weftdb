@@ -1,4 +1,4 @@
-// What an edit costs with no network and no disk: the mutation path on its own.
+// What an edit costs with no network and no disk in the way, the mutation path on its own.
 import { txnId, type FieldName, type RowId, type WireValue } from "weftdb/core";
 import { inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
@@ -25,7 +25,7 @@ const GROUP = "Local writes";
 const CREATES_PER_SAMPLE = 500;
 const UPDATES_PER_SAMPLE = 200;
 const OFFLINE_UPDATES_PER_SAMPLE = 50;
-/** The dataset an update is measured against: large enough to be a real list, small enough to seed. */
+/** The dataset an update is measured against, large enough to be a real list, small enough to seed. */
 const UPDATE_DATASET_ROWS = 1_000;
 
 interface NewRow {
@@ -70,7 +70,7 @@ async function createThroughput(config: BenchConfig): Promise<CaseResult> {
 }
 
 /**
- * Updates across distinct rows on a device that starts each sample with a drained outbox — a
+ * Updates across distinct rows on a device that starts each sample with a drained outbox, a
  * burst of edits between two syncs.
  */
 async function updateThroughput(config: BenchConfig, field: FieldName, id: string, label: string): Promise<CaseResult> {
@@ -81,8 +81,8 @@ async function updateThroughput(config: BenchConfig, field: FieldName, id: strin
   const rows = Array.from({ length: UPDATES_PER_SAMPLE }, (_unused, index) => todoId(index));
   let counter = 0;
   const samples = await repeatAsync(async () => {
-    // Draining is setup, not measurement: how much an unsent backlog costs is what the offline
-    // series below is for, and here it would make each sample depend on the one before it.
+    // Draining is setup rather than measurement, because how much an unsent backlog costs is what
+    // the offline series below is for, and here it would make each sample depend on the one before it.
     await client.syncWith(inProcessTransport(server), HASH);
     counter += 1;
     const start = performance.now();
@@ -105,8 +105,8 @@ async function updateThroughput(config: BenchConfig, field: FieldName, id: strin
 
 /**
  * The same edit made by a device that has been offline. Repeating the edit on one field keeps the
- * backlog constant — an unsent write is superseded rather than followed — so what varies between
- * these cases is only how much unsent work the mutator has to look through.
+ * backlog constant, since an unsent write is superseded rather than followed, so what varies
+ * between these cases is only how much unsent work the mutator has to look through.
  */
 async function offlineUpdateThroughput(config: BenchConfig, backlogOps: number): Promise<CaseResult> {
   const row = todoId(0);

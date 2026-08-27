@@ -1,6 +1,6 @@
 // What a device pays to be brought up from nothing: the server building a snapshot, the wire
-// carrying it, and the client applying it. The serialization is split into its two halves,
-// because at these sizes they are not the same size at all.
+// carrying it, and the client applying it. The serialization splits into encoding and hashing,
+// measured separately below, because at these sizes neither cost is the other.
 import { sha256Hex } from "weftdb/shared";
 import { contentAddressSnapshot, snapshotToNdjson, type SnapshotEnvelope } from "weftdb/server/snapshot";
 import { WeftServer, type Snapshot } from "weftdb/server";
@@ -156,9 +156,9 @@ async function applyCase(config: BenchConfig, rows: number, built: Snapshot): Pr
 }
 
 /**
- * Two sizes, because they differ. The NDJSON body is the snapshot's own encoding; the `/snapshot`
- * response wraps it in an envelope that also carries the structured snapshot, so the bytes on the
- * wire are the records twice over.
+ * The NDJSON body is the snapshot's own encoding; the `/snapshot` response wraps it in an
+ * envelope that also carries the structured snapshot, so the bytes on the wire are the records
+ * twice over.
  */
 function sizeCases(rows: number, built: Snapshot, body: string): readonly CaseResult[] {
   return [

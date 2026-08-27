@@ -1,5 +1,5 @@
 // Sustained throughput through the relay: a batch of queued ops pushed in one session, and a
-// device reading the same work back. The relay here keeps its state in memory — the durable
+// device reading the same work back. The relay here keeps its state in memory. The durable
 // relay is measured separately, and the two differ by more than a constant factor.
 import { connectSocketTransport, httpTransport, inProcessTransport, WeftClient } from "weftdb/client";
 import { WeftServer } from "weftdb/server";
@@ -75,8 +75,8 @@ function socketPush(config: BenchConfig, ops: number): Promise<CaseResult> {
 }
 
 /**
- * One push of the whole outbox. The relay is fresh for every sample: a scope that already holds
- * records would be answering a different question, which is what the durable-relay group asks.
+ * One push of the whole outbox. The relay is fresh for every sample, because a scope that already
+ * holds records would be answering a different question, which is what the durable-relay group asks.
  */
 async function pushOverTransport(
   config: BenchConfig,

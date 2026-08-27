@@ -241,12 +241,13 @@ ${[
   "  _weft_rev INTEGER NOT NULL DEFAULT 0",
   "  _weft_dirty INTEGER NOT NULL DEFAULT 0",
   // A declared field is stored as its column's own type, so a null field and a field that was
-  // never written both read back as SQL NULL. This says which of the two a NULL is, and only
-  // the client store reads it: nothing compiled against the generated types names it.
+  // never written both read back as SQL NULL. `_weft_null_fields` records which of the two a
+  // NULL is, and only the client store reads it, since nothing compiled against the generated
+  // types names it.
   "  _weft_null_fields TEXT",
   // Keyed the way every framework table is keyed. A row id is unique within its scope and
-  // nowhere else, so one database holding two scopes has two rows legitimately sharing an id —
-  // and a key on `id` alone turns the second one into a constraint failure.
+  // nowhere else, so one database holding two scopes has two rows legitimately sharing an id,
+  // and a key on `id` alone would turn the second one into a constraint failure.
   "  PRIMARY KEY (scope_id, id)",
 ].join(",\n")}
 );${indexDdl(tableName, fields)}`;
@@ -255,9 +256,10 @@ ${[
 /**
  * An index per field the schema asked for, led by `scope_id`.
  *
- * Every statement a device runs is scoped, so a query narrows by `scope_id` before anything else
- * and an index that left it out could only be reached after that. `installSchema` runs the whole
- * DDL on every open, so a field that gains an index has one from the next open.
+ * Every statement a device runs is scoped, so a query narrows by `scope_id` before it does
+ * anything else, and an index that led with a different column could not serve that query.
+ * `installSchema` runs the whole DDL on every open, so a field that gains an index has one from
+ * the next open.
  */
 function indexDdl(tableName: string, fields: readonly (readonly [string, FieldDefinition])[]): string {
   return fields
@@ -280,10 +282,10 @@ function generateDatabaseTypes(schema: SchemaDefinition): string {
 }
 
 /**
- * Two collections whose names differ only in punctuation — `todo_events` and `todoEvents` —
- * produce the same identifiers once the generator has capitalised them, and emitting both would
- * hand one of them the other's query, decoder, hook and mutators. There is no safe choice to
- * make on the author's behalf here: renaming one silently would be worse than saying so.
+ * Two collections whose names differ only in punctuation, such as `todo_events` and
+ * `todoEvents`, produce the same identifiers once the generator has capitalised them, and
+ * emitting both would hand one of them the other's query, decoder, hook and mutators. Silently
+ * renaming one would hide that collision from whoever wrote the schema, so this throws instead.
  */
 function assertDistinctGeneratedNames(schema: SchemaDefinition): void {
   const claimed = new Map<string, string>();
@@ -314,9 +316,10 @@ export function generateMutators(schema: SchemaDefinition): string {
         "}",
         "",
         // The transaction id is the caller's to supply, because the relay applies a transaction as
-        // a unit: two writes that must land together — a row's new status and the event that
-        // records it, in two collections — share one, and left to the default they would be two
-        // transactions that can be accepted separately.
+        // a unit. Two writes that must land together, such as a row's new status and the event
+        // that records it in another collection, share one only if the caller passes the same
+        // id; otherwise each call gets its own and the relay accepts them as two separate
+        // transactions.
         `export interface ${typeName(tableName, "Mutators")} {`,
         `  create(id: string, values: ${inputName}, txnId?: TxnId): Promise<void>;`,
         collection.kind === "eventLog"
@@ -333,11 +336,10 @@ export function generateMutators(schema: SchemaDefinition): string {
 }
 
 /**
- * The runtime the schema implies: a decoder per collection, the mutator interfaces implemented
- * against a `MutationTarget`, and a React hook per collection. Without these an application
- * writes its own store — hand-decoding `ReadonlyMap<FieldName, WireValue>` into its row type,
- * and having to know that a decoded array must be cached against its snapshot or React will
- * re-render forever. That is generated code's job, not the application's.
+ * The runtime the schema implies. A decoder per collection, the mutator interfaces implemented
+ * against a `MutationTarget`, and a React hook per collection. Without these, an application
+ * would hand-decode `ReadonlyMap<FieldName, WireValue>` into its own row type and would have to
+ * know that the decoded array must be cached against its snapshot or React re-renders forever.
  */
 export function generateBindings(schema: SchemaDefinition): string {
   assertDistinctGeneratedNames(schema);
@@ -360,9 +362,9 @@ export function generateBindings(schema: SchemaDefinition): string {
       .flatMap(([name]) => [typeName(name, "Mutation"), typeName(name, "Mutators")])
       .join(", ")} } from "./mutators.ts";`,
     "",
-    // One name for what every hook below reads through. The narrow shape still exists in
-    // `weftdb-react` for the two hooks that genuinely need nothing more, but an application that
-    // names two source types has to work out which of them each of its components takes.
+    // One name for what every hook below reads through. The narrower shape still exists in
+    // `weftdb-react` for the two hooks that need only it, and an application that names two
+    // source types has to work out which of them each of its components takes.
     "/** The subscription engine, the client's row map, the scope, and the statement selection. */",
     "export type { WeftSource };",
     "",
@@ -439,9 +441,9 @@ export function generateBindings(schema: SchemaDefinition): string {
       "",
       `/**`,
       ` * A statement over \`${name}\`, scoped and selecting \`id\` before the callback sees it. Chain`,
-      ` * \`where\`, \`orderBy\`, \`limit\`, and \`offset\` onto it. Scoping is not the caller's to get`,
-      ` * right: one database file holds every scope, and a row id is unique only within its`,
-      ` * collection, so an unscoped statement can match another scope's row.`,
+      ` * \`where\`, \`orderBy\`, \`limit\`, and \`offset\` onto it. One database file holds every scope,`,
+      ` * and a row id is unique only within its collection, so an unscoped statement can match`,
+      ` * another scope's row; scoping it here means the caller never has to get that right itself.`,
       ` */`,
       `export function ${sqlQuery}(scopeId: string, build: ${builderTypeName} = (statement) => statement): ReactiveSqlQuery {`,
       `  const scoped = weftStatements.selectFrom(${JSON.stringify(name)}).select("id").where("scope_id", "=", scopeId);`,
@@ -460,7 +462,7 @@ export function generateBindings(schema: SchemaDefinition): string {
 
 /**
  * Ordering, for a collection that declares a fractional index. The schema already says which
- * field that is, so where to put a row is arithmetic on its neighbours' ranks — and getting it
+ * field that is, so where to put a row is arithmetic on its neighbours' ranks, and getting it
  * wrong is subtle enough (a rank must be *strictly between* two others, and two devices must
  * not collide in the same gap) that every application working it out again is a bug waiting to
  * be written a second time.
@@ -482,9 +484,9 @@ function reorderHelpers(name: string, collection: CollectionDefinition): readonl
     "}",
     "",
     "/**",
-    " * Moves the row at `index` one place. Reordering writes one field — the row's new rank,",
-    " * taken from between the two rows it lands between — so nothing below it is renumbered and",
-    " * two devices reordering at once do not undo each other.",
+    " * Moves the row at `index` one place. Reordering writes one field, the row's new rank, taken",
+    " * from between the two rows it lands between, so nothing below it is renumbered and two",
+    " * devices reordering at once do not undo each other.",
     " */",
     `export async function move${typeName(name, "")}(`,
     `  mutators: ${mutators},`,
@@ -511,7 +513,7 @@ function decodeExpression(field: string, definition: FieldDefinition): string {
   const fallback = definition.nullable ? "null" : defaultLiteral(definition);
   if (definition.values !== undefined) {
     // A value outside the set reaches here from a device running a schema this build does not
-    // have, so it is read as absent rather than returned as a member of a union it is not in.
+    // have. It is read as absent, so no caller can be handed a value outside the union it decoded.
     const allowed = definition.values.map((value) => JSON.stringify(value)).join(", ");
     return `([${allowed}] as unknown[]).includes(${read}) ? ${read} as ${tsType(definition)} : ${fallback}`;
   }
@@ -522,10 +524,9 @@ function decodeExpression(field: string, definition: FieldDefinition): string {
       return `${read} === true${definition.nullable ? ` ? true : ${read} === false ? false : null` : ""}`;
     case "json":
       // The wire carries a `WireValue` and the schema says the field holds a `Tags`; neither is
-      // assignable to the other, because an interface has no index signature, so the declared
-      // type is asserted through `unknown` rather than pretended to overlap. That assertion is
-      // the whole content of declaring the type: it is the author's word, taken here once, so
-      // that no read of the field has to take it again.
+      // assignable to the other, because an interface has no index signature. The declared type
+      // is asserted through `unknown` here, once, so no other read of the field has to assert it
+      // again.
       return definition.jsonType === undefined
         ? `(${read} ?? ${fallback}) as ${tsType(definition)}`
         : `(${read} ?? ${fallback}) as unknown as ${tsType(definition)}`;
@@ -535,11 +536,11 @@ function decodeExpression(field: string, definition: FieldDefinition): string {
 }
 
 /**
- * Two relationships can want the same generated name — `a_b.c` and `a.b_c` both read as
- * `a_b_cRelation` — and no separator escapes it, because a table may itself contain whatever
- * separator the join uses. Emitting both would redeclare the helper and its result type, so the
- * collision is reported the way a colliding pair of collections is: by name, before anything is
- * written.
+ * Two relationships can want the same generated name. `a_b.c` and `a.b_c` both read as
+ * `a_b_cRelation`, and no separator escapes it, because a table may itself contain whatever
+ * separator the join uses. Emitting both would redeclare the helper and its result type, so this
+ * reports the collision by name before anything is written, the same way a colliding pair of
+ * collections is.
  */
 function assertDistinctRelationshipNames(schema: SchemaDefinition): void {
   const claimed = new Map<string, string>();
@@ -564,13 +565,13 @@ function assertDistinctRelationshipNames(schema: SchemaDefinition): void {
 }
 
 /**
- * The joiner each declared relationship implies: a function that indexes the target rows once and
+ * The joiner each declared relationship implies, a function that indexes the target rows once and
  * returns a lookup over that index.
  *
- * The rows are the caller's. The client already holds them, so nothing here queries and nothing
- * here reaches for a source. Indexing on the way in is what the descriptor alone could not give:
- * a list that filters the targets once per parent row is O(n*m), and every application that wrote
- * its own joiner had to know that before it wrote it.
+ * The rows are the caller's, already held by the client, so nothing here queries or reaches for a
+ * source. Indexing them once here turns what would otherwise be an O(n*m) filter per parent row
+ * into one pass over the targets, the same saving every application that wrote its own joiner had
+ * to find on its own.
  */
 export function generateRelationshipHelpers(schema: SchemaDefinition): string {
   assertDistinctRelationshipNames(schema);
@@ -578,19 +579,19 @@ export function generateRelationshipHelpers(schema: SchemaDefinition): string {
   const helpers = Object.entries(schema.collections)
     .flatMap(([tableName, collection]) =>
       Object.entries(collection.relationships).map(([relationshipName, relationship]) => {
-        // The schema already says which collection is on the far side, so the result is that
-        // collection's row rather than `unknown` — the whole point of declaring the relationship.
-        // A relationship may still name a table this schema does not define, which `weft doctor`
-        // warns about and generation tolerates; `Database["absent"]` would be an error rather
-        // than a warning, so that one stays `unknown`.
+        // The schema already says which collection is on the far side, so the result type is that
+        // collection's row. A relationship may still name a table this schema does not define;
+        // `weft doctor` warns about that case at generation time. Typing it as
+        // `Database["absent"]` would fail to compile, so that case is typed `unknown` instead.
         const target = schema.collections[relationship.table];
         const row = target === undefined ? "unknown" : `Database[${JSON.stringify(relationship.table)}]`;
         const helper = `${tableName}_${relationshipName}Relation`;
         const result = typeName(`${tableName}_${relationshipName}`, "Result");
-        // Bound rather than fixed, so a caller may hold a row of its own that carries the joined
-        // field and get that row back. An application decorates what a hook returned — a dirty
-        // flag, a nested author — and a parameter fixed to the generated row would either refuse
-        // the decorated row or hand back the bare one.
+        // A generic parameter, bound to `targetBound` instead of fixed to the generated row type,
+        // lets a caller hold a row of its own that carries the joined field and get that same row
+        // back. An application often decorates what a hook returned, for example with a dirty
+        // flag or a nested author; a parameter fixed to the generated row would either refuse the
+        // decorated row or hand back the bare one.
         const targetBound = joinedFieldType(schema, relationship.table, relationship.foreignField);
         const sourceBound = joinedFieldType(schema, tableName, relationship.localField);
         const foreign = JSON.stringify(relationship.foreignField);
@@ -609,8 +610,9 @@ export function generateRelationshipHelpers(schema: SchemaDefinition): string {
             ` * \`${tableName}.${relationshipName}\`, over rows the caller already holds.`,
             ` *`,
             ` * The targets are indexed on \`${relationship.foreignField}\` here, once; the function this returns`,
-            ` * answers a source row from that index, so a list costs one pass over the targets rather than one`,
-            ` * pass per row. A row may point at a target this device has not synced, which is what \`undefined\` is.`,
+            ` * answers a source row from that index in a single lookup, instead of a fresh filter over every`,
+            ` * target per call. A row may point at a target this device has not synced, which is what`,
+            ` * \`undefined\` is.`,
             ` */`,
             ...signature,
             "  const index = new Map<string, Target>();",
@@ -632,8 +634,8 @@ export function generateRelationshipHelpers(schema: SchemaDefinition): string {
           ` * \`${tableName}.${relationshipName}\`, over rows the caller already holds.`,
           ` *`,
           ` * The targets are indexed on \`${relationship.foreignField}\` here, once; the function this returns`,
-          ` * answers a source row from that index, so a list costs one pass over the targets rather than one`,
-          ` * pass per row. A source row with nothing on the far side gets the same empty list every time.`,
+          ` * answers a source row from that index in a single lookup, instead of a fresh filter over every`,
+          ` * target per call. A source row with nothing on the far side gets the same empty list every time.`,
           ` */`,
           ...signature,
           "  const index = new Map<string, Target[]>();",
@@ -651,9 +653,10 @@ export function generateRelationshipHelpers(schema: SchemaDefinition): string {
     .join("\n\n");
   if (helpers.length === 0) return "export {};\n";
   const header: string[] = [];
-  // The same `Database` the bindings import, and from the same place: `weft generate` writes both
-  // files into one directory. Whether it is named at all is read off what was emitted, because
-  // each relationship can reach for it from the result type and from either side of the join.
+  // The same `Database` the bindings import, from the same place, since `weft generate` writes
+  // both files into one directory. Whether the import is emitted at all is read off what the
+  // helpers actually reference, because each relationship can reach for it from the result type
+  // and from either side of the join.
   if (helpers.includes("Database[")) header.push('import type { Database } from "./database.d.ts";', "");
   if (joinsMany) {
     header.push(
@@ -667,13 +670,13 @@ export function generateRelationshipHelpers(schema: SchemaDefinition): string {
 }
 
 /**
- * What one side of a join has to carry for the accessor to read its key: the generated row type,
+ * What one side of a join has to carry for the accessor to read its key, the generated row type
  * narrowed to the single field the relationship names.
  *
- * A field the collection does not declare has no such type — reachable only through a
+ * A field the collection does not declare has no such type, reachable only through a
  * `SchemaDefinition` that never passed `defineSchema`, the same way an unresolvable target table
- * is — and `Pick` of a name that is not a key would be an error rather than the warning
- * `weft doctor` gives it.
+ * is. `Pick` of a name that is not a key would be a compile error where `weft doctor` gives only
+ * a warning, so this falls back to `Readonly<Record<string, unknown>>` instead.
  */
 function joinedFieldType(schema: SchemaDefinition, table: string, field: string): string {
   const collection = schema.collections[table];
@@ -688,8 +691,8 @@ export function generateNestedMappers(schema: SchemaDefinition): string {
     .filter(([, collection]) => Object.keys(collection.fields).some((fieldName) => fieldName.includes("__")))
     .map(([tableName, collection]) => generateNestedMapper(tableName, collection));
   if (mappers.length === 0) return "export {};\n";
-  // One definition for the file, however many collections nest fields: a copy per mapper is a
-  // duplicate function implementation, which is an error rather than a redundancy.
+  // One `assignNested` definition for the file no matter how many collections nest fields,
+  // because a copy per mapper would be a duplicate function implementation and a compile error.
   return `${[...mappers, ASSIGN_NESTED].join("\n\n")}\n`;
 }
 
@@ -699,13 +702,10 @@ function typeFields(collection: CollectionDefinition): string {
     .join("\n");
 }
 
-// `date` columns hold ISO-8601 text, which is what the client actually writes into `created`
-// and what sorts chronologically under SQLite's own collation. Declaring them INTEGER made the
-// generated types disagree with every row the runtime produces.
 function enumCheck(name: string, field: FieldDefinition): string {
   if (field.values === undefined) return "";
   // An enum member is stored as the bare string it is, so the constraint lists exactly the
-  // values the schema declares — the same set the generated union offers.
+  // values the schema declares, the same set the generated union offers.
   const allowed = field.values.map((value) => `'${value.replaceAll("'", "''")}'`).join(", ");
   return ` CHECK (${quoteIdent(name)} IN (${allowed})${field.nullable ? ` OR ${quoteIdent(name)} IS NULL` : ""})`;
 }
@@ -715,15 +715,17 @@ function domainColumnDdl(name: string, field: FieldDefinition, mode: "create" | 
 }
 
 function sqliteType(field: FieldDefinition): string {
-  // One source for the column type and for what the client store writes into it: they were two,
-  // and the store's JSON text landed in columns declared INTEGER.
+  // One source decides both the column type here and what the client store writes into a field,
+  // so a value's storage type and its column type cannot independently drift apart. `date`
+  // columns hold ISO-8601 text, which the client actually writes and which sorts chronologically
+  // under SQLite's own text collation.
   const storage = fieldStorage(field);
   return storage === "number" || storage === "boolean" ? "INTEGER" : "TEXT";
 }
 
 function tsType(field: FieldDefinition): string {
-  // An enum is worth its values: a row typed `"open" | "done"` is checked wherever it is used,
-  // where `string` would only be checked at the database.
+  // An enum is worth its values. A row typed `"open" | "done"` is checked wherever it is used,
+  // while `string` would only be checked at the database.
   const base =
     field.values !== undefined
       ? field.values.map((value) => JSON.stringify(value)).join(" | ")
@@ -743,10 +745,10 @@ function tsType(field: FieldDefinition): string {
 /**
  * Every declared json type in the schema, once each, in the order the schema names them.
  *
- * Two fields may share a type — a `Tags` on three collections is one import — but two different
- * types cannot share a name, because the generated file has one namespace and would import the
- * second over the first. That is reported by name here rather than left to fail as a redeclared
- * import in machine-written code.
+ * Two fields may share a type, for example a `Tags` used on three collections importing it once,
+ * but two different types cannot share a name, because the generated file has one namespace and
+ * would import the second over the first. This is checked by name here, so a name collision is
+ * caught before it becomes a redeclared import failing inside machine-written code.
  */
 function declaredJsonTypes(schema: SchemaDefinition): readonly JsonTypeReference[] {
   const claimed = new Map<string, { readonly reference: JsonTypeReference; readonly path: string }>();
@@ -785,8 +787,8 @@ function jsonTypeImports(schema: SchemaDefinition): readonly string[] {
 /**
  * What the schema cannot check about a declared json type, the generated bindings can. The value
  * is stored with `encodeWireValue`, so a type JSON cannot carry describes a field that throws on
- * its first write; instantiating the check below with such a type is a compile error in the
- * generated file, which is as close to the declaration as a name alone can be caught.
+ * its first write. Instantiating the check below with such a type fails to compile in the
+ * generated file, which is the earliest point a generated file can catch it.
  */
 function jsonTypeGuard(schema: SchemaDefinition): readonly string[] {
   const declared = declaredJsonTypes(schema);
@@ -794,11 +796,11 @@ function jsonTypeGuard(schema: SchemaDefinition): readonly string[] {
   return [
     "/**",
     " * A json field is stored as JSON, so a type declared for one has to be a type JSON can carry.",
-    " * Assignability to `WireValue` alone is the wrong test: an `interface` has no implicit index",
-    " * signature however plain its properties are, so it would refuse most of what an application",
-    " * declares. This walks the type instead — an array of carriable elements, or an object whose",
-    " * every property is carriable — and stops at a method, which is what a `Date` or a `Map`",
-    " * reduces to and what has no wire form at all.",
+    " * Assignability to `WireValue` alone is the wrong test, because an `interface` has no",
+    " * implicit index signature however plain its properties are, so it would refuse most of what",
+    " * an application declares. This walks the type instead, checking that it is an array of",
+    " * carriable elements or an object whose every property is carriable, and stops at a method,",
+    " * which is what a `Date` or a `Map` reduces to and what has no wire form at all.",
     " */",
     "type WeftJsonCarriable<Value> = Value extends WireValue",
     "  ? Value",
@@ -829,9 +831,9 @@ function defaultLiteral(field: FieldDefinition): string {
 }
 
 /**
- * What an added column holds for rows written before it existed. It is the stored form, not the
- * wire form: a column added to an existing table is read by the same decoder as one declared
- * with the table, so a number defaults to a number and a string to a bare string.
+ * What an added column holds for rows written before it existed. Because a column added to an
+ * existing table is read by the same decoder as one declared with the table, this has to be the
+ * stored form, so a number defaults to a number and a string to a bare string.
  */
 function sqlDefaultLiteral(field: FieldDefinition): string {
   if (field.values?.[0] !== undefined) return `'${field.values[0].replaceAll("'", "''")}'`;
@@ -847,7 +849,7 @@ function sqlDefaultLiteral(field: FieldDefinition): string {
   }
 }
 
-/** `todo_events` + `Query` becomes `todoEventsQuery`: a value, not a type. */
+/** `todo_events` + `Query` becomes `todoEventsQuery`, a value identifier lowercased from `typeName`. */
 function memberName(input: string, suffix: string): string {
   const pascal = typeName(input, suffix);
   return `${pascal[0]?.toLowerCase() ?? ""}${pascal.slice(1)}`;
@@ -904,8 +906,8 @@ const TS_IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/u;
 
 /**
  * A key in a generated interface or object literal. A field name is whatever the schema says it
- * is — `first-name` is a perfectly good column — but only some of those are identifiers, and an
- * unquoted one does not parse.
+ * is, and `first-name` is a perfectly good column, but only some field names are valid
+ * identifiers, so an unquoted one would not parse.
  */
 function propertyName(value: string): string {
   return TS_IDENTIFIER.test(value) ? value : JSON.stringify(value);

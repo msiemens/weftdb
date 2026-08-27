@@ -1,9 +1,9 @@
-// Durability: what survives a process that dies without warning.
+// Durability tests what survives a process that dies without warning.
 //
-// The client's local database is its state, not a cache of it (§4.1), and §10 depends on
-// that — unsent ops sit on disk with no session present until sign-in lets them push. The
-// server acknowledges a push only after committing it, and the client drains its outbox on
-// that acknowledgement, so an acknowledged transaction has to survive a crash too.
+// The client's local database holds its actual state under §4.1, so unsent ops sit on disk with
+// no session present until sign-in lets them push, and §10 depends on that holding. The server
+// acknowledges a push only after committing it, and the client drains its outbox on that
+// acknowledgement, so an acknowledged transaction has to survive a crash too.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -41,7 +41,7 @@ test("unsent local work survives losing the process", async (t) => {
 
     await client.create(TASKS, rowId("task-1"), { [TITLE]: "written before the crash" }, txnId("create"));
     await client.update(TASKS, rowId("task-1"), { [TITLE]: "edited before the crash" }, txnId("edit"));
-    // Nothing calls save(): a mutation's promise resolves once the write it made has committed.
+    // Nothing calls save(). A mutation's promise resolves once the write it made has committed.
   }
 
   using file = openSqliteExecutor(path);
@@ -153,8 +153,7 @@ process.kill(process.pid, "SIGKILL");
 `;
 
 /**
- * Inside the workspace rather than the system temp directory: the crash test spawns a child
- * that imports the packages, so it has to sit somewhere they resolve from.
+ * Inside the workspace, where the packages the crash test's child imports actually resolve from.
  */
 function temporaryDirectory(t: import("vitest").TestContext): string {
   const directory = mkdtempSync(join(process.cwd(), ".weft-durability-"));

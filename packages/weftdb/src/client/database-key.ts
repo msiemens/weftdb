@@ -8,10 +8,10 @@
 //
 // Both halves are strings an application chose, and that is the whole difficulty of composing them.
 // Joined with a separator alone, namespace `a:b` with scope `c` and namespace `a` with scope `b:c`
-// produce one key — two applications sharing one lock, one worker and one file, with nothing
-// anywhere reporting it. The length prefix removes the ambiguity rather than forbidding a character:
-// the digits before the first colon say how long the namespace is, so where it ends is read off the
-// key instead of searched for, and both halves may then hold any character at all, colons included.
+// produce one key, so two applications would share one lock, one worker and one file, with nothing
+// anywhere reporting it. The length prefix removes the ambiguity, because the digits before the
+// first colon say how long the namespace is, so where it ends is read off the key instead of
+// searched for, and both halves may then hold any character at all, colons included.
 
 /** What a database with no namespace of its own is in. Also what prefixes the device id's key. */
 export const DEFAULT_NAMESPACE = "weft";
@@ -31,8 +31,8 @@ export interface WeftDatabaseIdentity {
  * The key for one device database: `<length>:<namespace>:<scopeId>`.
  *
  * Distinct pairs give distinct keys, which is the only property anything asks of it. Reading it back
- * is unambiguous for the same reason: the leading digits end at the first colon and say how many
- * characters of namespace follow, and the scope is the remainder.
+ * is unambiguous too, because the leading digits end at the first colon and say how many characters
+ * of namespace follow, and the scope is the remainder.
  */
 export function weftDatabaseKey(scopeId: string, namespace: string = DEFAULT_NAMESPACE): string {
   return `${String(namespace.length)}:${namespace}:${scopeId}`;

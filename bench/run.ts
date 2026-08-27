@@ -18,8 +18,8 @@
 //         "label":      what to call it in front of a person,
 //         "unit":       "ms" | "ops/s" | "records/s" | "bytes",
 //         "median":     nearest-rank median of the samples, in `unit`,
-//         "p95":        nearest-rank 95th percentile — for a rate, the rate at the *slowest*
-//                       duration, so it is the pessimistic tail and lower than the median,
+//         "p95":        nearest-rank 95th percentile, which for a rate is the rate at the
+//                       *slowest* duration, so it is the pessimistic tail and lower than the median,
 //         "iterations": how many samples the two numbers come from, warmup excluded,
 //         "note":       what was measured, and the caveat that belongs beside the number
 //       }

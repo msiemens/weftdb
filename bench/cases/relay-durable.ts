@@ -1,5 +1,5 @@
 // The same relay with a SQLite file under it. A push is acknowledged only once it is committed,
-// so this is what a deployment that must survive a power cut actually costs — and the adapter
+// so this is what a deployment that must survive a power cut actually costs. The adapter also
 // rewrites the whole scope per push, which the incremental cases below are here to show.
 import { httpTransport } from "weftdb/client";
 import { OPS_PER_CREATE, benchClient, seedRows, startBenchRelay, tempDirectory } from "../fixtures.ts";

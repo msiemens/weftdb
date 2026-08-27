@@ -27,7 +27,7 @@ import type { AsyncSyncTransport, PushResult } from "./transport.ts";
  * A write addressed a row this device does not hold.
  *
  * Separate from an ordinary `Error` because it is the one failure a mutator has that an application
- * can be expected to meet in normal use: an edit debounced behind a keystroke reaches the client
+ * can be expected to meet in normal use. An edit debounced behind a keystroke reaches the client
  * after the row was deleted, here or on another device, and there is nothing left to write to. A
  * caller that can tell this apart can drop the edit and carry on, where anything else is a fault.
  *
@@ -64,7 +64,7 @@ export interface LocalRow {
   scopeId: ScopeId;
   /**
    * The collection this row belongs to. A row id is unique within its table and nowhere else,
-   * so anything that keys rows by id alone — a query's result set, an identity cache — conflates
+   * so anything that keys rows by id alone (a query's result set, an identity cache) conflates
    * two collections that happen to share one.
    */
   tableName: TableName;
@@ -85,11 +85,11 @@ export type QuarantinedOp = WeftOp & { rejectedAt: number; reason: Rejection["re
 
 /**
  * Somewhere durable for the client to write itself to. §4.1 makes local storage the client's
- * state rather than a cache of it, and §10 depends on that: unsent ops have to sit on disk
+ * state instead of a cache of it, and §10 depends on that. Unsent ops have to sit on disk
  * across a restart, with no session present, until sign-in lets them push.
  *
  * `save` resolves when the write has committed and rejects when it has not, and that promise is
- * what every mutator hands back — so a caller that awaits a write is told which of the two
+ * what every mutator hands back, so a caller that awaits a write is told which of the two
  * happened, and the state a caller sees is one the database holds.
  */
 export interface ClientPersistence {
@@ -119,10 +119,10 @@ export class WeftClient {
   private readonly now: () => number;
   /**
    * Rows whose stored copy may be out of date, as `table\0row` keys. A store writes these and
-   * leaves the rest alone: without them the only way to persist a keystroke is to write every
+   * leaves the rest alone. Without them the only way to persist a keystroke is to write every
    * row the device holds, which on a long list is a fifth of a second of blocked typing.
    *
-   * A key is recorded whether the row was written, deleted or brought back — what the client
+   * A key is recorded whether the row was written, deleted or brought back. What the client
    * holds under it now decides which of those the store performs.
    */
   readonly touchedRows = new Set<string>();
@@ -167,7 +167,7 @@ export class WeftClient {
       ...typedEntries(values),
     ];
     for (const [field, value] of initialValues) {
-      // The base fields go into the row as well as onto the wire: they are as true of a row the
+      // The base fields go into the row as well as onto the wire. They are as true of a row the
       // moment it is made as once the server has seen it. A query selecting them cannot match a
       // row that lacks them, and a decoder reads them as blank, so without this a new row is
       // invisible to the application until it has been pushed (§4.1).
@@ -201,23 +201,24 @@ export class WeftClient {
   ): Promise<void> {
     // Append-class rows accept no `set` after the transaction that created them, from any
     // client (§9.23). Queuing one locally would show a value that is never going to be real
-    // and put the edit in quarantine when the server refuses it — the same reason delete and
-    // restore are refused here rather than sent.
+    // and put the edit in quarantine when the server refuses it. Delete and restore are
+    // refused here for the same reason, instead of being sent.
     this.rejectAppendClassLifecycle(tableName, "edited");
     const row = this.requireRow(tableName, rowId);
     for (const [field, value] of typedEntries(values)) {
       const merge = this.schema.collections[tableName]?.fields[field]?.merge ?? "lww";
-      // A field holds one value, so an unsent write to it is replaced rather than followed.
-      // Sending both would be pointless under last-writer-wins and actively wrong under
-      // diff3, where the second edit's ancestor is a version only this device ever held.
+      // A field holds one value, so an unsent write to it replaces the one already queued
+      // instead of following it. Sending both would be pointless under last-writer-wins and
+      // actively wrong under diff3, where the second edit's ancestor is a version only this
+      // device ever held.
       this.supersedeQueuedSet(tableName, rowId, field);
       const op = this.setOp(tableName, rowId, field, value, txnId);
       if (merge === "diff3") {
-        // The ancestor is what the server will hold when it reaches this op — which is the
-        // value of the last write already queued for this field, not the last one the server
-        // acknowledged. Two edits queued before a sync are pushed together, so basing the
-        // second on the server's old value guarantees a `merge_required` for an edit nobody
-        // else touched (§5.4).
+        // The ancestor is what the server will hold when it reaches this op. That is the
+        // value of the last write already queued for this field, which can differ from the
+        // last one the server acknowledged. Two edits queued before a sync are pushed together,
+        // so basing the second on the server's old value guarantees a `merge_required` for an
+        // edit nobody else touched (§5.4).
         op.baseHash = stableHash(
           this.pendingValue(tableName, rowId, field) ?? row.internals.diff3Base.get(field) ?? null,
         );
@@ -271,10 +272,10 @@ export class WeftClient {
     };
     this.rows.set(key, row);
     this.pushOutbox(this.rowOp(tableName, rowId, "restore", txnId));
-    // Base fields go into the row for the same reason they do on a create: a query selecting
+    // Base fields go into the row for the same reason they do on a create. A query selecting
     // them cannot match a row that lacks them, so without this a restored row is invisible to
-    // the application until it has been pushed and pulled back. They do not go onto the wire —
-    // the row still exists on the server, which refuses a write to any of them.
+    // the application until it has been pushed and pulled back. They do not go onto the wire,
+    // because the row still exists on the server, which refuses a write to any of them.
     for (const [field, value] of [
       [fieldName("id"), rowId],
       [fieldName("scope_id"), this.scopeId],
@@ -319,8 +320,8 @@ export class WeftClient {
     this.quarantine.splice(0, this.quarantine.length, ...this.quarantine.filter((op) => op.txnId !== txnId));
     for (const op of discarded) this.recomputeDirty(op.tableName, op.rowId);
     // Discarding is "drop the local change and re-pull" (§5.5). Dropping the ops alone would
-    // strand whatever they had already written locally — a row the server has never seen and
-    // now never will — so the next sync re-derives this scope from a snapshot.
+    // strand whatever they had already written locally (a row the server has never seen and
+    // now never will), so the next sync re-derives this scope from a snapshot.
     this.resyncRequired = true;
     await this.persist();
   }
@@ -394,8 +395,8 @@ export class WeftClient {
   }
 
   /**
-   * Sends the outbox. Every exit from the push loop changes durable state — drained, re-stamped,
-   * rebased or quarantined — so the write-through happens once, whichever way it ends.
+   * Sends the outbox. Every exit from the push loop changes durable state (drained, re-stamped,
+   * rebased or quarantined), so the write-through happens once, whichever way it ends.
    */
   async flushWith(transport: AsyncSyncTransport): Promise<void> {
     try {
@@ -435,9 +436,9 @@ export class WeftClient {
 
   private applyPushResult(result: PushResult, sent: readonly WeftOp[]): "retry" | "stop" {
     if (result.ok) {
-      // Draining first matters: the dirty predicate is recomputed from the outbox, so
+      // Draining first matters, because the dirty predicate is recomputed from the outbox, so
       // acknowledged rows would stay dirty forever if their entries were still in it. Only
-      // what was actually sent is drained — over a network an edit made while the push was in
+      // what was actually sent is drained. Over a network an edit made while the push was in
       // flight is sitting in the outbox, acknowledged by nobody.
       const acknowledged = new Set<WeftOp>(sent);
       this.retainQueued((op) => !acknowledged.has(op));
@@ -447,15 +448,15 @@ export class WeftClient {
       // condition decides whether there is anything left to send.
       return "retry";
     }
-    // A push can fail partway: the transactions before the rejected one were applied and are
+    // A push can fail partway. The transactions before the rejected one were applied and are
     // acknowledged. Draining them here is what stops the retry from re-sending work the server
     // already has and colliding with itself.
     this.drainAcked(result.acks ?? [], sent);
     if (result.rejection.reason === "merge_required" && this.incrementAttempt(result.rejection.op) <= 3) {
       // The server never stores diff3 ancestors; the client rebases from its local base.
       if (this.rebase(result.rejection)) return "retry";
-      // Nothing local to rebase against — the row was deleted here after the edit was
-      // queued — so the edit has diverged and is surfaced rather than looped on.
+      // Nothing local to rebase against, because the row was deleted here after the edit was
+      // queued. The edit has diverged, so it is surfaced instead of looped on.
       this.moveTxnToQuarantine({ ...result.rejection, reason: "rebase_exhausted" });
       return "stop";
     }
@@ -522,14 +523,14 @@ export class WeftClient {
       const local = this.rows.get(key);
       if (row.deletedHlc) {
         this.clock.observe(row.deletedHlc);
-        // A queued delete for a row the scope also reports deleted is agreement, not divergence:
-        // what this device asked for has happened. It is dropped rather than set aside — and it
-        // has to be, because a subscribed socket is told about the delete by the same relay that
-        // is still answering the push that carried it, so a device routinely hears about its own
-        // delete before the push that made it has drained.
+        // A queued delete for a row the scope also reports deleted is agreement rather than
+        // divergence. What this device asked for has happened, so it is dropped instead of set
+        // aside. It has to be, because a subscribed socket is told about the delete by the same
+        // relay that is still answering the push that carried it, so a device routinely hears
+        // about its own delete before the push that made it has drained.
         this.dropQueued(row.tableName, row.rowId, (queued) => queued.kind === "delete");
-        // Anything else queued for the row — an edit, a restore — genuinely disagrees with the
-        // delete, and is surfaced instead of discarded. The row goes either way: the delete is
+        // Anything else queued for the row (an edit, a restore) genuinely disagrees with the
+        // delete, and is surfaced instead of discarded. The row goes either way. The delete is
         // what the scope says happened, and a row left live would be visible on this device
         // alone.
         if (this.isDirty(row.tableName, row.rowId)) this.quarantineDirtyRow(row.tableName, row.rowId, "row_absent");
@@ -547,9 +548,9 @@ export class WeftClient {
         this.tombstones.delete(key);
         this.touch(key);
         if (local) {
-          // The server's value is authoritative rather than merely a first guess: a purged
-          // id brought back by a later `create` is a new row with a new `first_seen_at`, and
-          // a device holding the old one would expire it on a different day (§7).
+          // The server's value is authoritative here, because a purged id brought back by a
+          // later `create` is a new row with a new `first_seen_at`, and a device holding the
+          // old one would expire it on a different day (§7).
           local.internals._weft_first_synced_at = row.firstSeenAt;
         } else {
           this.rows.set(key, {
@@ -560,10 +561,11 @@ export class WeftClient {
             fields: new Map<FieldName, WireValue>(),
             internals: {
               // A row this device still has unsent work for is dirty from the moment it is
-              // materialized. The flag cannot be left for the fields to derive: `applyField`
-              // recomputes it only for the fields it actually applies, and it skips exactly the
-              // ones that have a queued write of their own — so a row brought back by the scope
-              // while every one of its fields is shadowed locally would land clean (§9.25).
+              // materialized. The flag cannot be left for the fields to derive, because
+              // `applyField` recomputes it only for the fields it actually applies, and it skips
+              // exactly the ones that have a queued write of their own. A row brought back by
+              // the scope while every one of its fields is shadowed locally would otherwise
+              // land clean (§9.25).
               ...emptyInternals(0, this.isDirty(row.tableName, row.rowId) ? 1 : 0),
               _weft_first_synced_at: row.firstSeenAt,
             },
@@ -578,7 +580,7 @@ export class WeftClient {
   }
 
   private applyField(field: FieldRecord): void {
-    // Receiving is half of an HLC: without folding remote stamps into the local clock, an
+    // Receiving is half of an HLC. Without folding remote stamps into the local clock, an
     // edit made after a pull can carry a lower HLC than the value it was based on, lose the
     // field-wise comparison, and be dropped by a push the client still counts as applied.
     this.clock.observe(field.hlc);
@@ -592,15 +594,15 @@ export class WeftClient {
       tableName: field.tableName,
       created: "",
       fields: new Map<FieldName, WireValue>(),
-      // Dirty for the same reason, and it matters more here: the queued-write check below
-      // returns before the recompute at the end of this function ever runs.
+      // Dirty for the same reason, and it matters more here, because the queued-write check
+      // below returns before the recompute at the end of this function ever runs.
       internals: emptyInternals(0, this.isDirty(field.tableName, field.rowId) ? 1 : 0),
     };
     if (!this.rows.has(key)) this.rows.set(key, row);
-    // The diff3 ancestor is a fact about the relay's copy, not about this device's, so it is
+    // The diff3 ancestor is a fact about the relay's copy rather than this device's, so it is
     // recorded whether or not the value below is applied. A field written here before the relay
-    // was ever heard from — a row made offline, or one whose every pull has been shadowed by an
-    // unsent write — otherwise reaches `rebase` with no ancestor at all, and `diff3("", …)` can
+    // was ever heard from (a row made offline, or one whose every pull has been shadowed by an
+    // unsent write) otherwise reaches `rebase` with no ancestor at all, and `diff3("", …)` can
     // match neither side and marks up prose that never contended (§6). What is recorded is
     // exactly what the relay will compare the next push against (§5.4).
     if (this.schema.collections[field.tableName]?.fields[field.field]?.merge === "diff3") {
@@ -618,8 +620,8 @@ export class WeftClient {
     // converge. Once the outbox has drained, everything the relay sends applies.
     if (this.hasQueuedWrite(field.tableName, field.rowId, field.field)) return;
     // A write set aside in quarantine is unsent for good, and the value it left in the row is the
-    // divergence the person is the one who has to decide about (§5.5) — so the relay's copy does
-    // not get to settle it either. It is the row's own copy that is protected, and only that: a
+    // divergence the person is the one who has to decide about (§5.5), so the relay's copy does
+    // not get to settle it either. It is the row's own copy that is protected, and only that. A
     // field the row no longer holds belongs to a life of the row that has already ended, and
     // withholding it would leave the life that replaced it missing the field altogether.
     if (row.fields.has(field.field) && this.hasQuarantinedWrite(field.tableName, field.rowId, field.field)) return;
@@ -642,7 +644,7 @@ export class WeftClient {
     const drained = sent.filter((op) => applied.has(op.txnId));
     if (drained.length === 0) return;
     // Identity, not transaction id. An edit made while the push was in flight can share a
-    // transaction with what was sent — a create still being filled in is exactly that — and
+    // transaction with what was sent (a create still being filled in is exactly that), and
     // draining it by id would retire an op the server has never seen.
     const acknowledged = new Set<WeftOp>(drained);
     this.retainQueued((op) => !acknowledged.has(op));
@@ -652,7 +654,7 @@ export class WeftClient {
 
   private applyAcks(acks: PushAck[], drained: readonly WeftOp[]): void {
     // A write of this device's that the server accepted is now part of what the clock must
-    // stay above — a later skew correction is allowed to drop the inflated wall clock it was
+    // stay above. A later skew correction is allowed to drop the inflated wall clock it was
     // rejected for, but not to land under something already accepted. Until the acknowledgment
     // was folded in here, the clock only learned of its own writes when it pulled them back,
     // which is after the correction has already been made (§5.5).
@@ -661,7 +663,7 @@ export class WeftClient {
     // is that field's ancestor from here on. A pull records the same thing, and `flushWith` sends
     // without one, so this is where a device that pushes and does not read learns it.
     //
-    // Above the supersededBy loop, which re-records the winner through `applyField`: a write that
+    // Above the supersededBy loop, which re-records the winner through `applyField`. A write that
     // lost the stamp comparison is acknowledged like any other, and what is recorded here is the
     // value the relay refused. A diff3 write carrying a base hash fast-forwards whatever its stamp
     // says (§5.4), so the two meet only for a `set` on a diff3 field that reached the relay with no
@@ -707,7 +709,7 @@ export class WeftClient {
     if (rejection.serverHlc !== undefined) this.clock.observe(rejection.serverHlc);
     row.fields.set(rejectedOp.field, merged);
     row.internals.diff3Base.set(rejectedOp.field, remote);
-    // The row as well as the field: a transaction can edit the same field on several rows, and
+    // The row as well as the field. A transaction can edit the same field on several rows, and
     // rewriting all of them with one row's merge sends the wrong text to the others and gives
     // them a base hash belonging to a row they have nothing to do with.
     for (const op of this.outbox.filter(
@@ -740,8 +742,8 @@ export class WeftClient {
 
   /**
    * Removes unsent work for a row that the scope has already carried out. Only a write whose
-   * outcome is now certain belongs here — quarantine, not this, is where anything a person still
-   * has to decide about goes.
+   * outcome is now certain belongs here. Quarantine is where anything a person still has to
+   * decide about goes.
    */
   private dropQueued(tableName: TableName, rowId: RowId, matches: (op: WeftOp) => boolean): void {
     const satisfied = this.outbox.filter((op) => op.tableName === tableName && op.rowId === rowId && matches(op));
@@ -753,8 +755,8 @@ export class WeftClient {
   }
 
   private quarantineDirtyRow(tableName: TableName, rowId: RowId, reason: Rejection["reason"]): void {
-    // Quarantine is a move, not a copy: an op left in the outbox would be pushed on the next
-    // flush, and quarantined work is never auto-retried — the user decides (§5.5).
+    // Quarantine is a move rather than a copy. An op left in the outbox would be pushed on the
+    // next flush, and quarantined work is never auto-retried, because the user decides (§5.5).
     const diverged = this.outbox.filter((op) => op.tableName === tableName && op.rowId === rowId);
     if (diverged.length === 0) return;
     this.retainQueued((op) => op.tableName !== tableName || op.rowId !== rowId);
@@ -793,11 +795,11 @@ export class WeftClient {
 
   /**
    * How many unsent ops each row has. `update` has to know whether a field already has a write
-   * queued, and answering that by walking the outbox costs a scan per edit — on a device that
-   * has been offline for a morning, a scan of thousands of ops for a keystroke.
+   * queued, and answering that by walking the outbox costs a scan per edit. On a device that
+   * has been offline for a morning, that is a scan of thousands of ops for a keystroke.
    *
    * The count is rebuilt whenever the outbox's length disagrees with the length it was built
-   * from, so appending to the outbox directly — which hydration does — cannot leave it stale.
+   * from, so appending to the outbox directly (which hydration does) cannot leave it stale.
    * Reordering the outbox without changing it leaves the counts true, which is why they are
    * counts and not positions.
    */
@@ -842,7 +844,7 @@ export class WeftClient {
   }
 
   /**
-   * Drops an unsent write that this one replaces. It stops at the row's lifecycle ops: writes
+   * Drops an unsent write that this one replaces. It stops at the row's lifecycle ops. Writes
    * before a delete or restore belong to a different life of the row, and the values a row is
    * created with stay in the transaction that created it, because the server only accepts a
    * new row's opening writes there (§9.23).
@@ -866,7 +868,7 @@ export class WeftClient {
   /** Whether this write is one of the values its row was created with (§9.23). */
   private isOpeningWrite(op: WeftOp): boolean {
     // Only a row whose creation is still queued can have opening writes, and that is the rare
-    // case: a row made on this device and not yet pushed. Everywhere else the answer is no
+    // case (a row made on this device and not yet pushed). Everywhere else the answer is no
     // without looking at a single op.
     if (this.queuedCreatesForRow(op.tableName, op.rowId) === 0) return false;
     return this.outbox.some(
@@ -888,8 +890,8 @@ export class WeftClient {
 
   /**
    * Whether this field has a write of its own set aside for the person to decide about. As unsent
-   * as one in the outbox and counted the same way by the dirty flag (§5.8) — a row cannot read as
-   * dirty for a write whose value nothing on the device still shows.
+   * as one in the outbox and counted the same way by the dirty flag (§5.8), because a row cannot
+   * read as dirty for a write whose value nothing on the device still shows.
    */
   private hasQuarantinedWrite(tableName: TableName, rowId: RowId, field: FieldName): boolean {
     return this.quarantine.some(
@@ -943,7 +945,7 @@ export class WeftClient {
 
   private isDirty(tableName: TableName, rowId: RowId): boolean {
     // Counted, not searched. A list asks this of every row it renders, so a scan of the outbox
-    // here is a scan per row on every render — and the rows a person is most likely to be
+    // here is a scan per row on every render, and the rows a person is most likely to be
     // looking at are the ones whose ops sit at the far end of it.
     return (
       this.queuedForRow(tableName, rowId) > 0 ||
@@ -953,8 +955,8 @@ export class WeftClient {
 
   /**
    * Writes the client through to its store, and settles when the database has taken it. The naive
-   * strategy — rewrite the scope on every change — keeps durability obviously correct; making it
-   * incremental is an optimisation, not a semantic change.
+   * strategy (rewrite the scope on every change) keeps durability obviously correct; making it
+   * incremental is an optimisation rather than a semantic change.
    */
   private async persist(): Promise<void> {
     await this.persistence?.save(this);

@@ -1,11 +1,11 @@
 // Generated writes over a client that lives in a worker.
 //
-// The read half of the OPFS path needs nothing of its own: a `WeftClientMirror` satisfies
-// `SqlQuerySource`, so `use<Collection>` and `use<Collection>Query` run over it unchanged. The
-// write half would need something, if generated mutators asked for a `WeftClient` by class, because
-// a mirror is not one. `MutationTarget` names the shape instead, and this file is the claim that the
-// shape is enough: the mutators the CLI emitted for the todo demo, handed a mirror, with an
-// in-memory SQLite on the other end of a real `MessageChannel`.
+// The read half of the OPFS path needs nothing of its own, because a `WeftClientMirror`
+// satisfies `SqlQuerySource`, so `use<Collection>` and `use<Collection>Query` run over it
+// unchanged. The write half needs something, because generated mutators ask for a `WeftClient`
+// by class and a mirror is not one. `MutationTarget` names the shape instead, and this file tests
+// that the shape is enough by handing the CLI's generated todo-demo mutators a mirror backed by
+// an in-memory SQLite on the other end of a real `MessageChannel`.
 //
 // Nothing here is stubbed except OPFS itself. `openSqliteExecutor(":memory:")` is synchronous, which
 // is the whole of what the worker host needs of a database, and a `node:worker_threads`
@@ -86,8 +86,8 @@ test("§8.7 a generated update and delete move the same row in both places", asy
   assert.equal(bridge.mirror.rows.get("todos\0todo-1")?.fields.get(fieldName("title")), "alpha prime");
   assert.equal((await bridge.stored("todos", "todo-1"))?.["done"], 1);
 
-  // A delete crosses back as a removed key rather than as a row, so a mirror that only applied
-  // `rows` would keep rendering a row the worker and the database have both dropped.
+  // A delete crosses back as a removed key, so a mirror that only applied `rows` would keep
+  // rendering a row the worker and the database have both dropped.
   await todos.delete("todo-1");
   await bridge.settle(() => !bridge.mirror.rows.has("todos\0todo-1"));
   assert.equal(await bridge.stored("todos", "todo-1"), undefined, "the row survived a generated delete in SQLite");
@@ -98,8 +98,9 @@ test("§8.7 an event log's generated create appends rather than opening a mutabl
   await bridge.mirror.hydrate();
 
   // The class a row is opened as is settled by the op that opens it and never afterwards, so a
-  // mutation target missing `append` would silently give an event log an ordinary row: it compiles,
-  // it renders, and the relay refuses the next write to it.
+  // mutation target missing `append` would silently give an event log an ordinary row that
+  // compiles and renders, and only the relay's refusal of the next write to it would show the
+  // mistake.
   await todoEventsMutators(bridge.mirror).create("event-1", { todo_id: "todo-1", kind: "created", actor: "laptop" });
   await bridge.settle(() => bridge.mirror.rows.has("todo_events\0event-1"));
 
@@ -155,12 +156,12 @@ test("§8.7 a materialized row from a mirror does not alias the mirror's own row
 
 /**
  * The worker host with an in-memory SQLite behind it, and a mirror on the other end of a real port.
- * The same assembly as `worker-bridge`, over the todo demo's schema so the generated code under
- * test is the code the CLI actually emits rather than a hand-written stand-in.
+ * The same assembly as `worker-bridge`, but over the todo demo's schema, so the generated code
+ * under test is what the CLI actually emits.
  */
 class Bridge {
   readonly mirror: WeftClientMirror;
-  /** The mirror's transport, owned here rather than by the mirror: a leader tab needs it too. */
+  /** The transport lives here so a leader tab can reach it too. */
   readonly transport: WorkerPortTransport;
   readonly host: WeftWorkerHost;
   readonly store: SqliteClientStore;
@@ -204,8 +205,7 @@ class Bridge {
 
   /**
    * A `MessagePort` delivers on a later turn of the loop and a generated mutator returns before
-   * anything has crossed it, so a test waits on the condition rather than on a guessed number of
-   * ticks.
+   * anything has crossed it, so this polls the condition until it holds.
    */
   async settle(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
@@ -222,8 +222,8 @@ class Bridge {
     this.mirror.dispose();
     this.transport.dispose();
     this.host.stop();
-    // An open port keeps Node's event loop alive, so a failing run that skipped this would hang the
-    // whole file rather than report a failure.
+    // An open port keeps Node's event loop alive, so skipping this close would hang a failing run
+    // instead of letting it report the failure.
     this.#channel.port1.close();
     this.#channel.port2.close();
     this.#close();
@@ -232,8 +232,8 @@ class Bridge {
 
 test("§8.7 two collections can be written in one transaction through the generated mutators", async () => {
   // The relay applies a transaction as a unit, so a status change and the event that records it
-  // have to share one or they are two writes that can be accepted separately — leaving a history
-  // that disagrees with the row it describes. The `txnId` parameter is what says so.
+  // have to share one, or they become two writes that can be accepted separately, leaving a
+  // history that disagrees with the row it describes. The `txnId` parameter ties them together.
   const client = new WeftClient(SCOPE, DEVICE, schema, () => 1_000);
   const shared = txnId("status-and-history");
 
@@ -245,8 +245,9 @@ test("§8.7 two collections can be written in one transaction through the genera
 });
 
 test("§8.7 a generated mutator left to itself still mints its own transaction", async () => {
-  // The parameter is optional, and the default has to stay: two unrelated edits sharing a
-  // transaction would be refused together, so one rejected write would take the other with it.
+  // The parameter is optional, and the default must keep minting a fresh transaction for every
+  // call, because two unrelated edits sharing one would be refused together, taking a rejected
+  // write's sibling down with it.
   const client = new WeftClient(SCOPE, DEVICE, schema, () => 1_000);
   const todos = todosMutators(client);
 

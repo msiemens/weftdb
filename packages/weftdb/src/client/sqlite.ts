@@ -60,7 +60,7 @@ export class SqliteClientStore {
   }
 
   /**
-   * Makes this store the client's durable state: every change is written through, so a
+   * Makes this store the client's durable state. Every change is written through, so a
    * process that dies between a local edit and its push loses nothing (§4.1, §10).
    */
   async attach(client: WeftClient): Promise<WeftClient> {
@@ -72,9 +72,9 @@ export class SqliteClientStore {
 
   /**
    * The client for one scope, out of a database that may hold several. Every read is filtered by
-   * it: one origin holds one database, a person can be signed into more than one scope from it,
+   * it. One origin holds one database, a person can be signed into more than one scope from it,
    * and a hydrate that read the lot would load another scope's rows, another scope's unsent
-   * outbox and another scope's tombstones into this client — and push them on the next flush.
+   * outbox and another scope's tombstones into this client, and push them on the next flush.
    */
   async hydrate(scopeIdValue: ScopeId, deviceIdValue: import("weftdb/core").DeviceId): Promise<WeftClient> {
     await this.ensureSchema();
@@ -96,7 +96,7 @@ export class SqliteClientStore {
       client.serverEpoch = syncState.serverEpoch;
       // The clock has to come back above everything this device has already written, or the
       // first edit after a reload carries a stamp below work that is still in the outbox and
-      // loses the comparison against it — an edit the person made and the field never took.
+      // loses the comparison against it. That is an edit the person made that the field never took.
       if (syncState.hlcLast !== null) client.clock.acknowledge(syncState.hlcLast);
     }
     for (const op of client.outbox) client.clock.acknowledge(op.hlc);
@@ -111,13 +111,13 @@ export class SqliteClientStore {
   /**
    * Writes the client through. Rows and tombstones are written per row that changed, because
    * this runs on every keystroke and rewriting the dataset would make one edit cost the size of
-   * the list. The outbox and quarantine are rewritten whole: they hold unsent work, so their
+   * the list. The outbox and quarantine are rewritten whole. They hold unsent work, so their
    * size is what a device has yet to push rather than what it has ever written.
    */
   async save(client: WeftClient): Promise<void> {
     await this.ensureSchema();
     // Taken before the transaction opens, because a statement that throws half way through rolls
-    // the write back: keys drained inside it would name rows nothing had written and nothing would
+    // the write back. Keys drained inside it would name rows nothing had written and nothing would
     // write again. The catch below hands them back on the path where that happens.
     const matched = this.matched;
     const touched = matched ? client.drainTouchedRows() : [];
@@ -140,8 +140,8 @@ ON CONFLICT(scope_id) DO UPDATE SET
             client.scopeId,
             client.lastServerSeq,
             client.clock.highest(),
-            // A required resync is a fact about this device's cursor, not about the session that
-            // discovered it. Losing it on restart leaves the client pulling incrementally from a
+            // A required resync is a fact about this device's cursor rather than the session
+            // that discovered it. Losing it on restart leaves the client pulling incrementally from a
             // point the relay has already purged, which is the state the flag exists to leave.
             client.resyncRequired ? 1 : 0,
             // Kept beside the cursor it qualifies. A cursor that comes back without its epoch is a
@@ -214,7 +214,7 @@ ON CONFLICT(scope_id) DO UPDATE SET
     const domainEntries: Array<[string, SqlValue]> = [
       // Base fields are columns in their own right and are stored raw. They also appear in
       // the field map once a row has been pulled, and encoding those copies here would
-      // overwrite the raw columns with JSON — `id` would come back quoted.
+      // overwrite the raw columns with JSON, so `id` would come back quoted.
       ["id", row.id],
       ["scope_id", row.scopeId],
       ["created", row.created],
@@ -233,8 +233,8 @@ ON CONFLICT(scope_id) DO UPDATE SET
       ["_weft_rev", row.internals._weft_rev],
       ["_weft_dirty", row.internals._weft_dirty],
       // A column holds one NULL for two different facts: a field written as null, and a field
-      // never written at all. They are not the same — the first mirrors a field record the
-      // scope holds and the second mirrors the absence of one — and losing the difference on
+      // never written at all. They are not the same (the first mirrors a field record the
+      // scope holds and the second mirrors the absence of one), and losing the difference on
       // a hydrate makes a device disagree with the server about which fields exist. The
       // column keeps queries honest (`where x is null` means what it says) and this keeps
       // the difference, in a name no query written against the generated types can see.
@@ -369,7 +369,7 @@ function decodeLocalRow(
     const raw = row[field];
     if (BASE_FIELD_NAMES.has(field)) {
       // A base field is stored raw in a column of its own, so it comes back as it is rather
-      // than through the wire decoder. It belongs in the field map all the same: a decoder
+      // than through the wire decoder. It belongs in the field map all the same. A decoder
       // generated from the schema reads every field from there, base fields included, and a
       // row hydrated without them is a row whose id reads as empty.
       if (typeof raw === "string") fields.set(field, raw);
@@ -378,7 +378,7 @@ function decodeLocalRow(
       // blanket `JSON.parse` here would fail on the raw text a TEXT column now holds.
       if (raw !== undefined && raw !== null) fields.set(field, decodeFieldValue(definitions[name], raw));
       else if (nulls.has(field)) fields.set(field, null);
-      // The diff3 ancestor is not a queryable column — nothing outside the merge reads it —
+      // The diff3 ancestor is not a queryable column (nothing outside the merge reads it),
       // so it stays wire-encoded and comes back through the wire decoder.
       const rawBase = row[`_weft_base_${field}`];
       if (rawBase !== undefined && rawBase !== null) diff3Base.set(field, decodeWireValue(String(rawBase)));
@@ -521,7 +521,7 @@ function parseLocalKey(key: string): { readonly tableName: TableName; readonly r
   return { tableName: tableName(tableNamePart), rowId: rowId(rowIdPart) };
 }
 
-/** Internal, like every other `_weft_` column: the generated `Database` does not carry it. */
+/** Internal, like every other `_weft_` column. The generated `Database` does not carry it. */
 const NULL_FIELDS_COLUMN = "_weft_null_fields";
 
 const BASE_FIELD_NAMES: ReadonlySet<FieldName> = new Set([

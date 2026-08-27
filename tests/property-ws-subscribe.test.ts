@@ -2,8 +2,8 @@
 // changed rather than that something did: the relay keeps a cursor per connection and sends the
 // records beyond it, and the client applies them through the same path a pull goes through.
 //
-// That makes the relay responsible for something it was not before. A poll is self-correcting —
-// a device that misses one asks again a moment later — but a device that has stopped polling
+// That makes the relay responsible for something it was not before. A poll is self-correcting,
+// since a device that misses one asks again a moment later, but a device that has stopped polling
 // because it is being pushed to has nothing to fall back on. So the properties here are about
 // what a subscriber ends up holding: it must be exactly what a device that polled would hold,
 // with nothing skipped over, nothing arriving out of order, and nothing belonging to a scope
@@ -133,9 +133,9 @@ test("batches arrive in order, and a cursor only ever moves forward", async () =
           if (previous !== undefined) {
             assert.ok(batch.serverSeq >= previous.serverSeq, `batch ${index} went backwards`);
           }
-          // Records within a batch are in no particular order — merging is by HLC, not by
-          // arrival — but none of them may sit above the sequence the batch reports, because
-          // that sequence is what the client will call itself caught up to.
+          // Records within a batch are in no particular order, since merging is by HLC rather
+          // than by arrival, but none of them may sit above the sequence the batch reports,
+          // because that sequence is what the client will call itself caught up to.
           for (const record of batch.fields) {
             assert.ok(
               record.serverSeq <= batch.serverSeq,
@@ -208,7 +208,7 @@ test("a connection that dies catches up on what it missed rather than from where
         try {
           await running.play(edits.slice(0, dropAfter));
           running.server.sockets.close();
-          // Written while nobody is listening: this is what the reconnect has to recover.
+          // Written while nobody is listening, so this is what the reconnect has to recover.
           await running.play(edits.slice(dropAfter));
           await running.settle(subscriber, 30_000);
 
@@ -302,8 +302,8 @@ async function relay(): Promise<Relay> {
       const socket = connectSocketTransport({
         url: socketUrl,
         token: "token-b",
-        // Exactly what the session does with a pushed batch, and nothing else: this device
-        // never pulls, so anything it ends up holding arrived unasked.
+        // Exactly what the session does with a pushed batch, and nothing else, since this
+        // device never pulls, so anything it ends up holding arrived unasked.
         onBatch: async (batch) => {
           delivered.push(batch);
           await subscriber.applyPull(batch);
@@ -320,8 +320,8 @@ async function relay(): Promise<Relay> {
         const id = rowId(rows[edit.kind === "drop" ? 0 : edit.row] ?? "todo-0");
         switch (edit.kind) {
           case "create": {
-            // A deleted row leaves a tombstone under its id, and an id is never reused: the
-            // history generates one, not the application's behaviour.
+            // A deleted row leaves a tombstone under its id, and an id is never reused, because
+            // the history generates one, not the application's behaviour.
             if (!used.has(String(id))) {
               used.add(String(id));
               await seed(writer, String(id), edit.title);

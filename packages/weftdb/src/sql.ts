@@ -8,7 +8,7 @@
  * and a `SqlExecutor` runs one statement per call, so something has to divide them. Shared by the
  * client and server adapters so the two cannot disagree on what a statement boundary is.
  *
- * Quoting is tracked because a semicolon can appear inside an identifier: `assertUsableName`
+ * Quoting is tracked because a semicolon can appear inside an identifier. `assertUsableName`
  * refuses control characters and nothing else, so a field called `a;b` is legal and the generator
  * quotes it into `"a;b"`. Splitting on every semicolon would cut that `CREATE TABLE` in half
  * inside the identifier and hand both halves to SQLite as statements.
@@ -28,7 +28,7 @@ export function splitSql(sql: string): string[] {
     if (quote !== undefined) {
       if (character !== quote) continue;
       if (sql[index + 1] === quote) {
-        // An escaped quote, not the end of the literal. Step over its second half so the closing
+        // An escaped quote does not end the literal. Step over its second half so the closing
         // check does not see it.
         index += 1;
         continue;

@@ -61,8 +61,8 @@ test("worker transport correlates requests and responses", async () => {
   const worker = new LoopbackWorker();
   const transport = new WorkerPortTransport(worker);
   // Two requests in flight at once, answered out of order by the worker below. Each caller gets the
-  // reply carrying its own number: a transport that read the first reply for the first caller would
-  // hand one tab's rows to whoever asked first and never be caught by a single round trip.
+  // reply carrying its own number, so a transport that matched replies by arrival order would hand
+  // one tab's rows to whoever asked first, and a single round trip would never catch the mistake.
   const hydrated = transport.request({ type: "hydrate", scopeId: "scope", deviceId: "device", namespace: "weft" });
   const executed = transport.execute({ sql: "select 1", parameters: [] });
   assert.deepEqual(await executed, { rows: [] });
@@ -87,8 +87,8 @@ class LoopbackWorker {
     else queueMicrotask(answer);
   }
 
-  // Kept by type: the transport listens for `close` as well as `message`, and one field for both
-  // leaves the responses going to whichever was registered last.
+  // Kept by type. The transport listens for `close` as well as `message`, and one field for both
+  // would send responses to whichever was registered last.
   addEventListener(type: "message" | "close", listener: (event: MessageEvent<WorkerResponse>) => void): void {
     if (type === "message") this.#listener = listener;
   }

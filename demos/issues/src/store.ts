@@ -1,9 +1,9 @@
-// What is left of an application's data layer once the library and codegen have taken their
-// halves. Rows, decoding, mutators, hooks, reordering and the relationship accessors come from
-// `src/generated`, which `weft generate` writes from the schema; the database, the worker that
-// holds it and the sync session all come from `openWeftDatabase`. What is genuinely this
-// application's is here: which scope this visitor is on, how a row looks once the client's own
-// knowledge is added to it, and the tracker a first visit arrives at.
+// What remains of an application's data layer once the library and codegen have written the
+// rest. Rows, decoding, mutators, hooks, reordering and the relationship accessors come from
+// `src/generated`, which `weft generate` writes from the schema. The database, the worker that
+// holds it and the sync session come from `openWeftDatabase`. What is left here is which scope
+// this visitor is on, how a row looks once the client's own knowledge is added to it, and the
+// tracker a first visit arrives at.
 import {
   deviceId as toDeviceId,
   hasConflictMarkers,
@@ -129,10 +129,10 @@ export class IssueStore {
   readonly identity: TabIdentity;
   readonly database: DemoDatabase;
   /**
-   * What the React hooks read from and what the mutators write through: the mirror of the client
-   * the storage worker holds. It is a `WeftSource`, so `use<Collection>` and `use<Collection>Query`
-   * both work over it — the second because there is a real SQLite on the other side of the port for
-   * a compiled statement to run against.
+   * What the React hooks read from and what the mutators write through, the mirror of the client
+   * that the storage worker holds. It is a `WeftSource`, so both `use<Collection>` and
+   * `use<Collection>Query` work over it, because a real SQLite sits on the other side of the port
+   * for a compiled statement to run against.
    */
   readonly source: WeftClientMirror;
   /** This tab as the relay knows it, minted by `openWeftDatabase` under this tab's namespace. */
@@ -140,7 +140,7 @@ export class IssueStore {
   readonly projects: ProjectsMutators;
   readonly issues: IssuesMutators;
   readonly comments: CommentsMutators;
-  /** The status pills, the online toggle, and the two verbs the header's buttons call. */
+  /** The status pills, the online toggle, and the methods the header's buttons call. */
   readonly connection: DemoSync;
 
   constructor(options: IssueStoreOptions) {
@@ -149,8 +149,8 @@ export class IssueStore {
     this.source = options.database.weft.source;
     this.deviceId = toDeviceId(this.source.deviceId);
     this.connection = new DemoSync(options.database);
-    // No `notify` callback: the worker's echo wakes the subscriptions when the change arrives, and
-    // a callback fired when the mutator returned would wake them before there was anything new.
+    // The worker's echo wakes the subscriptions when the change arrives, so a `notify` callback
+    // fired when the mutator returns would wake them before there was anything new to read.
     this.projects = projectsMutators(this.source);
     this.issues = issuesMutators(this.source);
     this.comments = commentsMutators(this.source);
@@ -160,9 +160,9 @@ export class IssueStore {
    * Opens this tab's database and seeds it on a first visit.
    *
    * The scope comes from local storage, so every tab of this browser opens the same tracker while
-   * another visitor opens their own. The namespace comes from session storage, so **each tab is a
-   * database of its own** — its own client in the storage worker, its own file and its own
-   * device id — which is what makes a second tab a second device rather than a second view.
+   * another visitor opens their own. The namespace comes from session storage, so each tab gets a
+   * database of its own, with its own client in the storage worker, its own file and its own
+   * device id. A second tab is therefore a second device, not a second view onto the first.
    */
   static async open(window: WindowLike, overrides?: DemoOpenOverrides): Promise<IssueStore> {
     const identity = await tabIdentity(window.sessionStorage, window.localStorage, { demo: DEMO });
@@ -192,9 +192,9 @@ export class IssueStore {
 
   async #writeSeed(): Promise<void> {
     let projectRank: string | null = null;
-    // Rank orders the whole `issues` collection, not one project's slice of it, so the chain runs
-    // across the seed rather than restarting per project. Restarting it gives every project's
-    // first issue the same rank, and the unfiltered list interleaves them.
+    // `rank` orders the whole `issues` collection, so the chain has to run across the whole seed.
+    // Restarting it per project would give every project's first issue the same rank, and the
+    // unfiltered list would then interleave them.
     let issueRank: string | null = null;
     for (const project of SEED) {
       const projectId = newProjectId();
@@ -248,14 +248,14 @@ export class IssueStore {
   /**
    * A comment as the page renders it. `mapCommentsRow` comes from `weft generate` and folds the
    * flat `author__label` and `author__device` columns into `author`, so the page reads
-   * `comment.author.label` rather than the column names the field store uses.
+   * `comment.author.label` instead of the column names the field store uses.
    */
   commentView(row: CommentsRow): CommentView {
     const nested = mapCommentsRow(row) as unknown as NestedComment;
     return { ...nested, dirty: this.#dirty(commentsTable, row.id) };
   }
 
-  /** The projects outside a render, in rank order — for the handlers that mint a new rank. */
+  /** The projects outside a render, in rank order, for the handlers that mint a new rank. */
   projectRows(): readonly ProjectsRow[] {
     return this.source.engine
       .getSnapshot(projectsQuery("rank"), this.source.rows.values())
@@ -299,11 +299,12 @@ export class IssueStore {
   }
 
   /**
-   * A rank that puts a new issue after every issue there is, not merely after its own project's.
+   * A rank that puts a new issue after every issue there is, so it lands last in its own project
+   * and last in the unfiltered list too.
    *
-   * `rank` orders the whole collection, so minting from one project's slice gives the first issue
-   * of every project the same rank, and the unfiltered list then falls back to comparing row ids.
-   * Ranking against all of them keeps a new issue last in its project and last overall.
+   * `rank` orders the whole collection. Minting from one project's slice would give the first
+   * issue of every project the same rank, and the unfiltered list would then fall back to
+   * comparing row ids instead.
    */
   nextIssueRank(): string {
     return nextIssuesRank(this.issueRows(), this.deviceId);
@@ -318,11 +319,11 @@ export class IssueStore {
   /**
    * Moves an issue one place within the list it is being shown in.
    *
-   * The rows are the caller's rather than read back here, because the list on screen is what the
-   * arrows move within: it has been narrowed by the rail's project and by the status filter, and a
-   * move computed against every issue in the scope would land the row between two the person cannot
-   * see. Reordering writes one field, the row's new rank, so two devices reordering at once do not
-   * undo each other.
+   * The caller passes the rows instead of this method reading them back, because the list on
+   * screen is what the arrows move within. It has been narrowed by the rail's project and by the
+   * status filter, and a move computed against every issue in the scope would land the row between
+   * two the person cannot see. Reordering writes one field, the row's new rank, so two devices
+   * reordering at once do not undo each other.
    */
   async moveIssue(rows: readonly IssuesRow[], index: number, direction: "up" | "down"): Promise<void> {
     await moveIssues(this.issues, rows, index, direction, this.deviceId);

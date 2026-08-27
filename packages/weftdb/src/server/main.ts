@@ -1,4 +1,4 @@
-// Container entry point: configuration comes from the environment (see serve.ts).
+// Container entry point. Configuration comes from the environment; see serve.ts.
 import { main } from "./serve.ts";
 
 await main();

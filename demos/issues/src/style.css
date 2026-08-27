@@ -1,10 +1,10 @@
 /*
- * The demo's visual identity: a loom, the same one the todo list wears.
+ * The demo's visual identity is a loom, the same one the todo list wears.
  *
  * The palette lives in `weftdb-demo-shared/tokens.css`, which the documentation and the landing
- * page wear too. What is here is what this page does with it: the board — a rail of projects
- * beside the issue list — is the subject and gets the one raised surface, and the issue detail
- * below it is ruled rather than boxed so it reads as belonging to the row that opened it.
+ * page wear too. This page uses it on the board, a rail of projects beside the issue list, which
+ * is the subject and gets the one raised surface. The issue detail below it is ruled instead of
+ * boxed, so it reads as belonging to the row that opened it.
  *
  * No web fonts. A local-first demo that goes blank-faced the moment the network is gone would be
  * arguing against itself, and the offline toggle is the first thing anyone clicks here.
@@ -76,7 +76,7 @@ header {
   color: var(--ink);
 }
 
-/* The one place the accent is used decoratively: the thread the product is named after. */
+/* The one place the accent is used decoratively is the thread the product is named after. */
 .title h1 span {
   color: var(--accent);
 }
@@ -98,9 +98,9 @@ header {
 }
 
 /*
- * Chips are square-cornered rather than pills, and monospace: these are readouts, and half of
- * them end in a number that changes while you watch it. `tabular-nums` keeps the cursor count
- * from shifting the whole row sideways each time it ticks over a digit width.
+ * Chips are square-cornered instead of pills, and set in monospace, because these are readouts,
+ * and half of them end in a number that changes while you watch it. `tabular-nums` keeps the
+ * cursor count from shifting the whole row sideways each time it ticks over a digit width.
  */
 .badge {
   display: inline-flex;
@@ -214,14 +214,14 @@ button:active:not(:disabled) {
   border-color: var(--btn-border-hover);
 }
 
-/* Pressed is darker, not smaller: a list where the rows jump out from under the pointer is
-   harder to hit twice in a row. */
+/* Pressed is darker, not smaller, because a list where the rows jump out from under the pointer
+   is harder to hit twice in a row. */
 button:active:not(:disabled) {
   filter: brightness(0.94);
 }
 
 /* Colour only. Setting a border here would draw a box around the disabled reorder arrows that
-   the enabled ones do not have, which is the emphasis exactly backwards. */
+   the enabled ones do not have, drawing the eye to what cannot be used instead of what can. */
 button:disabled {
   color: var(--ink-3);
   cursor: default;
@@ -279,11 +279,11 @@ select:focus-visible {
   outline-offset: -1px;
 }
 
-/* --- the board: rail beside list, one piece of cloth ---------------------------------- */
+/* --- the board, rail beside list, one piece of cloth ----------------------------------- */
 
 /*
  * Rail, composer, rows and empty state share a single raised surface divided by hairlines,
- * rather than each floating in its own card. It is one board, and a stack of separate cards
+ * instead of each floating in its own card. It is one board, and a stack of separate cards
  * buries the subject of the page under a dozen identical borders.
  */
 .board {
@@ -329,8 +329,8 @@ select:focus-visible {
   gap: 2px;
 }
 
-/* Quiet by default and never hidden: reveal-on-hover controls do not exist for anyone using a
-   touch screen or a keyboard. */
+/* Quiet by default and never hidden, because reveal-on-hover controls do not exist for anyone
+   using a touch screen or a keyboard. */
 .projects .project {
   --btn-fg: var(--ink-2);
   --btn-fg-hover: var(--ink);
@@ -381,8 +381,8 @@ select:focus-visible {
   align-items: center;
 }
 
-/* Direct children only, per the note on the button rules: a bare `.composer button` ties with
-   `button.primary` on specificity and would win on source order. */
+/* Direct children only, matching the note on the button rules above. A bare `.composer button`
+   ties with `button.primary` on specificity and would win on source order. */
 .composer > input {
   flex: 1 1 auto;
   min-width: 0;
@@ -420,7 +420,7 @@ select:focus-visible {
 
 .issue {
   /* The status chip's width, reserved so the three words cannot change it, and shared with the
-     rules that indent the wrapped second line to the title's left edge. It is a `rem` rather than
+     rules that indent the wrapped second line to the title's left edge. It is a `rem` instead of
      an `em` because those rules live on elements with three different font sizes. */
   --status-col: 4.5rem;
 
@@ -442,12 +442,12 @@ select:focus-visible {
 }
 
 /*
- * The row header, and the one rule that keeps it on a single line: the text gives way, the chips
- * do not. Only `.issue-title` carries `min-width: 0` — a flex item's default `min-width: auto`
- * refuses to shrink below its content, and the title is the one item on the row that should.
- * Everything else holds its intrinsic width, so the joined readouts and the controls are never
- * squeezed to the point of being unreadable. Below the container breakpoint the row is two lines
- * and both get their full width back.
+ * The row header, and the one rule that keeps it on a single line. The text gives way; the chips
+ * do not. Only `.issue-title` carries `min-width: 0`, because a flex item's default
+ * `min-width: auto` refuses to shrink below its content, and the title is the one item on the row
+ * that should. Everything else holds its intrinsic width, so the joined readouts and the controls
+ * are never squeezed to the point of being unreadable. Below the container breakpoint the row is
+ * two lines and both get their full width back.
  */
 .line {
   display: flex;
@@ -456,8 +456,8 @@ select:focus-visible {
   min-width: 0;
 }
 
-/* Status is a three-state cycle, so it is a word rather than an icon: there is no glyph for
-   "started" that a reader would guess correctly. Fixed to the reserved column, so cycling it
+/* Status is a three-state cycle, so it is a word instead of an icon, because there is no glyph
+   for "started" that a reader would guess correctly. Fixed to the reserved column, so cycling it
    cannot move anything else on the row. */
 .status {
   --btn-bg: var(--surface);
@@ -494,8 +494,8 @@ select:focus-visible {
   --btn-border-hover: var(--ok);
 }
 
-/* The title is a field that does not announce itself until you reach for it: a row of framed
-   inputs reads as a form, and this is meant to read as a list. */
+/* The title is a field that does not announce itself until you reach for it, because a row of
+   framed inputs reads as a form, and this is meant to read as a list. */
 .issue-title {
   flex: 1 1 auto;
   min-width: 0;
@@ -513,7 +513,7 @@ select:focus-visible {
   border-color: var(--accent);
 }
 
-/* The joined half of the row: the project name comes from the `hasOne`, the count from the
+/* The joined half of the row holds the project name from the `hasOne` and the count from the
    `hasMany`. Both are secondary to the title, but neither is worth reading at three characters,
    so the strip keeps its width and the title is what gives way. Below the wrap breakpoint the
    row is two lines and there is room for both. */
@@ -527,8 +527,8 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-/* Capped rather than shrunk: a project name is worth reading, and an unusually long one is worth
-   truncating at a length that still identifies it. */
+/* Capped instead of shrunk, because a project name is worth reading, and an unusually long one
+   is worth truncating at a length that still identifies it. */
 .project-tag {
   flex: 0 0 auto;
   max-width: 18ch;
@@ -566,7 +566,7 @@ select:focus-visible {
   line-height: 1.2;
 }
 
-/* Scoped through `.row-actions` so it outweighs the sizing rule above rather than fighting it
+/* Scoped through `.row-actions` so it outweighs the sizing rule above instead of fighting it
    with `!important`. */
 .row-actions .notes-toggle {
   font-family: var(--mono);
@@ -605,8 +605,8 @@ button.danger {
 
 /* --- the issue detail ---------------------------------------------------------------- */
 
-/* A modal over the list rather than a panel below it: the board keeps the page's one raised
-   surface, and the detail borrows the guide's. Its box comes from `.modal`. */
+/* A modal over the list instead of a panel below it, because the board keeps the page's one
+   raised surface, and the detail borrows the guide's. Its box comes from `.modal`. */
 .detail {
   --modal-width: 44rem;
 
@@ -625,8 +625,8 @@ button.danger {
   color: var(--ink);
 }
 
-/* The `hasOne`, said in words rather than as a tag: at this size the row's chip would read as a
-   control. */
+/* The `hasOne`, said in words instead of as a tag, because at this size the row's chip would
+   read as a control. */
 .in-project {
   font: 500 12px/1.35 var(--mono);
   color: var(--ink-3);
@@ -645,7 +645,7 @@ button.danger {
 }
 
 /* Conflict markers are the one thing on this page you have to act on. The weight goes into a
-   stripe down the leading edge rather than a full red frame, which would shout at the same
+   stripe down the leading edge instead of a full red frame, which would shout at the same
    volume as the quarantine notice for something that is only an ordinary edit away. */
 .body.conflicted textarea {
   background: var(--bad-wash);
@@ -716,8 +716,8 @@ button.danger {
 
 /* --- quarantine ---------------------------------------------------------------------- */
 
-/* Above the board and stripe-first: this is the state where the library declined to guess, and
-   burying it in the same weight as the guide would undo the point of saying so. */
+/* Above the board and stripe-first, because this is the state where the library declined to
+   guess, and burying it in the same weight as the guide would undo the point of saying so. */
 .quarantine {
   padding: 16px 18px;
   background: var(--bad-wash);
@@ -806,14 +806,14 @@ button.danger {
 /*
  * Both modals are the same surface at two widths, set by `--modal-width` on the variant.
  *
- * A `<dialog>` has to be given its box outright: the user-agent sheet centres it and nothing
- * else. `max-height` plus `overflow-y` is what stops a long comment thread running off a short
- * viewport with no way to reach the end, and it is also what makes the narrow case work — the
- * dialog goes near-full-width and scrolls inside itself rather than past the viewport. `dvh`
- * rather than `vh` so a phone's collapsing address bar cannot leave the end unreachable.
+ * A `<dialog>` has to be given its box outright, because the user-agent sheet centres it and
+ * nothing else. `max-height` plus `overflow-y` stops a long comment thread running off a short
+ * viewport with no way to reach the end, and it is also what makes the narrow case work. The
+ * dialog goes near-full-width there and scrolls inside itself instead of past the viewport.
+ * `dvh` instead of `vh` keeps a phone's collapsing address bar from leaving the end unreachable.
  */
 .modal {
-  /* The fallback lives in the `var()` rather than in a `--modal-width` declaration here: a
+  /* The fallback lives in the `var()` instead of in a `--modal-width` declaration here, because a
      variant setting the width is an ordinary class selector too, and this rule comes after
      `.detail` in the file, so a default declared here would win on source order. */
   width: min(var(--modal-width, 34rem), calc(100vw - 24px));
@@ -829,11 +829,10 @@ button.danger {
 }
 
 .modal::backdrop {
-  /* A scrim darkens whatever is behind it, so it cannot come from a token: every colour in
+  /* A scrim darkens whatever is behind it, so it cannot come from a token. Every colour in
      `tokens.css` flips with the theme, and `--ground` or `--ink` would turn this pale in dark
-     mode and stop reading as a veil at all. The blur is the point of it — the board stays
-     legible underneath, which is what tells you the list is still there and still where you
-     left it. */
+     mode and stop reading as a veil at all. The blur keeps the board legible underneath, which
+     is what tells you the list is still there and still where you left it. */
   background: rgb(28 26 20 / 40%);
   backdrop-filter: blur(6px) saturate(110%);
   -webkit-backdrop-filter: blur(6px) saturate(110%);
@@ -842,9 +841,9 @@ button.danger {
 /*
  * Keyframes, not a transition. Animating a `<dialog>` open with `transition` needs
  * `transition-behavior: allow-discrete` and `@starting-style`, and wherever any part of that
- * fails to settle the dialog is stranded at a partial opacity with its contents washed out. An
- * animation cannot strand anything: it ends at the element's ordinary styles, so the worst case
- * of it not running at all is a dialog that appears.
+ * fails to settle, the dialog is stranded at a partial opacity with its contents washed out. An
+ * animation cannot strand anything, because it ends at the element's ordinary styles, so the
+ * worst case of it not running at all is a dialog that appears.
  */
 .modal[open] {
   animation: modal-in 200ms cubic-bezier(0.16, 0.84, 0.32, 1);
@@ -855,10 +854,10 @@ button.danger {
 }
 
 /*
- * Closing is the other way round: `close()` removes the dialog from the top layer immediately,
- * so it has to be held open for the length of the animation. `data-closing` is set on the
- * element imperatively rather than through React state, because a `className` React owns would
- * be reconciled away on the next store update mid-animation.
+ * Closing works the other way round. `close()` removes the dialog from the top layer
+ * immediately, so it has to be held open for the length of the animation. `data-closing` is set
+ * on the element imperatively instead of through React state, because a `className` React owns
+ * would be reconciled away on the next store update mid-animation.
  */
 .modal[open][data-closing] {
   animation: modal-out 130ms ease-in forwards;
@@ -868,7 +867,8 @@ button.danger {
   animation: veil-out 130ms ease-in forwards;
 }
 
-/* Right-aligned, and the last thing in the dialog: it is the way out, not the primary action. */
+/* Right-aligned, and the last thing in the dialog, because it is the way out and not the
+   primary action. */
 .modal-close {
   align-self: flex-end;
   display: block;
@@ -917,8 +917,8 @@ button.danger {
   color: var(--ink-2);
 }
 
-/* A hanging rule per item instead of a bullet: these are separate experiments, not a sequence,
-   so nothing here should suggest an order to work through. */
+/* A hanging rule per item instead of a bullet, because these are separate experiments, not a
+   sequence, so nothing here should suggest an order to work through. */
 .guide li {
   padding-left: 14px;
   border-left: 2px solid var(--rule-strong);
@@ -951,7 +951,7 @@ button.danger {
 
 /*
  * The row wraps on the width of the list, not the width of the window. Those are not the same
- * number: the rail takes 15rem out of the board above 820px, so a 900px window leaves the list
+ * number. The rail takes 15rem out of the board above 820px, so a 900px window leaves the list
  * about 530px and a 780px window leaves it the lot. A viewport breakpoint gets that backwards
  * and leaves the row cramped exactly where the rail is widest.
  */
@@ -961,8 +961,8 @@ button.danger {
 
 /*
  * Below this the title has no room left once the status chip, the joined readouts and the four
- * controls have taken theirs, so the row becomes two lines: status and title on the first, the
- * joined metadata and the controls on the second. `order` puts them in that sequence without
+ * controls have taken theirs, so the row becomes two lines. Status and title go on the first,
+ * the joined metadata and the controls on the second. `order` puts them in that sequence without
  * moving anything in the markup, and the second line is indented to the title's left edge so it
  * reads as belonging to the row above it.
  */

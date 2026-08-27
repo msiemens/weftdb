@@ -1,14 +1,13 @@
 // The browser's storage port. A device's durable state is the one thing a local-first
-// application cannot afford to lose, and it has a second SQLite under it — so the question is not
-// whether SQLite compiled to WebAssembly runs SQL, but whether it answers exactly as the port every
-// other suite is written against.
+// application cannot afford to lose, and it has a second SQLite under it, so the real question is
+// whether it answers exactly as the port every other suite is written against.
 //
-// The properties are therefore differential: the same generated history is saved through both
+// The properties are therefore differential. The same generated history is saved through both
 // executors, and any disagreement between them is a defect in the WebAssembly one.
 //
 // The build here is the one a browser loads. What Node cannot give it is IndexedDB, so the VFS is
-// `MemoryAsyncVFS` — the same author's, the same asynchronous interface, the same suspend inside a
-// page fault — and what differs is only where the bytes end up.
+// `MemoryAsyncVFS` (the same author's, the same asynchronous interface, the same suspend inside a
+// page fault), and what differs is only where the bytes end up.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -67,7 +66,7 @@ test("a client saved through the wasm executor hydrates exactly as one saved thr
 test("a value survives the wasm executor whatever is in it", async () => {
   // SQL text, lone surrogates and the rest reach storage as parameters and come back as
   // parameters. A round trip that mangles one is a row that silently changes when a tab is
-  // reloaded — and prose fields are exactly where such characters turn up.
+  // reloaded, and prose fields are exactly where such characters turn up.
   await fc.assert(
     fc.asyncProperty(
       fc.array(
@@ -130,8 +129,8 @@ test("every SQL type the port declares comes back as the type it went in as", as
   await using native = await nativeStore();
   // Integers beyond what a double holds exactly are outside the two ports' common ground:
   // `node:sqlite` refuses to read them unless it was opened for BigInts, while the wasm build
-  // hands them back as BigInt. Nothing weft stores goes there — every value on the wire is
-  // JSON text — so the contract stops at what both answer alike.
+  // hands them back as BigInt. Nothing weft stores goes there, since every value on the wire is
+  // JSON text, so the contract stops at what both answer alike.
   const values: readonly SqlValue[] = ["text", 0, -1.5, 2 ** 53 - 1, new Uint8Array([0, 1, 255]), null];
   for (const executor of [wasm.executor, native.executor]) {
     await executor.run({ sql: "CREATE TABLE probe (position INTEGER PRIMARY KEY, value BLOB)", parameters: [] });
@@ -170,8 +169,8 @@ test("a transaction that throws leaves nothing behind, however deeply it was nes
       await assert.rejects(() => wasm.executor.transaction((tx) => nest(tx, 1)), /rolled back/u);
       assert.equal(await count(wasm.executor), 0, "a rolled back transaction left rows behind");
 
-      // And the connection is still usable afterwards: a rollback that left the database in a
-      // transaction would fail the next write instead of this one.
+      // The connection is still usable afterwards, because a rollback that left the database in
+      // a transaction would fail the next write instead of this one.
       await wasm.executor.transaction(write);
       assert.equal(await count(wasm.executor), writesPerLevel);
     }),
@@ -193,7 +192,7 @@ test("a database is opened with a page cache large enough to hold an ordinary de
 test("a save that fails part way through leaves the previous state intact", async () => {
   // The store writes a save as one transaction. If the tab is closed, the quota is exceeded or
   // a constraint is violated half way through, the device must come back to the state it last
-  // completed rather than to half of two of them.
+  // completed, never to a mix of two.
   await using wasm = await wasmStore();
   const world = await runWorld([]);
   const client = deviceAt(world, 0).client;
@@ -227,10 +226,10 @@ interface Store extends AsyncDisposable {
   refuseAfter(statements: number): void;
 }
 
-/** A database in the build a browser loads, under a VFS of its own so no two of them share a file. */
 /** One WebAssembly module for the whole file, because each one is an instance and its heap. */
 const build = memorySqlite();
 
+/** A database in the build a browser loads, under a VFS of its own so no two of them share a file. */
 async function wasmStore(options: { readonly cacheSizeKib?: number } = {}): Promise<Store> {
   const opened = await openWebSqliteExecutor(await build(), {
     path: "weft.sqlite3",
@@ -287,7 +286,7 @@ async function nativeStore(): Promise<Store> {
 
 let probes = 0;
 
-/** What the connection says about itself, so a claim about it is read back rather than assumed. */
+/** What the connection actually says about itself, read back directly. */
 async function pragma(executor: AsyncSqlExecutor, name: string): Promise<number> {
   const value = await executor.get<number>({
     sql: `PRAGMA ${name}`,
@@ -316,7 +315,7 @@ function state(client: WeftClient): string {
         row.internals._weft_dirty,
       ])
       .sort(compareKeys),
-    // Key order is how an op was built, not what it says, and the two stores build theirs from
+    // Key order is an artifact of how an op was built, and the two stores build theirs from
     // different column orders.
     outbox: client.outbox.map(canonical),
     quarantine: client.quarantine.map(canonical),

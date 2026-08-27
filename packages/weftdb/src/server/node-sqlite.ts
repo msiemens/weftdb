@@ -14,9 +14,10 @@ export interface SqliteExecutor extends SqlExecutor, Disposable {
 export function openSqliteExecutor(path: string): SqliteExecutor {
   const database = new DatabaseSync(path);
   database.exec("PRAGMA journal_mode = WAL");
-  // The server acknowledges a push only after committing it, and the client drains its
-  // outbox on that acknowledgement — so the commit has to survive a power cut, not just a
-  // process crash. WAL's default (NORMAL) does not guarantee that; FULL does.
+  // The server acknowledges a push only after committing it, and the client drains its outbox
+  // on that acknowledgement, so the commit has to survive a power cut, a stronger guarantee
+  // than surviving a process crash. WAL's default (NORMAL) gives only the weaker guarantee;
+  // FULL gives both.
   database.exec("PRAGMA synchronous = FULL");
   database.exec("PRAGMA foreign_keys = ON");
   let depth = 0;

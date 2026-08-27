@@ -10,6 +10,6 @@ export const DEMO = "chat";
 
 /**
  * A fixed scope, for tests and for a local run where a predictable id is easier to find in the
- * relay's SQLite file. The page does not use it: a visitor gets their own room.
+ * relay's SQLite file. The page does not use it, since a visitor gets their own room.
  */
 export const CHAT_SCOPE: ScopeId = scopeId("chat-fixed");

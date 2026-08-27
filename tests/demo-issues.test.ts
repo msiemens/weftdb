@@ -18,9 +18,9 @@ function browser(): DemoBrowser {
 }
 
 /**
- * A tab. Local storage is shared between the tabs of one browser and session storage is not, which
- * is what makes each tab a device of its own under one visitor's scope — and, through the namespace
- * derived from it, a database of its own.
+ * Opens a tab. Local storage is shared between the tabs of one browser and session storage is not,
+ * which is what makes each tab a device of its own under one visitor's scope, and, through the
+ * namespace derived from it, a database of its own.
  */
 async function openTab(browser: DemoBrowser, name: string, options: TabOptions = {}): Promise<IssueStore> {
   const { identity, database } = await browser.tab(name, options);
@@ -53,8 +53,8 @@ test("a first visit is seeded, and only the first", async (t) => {
   assert.notEqual(first.deviceId, second.deviceId, "each tab is its own device");
   assert.equal(world.storage.serving.length, 2, "the second tab was given the first tab's database");
 
-  // Seeded once and reached the second tab by syncing, not by being written again: the guard is a
-  // key beside the scope, which every tab of one browser reads.
+  // A key beside the scope, read by every tab of one browser, guards against seeding twice, so the
+  // second tab receives the seed only by syncing.
   await settle(first);
   await settle(second);
   assert.equal(second.projectRows().length, 2, "the second tab should receive the seed by sync");
@@ -67,7 +67,7 @@ test("two tabs opened together seed the tracker once between them", async (t) =>
   const first = new IssueStore(await world.tab("one"));
   const second = new IssueStore(await world.tab("two"));
 
-  // Both seeds asked for in one turn, which is what two tabs opened at once are: each reads the
+  // Both seeds asked for in one turn, which is what two tabs opened at once are. Each reads the
   // mark before the other has written it.
   await Promise.all([first.seed(world.local), second.seed(world.local)]);
   for (const pass of [0, 1]) for (const store of [first, second]) await drain(store, `pass ${pass} never drained`);
@@ -98,9 +98,9 @@ test("comments are append-only, and an edit to one is refused rather than ignore
   assert.equal(surface["update"], undefined, "an event log must not generate update");
   assert.equal(surface["delete"], undefined, "an event log must not generate delete");
 
-  // The schema is what enforces this, not the page. Reaching past the generated mutators posts the
-  // edit anyway; the client in the storage worker refuses it, and the refusal reaches the caller as
-  // the mutator's own promise rejecting.
+  // The schema enforces this. Reaching past the generated mutators to post the edit directly still
+  // gets refused by the client in the storage worker, and that refusal reaches the caller as the
+  // mutator's own promise rejecting.
   const comment = store.source.listRows(commentsTable)[0];
   assert.ok(comment !== undefined, "the seed should have written comments");
   await assert.rejects(
@@ -159,13 +159,14 @@ beforeAll(async () => {
     Object.defineProperty(globalThis, name, { value, configurable: true, writable: true });
   }
 
-  // jsdom parses `<dialog>` but implements none of its behaviour: there is no top layer, so
+  // jsdom parses `<dialog>` but implements none of its behaviour. There is no top layer, so
   // `showModal` and `close` are simply absent. The two are stood in for here, tracking the `open`
-  // attribute the way the specification says they do, because what these tests check is the
-  // component's use of the element rather than the element itself. The focus trap, the inert
-  // backdrop and the real Escape path belong to the browser and are not exercised.
-  // Another gap: jsdom has no media queries at all. Reporting no match is the answer that
-  // exercises the animated path rather than the reduced-motion shortcut around it.
+  // attribute the way the specification says they do, to check the component's use of the element.
+  // The focus trap, the inert backdrop and the real Escape path belong to the browser and are not
+  // exercised.
+  // jsdom also has no media queries at all. Reporting no match here means every check for
+  // `prefers-reduced-motion` sees it unset, exercising the animated path over the reduced-motion
+  // shortcut around it.
   const win = dom.window as unknown as Record<string, unknown>;
   win["matchMedia"] ??= (query: string) => ({
     matches: false,
@@ -201,7 +202,7 @@ beforeAll(async () => {
       root.render(createElement(App, { store }) as ReactNode);
     });
 
-    // Every read crosses the port: the rows come back as a push, and the list's statement is not
+    // Every read crosses the port. The rows come back as a push, and the list's statement is not
     // registered with the worker until the effect that mounts it has run.
     const flush = async (): Promise<void> => {
       await act(async () => {
@@ -228,7 +229,7 @@ beforeAll(async () => {
       const target = button(label);
       // A browser focuses a button on mousedown; jsdom moves focus for nothing but an explicit
       // `focus()`. Without this the page is driven with focus parked on `<body>` throughout,
-      // which is not a state a person can put it in — and the modal, which records whatever was
+      // which is not a state a person can put it in, and the modal, which records whatever was
       // focused as the element to hand focus back to, would be recording the body.
       target.focus();
       await act(async () => {
@@ -239,15 +240,15 @@ beforeAll(async () => {
 
     await until(() => issues().length === 5, "the seeded issues never reached the list");
 
-    // The joins, on the row: the project name is the `hasOne`, the count is the `hasMany`, and
-    // the rail's count is the `hasMany` from the other side.
+    // On the row, the project name comes from the `hasOne` and the count from the `hasMany`; the
+    // rail's count is the `hasMany` from the other side.
     assert.equal(container.querySelector(".project-tag")?.textContent, "Loom firmware");
     assert.match(container.querySelector(".comment-count")?.textContent ?? "", /^3/u);
     assert.equal(container.querySelectorAll(".rail .count")[0]?.textContent, "3");
 
     // The status filter is a compiled statement with a `where` and an `orderBy`, run against SQLite
-    // in the storage worker: the list is what it answered rather than what the page kept after
-    // throwing rows away. The rail's counts are the join over the whole collection and do not move.
+    // in the storage worker. The list shows exactly what that statement answered. The rail's
+    // counts are the join over the whole collection and do not move.
     await click("started");
     await until(() => issues().length === 2, "narrowing to a status did not narrow the list");
     assert.deepEqual(
@@ -262,7 +263,7 @@ beforeAll(async () => {
     await click("Any status");
     await until(() => issues().length === 5, "clearing the filter did not bring the rest back");
 
-    // The row's control opens a modal, and the list is still behind it rather than replaced.
+    // The row's control opens a modal, leaving the list mounted behind it.
     const opener = button("Open Shuttle stalls at row 12");
     await click("Open Shuttle stalls at row 12");
     const dialog = container.querySelector("dialog.detail");
@@ -270,7 +271,7 @@ beforeAll(async () => {
     assert.equal(dialog.open, true, "the detail dialog did not open");
     assert.ok(container.querySelector(".issues") !== null, "the list went away behind the modal");
 
-    // Labelled by its own heading rather than by a hand-written string.
+    // The dialog's accessible name comes from its own heading, via `aria-labelledby`.
     const labelledBy = dialog.getAttribute("aria-labelledby");
     assert.ok(labelledBy !== null, "the dialog has no aria-labelledby");
     assert.match(
@@ -307,9 +308,9 @@ beforeAll(async () => {
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 200));
     });
-    // Both asked as booleans rather than by comparing the elements themselves: a failed
-    // `assert.equal` between two DOM nodes builds its diff by inspecting them, and inspecting a
-    // live jsdom tree exhausts memory before the runner can report which assertion it was.
+    // Both are asked as booleans, because a failed `assert.equal` between two DOM nodes builds its
+    // diff by inspecting them, and inspecting a live jsdom tree exhausts memory before the runner
+    // can report which assertion it was.
     const active = dom.window.document.activeElement;
     assert.equal(container.querySelector("dialog.detail") === null, true, "the detail stayed mounted");
     assert.equal(

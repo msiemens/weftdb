@@ -159,7 +159,7 @@ test("§5.2 the content address is a function of the records, not of their order
       fc.array(fc.integer({ min: 0, max: 500 }), { minLength: 16, maxLength: 16 }),
       fc.array(fc.integer({ min: 0, max: 500 }), { minLength: 16, maxLength: 16 }),
       async (commands, fieldKeys, rowKeys) => {
-        // Storage iteration order is an implementation detail — two servers holding the same
+        // Storage iteration order is an implementation detail; two servers holding the same
         // records may hold them in any order. If the digest disagreed, snapshot caching and
         // backup verification would both be defeated.
         const world = await runWorld(commands);
@@ -184,7 +184,7 @@ test("§5.2 the content address is a function of the records, not of their order
 });
 
 /**
- * Both ports over the one connection: the server takes `connection`, the client store takes
+ * Both ports over the one connection. The server takes `connection`, the client store takes
  * `executor`. A second `asyncSqlExecutor` over the same connection would hold a second
  * transaction queue, and the two would issue overlapping `BEGIN`s.
  */
@@ -236,8 +236,8 @@ function canonical(record: object): string {
 }
 
 function snapshotState(snapshot: Snapshot): readonly string[] {
-  // Through `canonical`, because the order of a record's keys is where it was built rather than
-  // what it says: a record read back out of storage names them in column order.
+  // Through `canonical`, because a record's key order reflects where it was built. A record
+  // read back out of storage names its keys in column order, an artifact of how it was stored.
   return [...snapshot.fields.map(canonical), ...snapshot.rows.map(canonical)].sort();
 }
 

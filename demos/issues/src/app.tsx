@@ -1,7 +1,7 @@
 // The page. An issue tracker with three collections and three relationships between them, one
 // device per tab, talking to the relay over HTTP. The list joins each issue to its project and
 // counts its comments; the detail view below reads a comment's author out of the nested shape
-// the generated mapper produces. Nothing here is scripted: open a second tab, take one offline,
+// the generated mapper produces. Nothing here is scripted. Open a second tab, take one offline,
 // and edit the same issue body in both.
 import {
   useCallback,
@@ -44,8 +44,8 @@ import { DEMO } from "./scope.ts";
 /**
  * Every join the page makes, built once per render from the rows the hooks return.
  *
- * Each accessor comes from `weft generate`: it indexes the rows it is given and hands back a
- * lookup, so the rail's counts and the list's project tags are a lookup per row rather than a
+ * Each accessor comes from `weft generate`, which indexes the rows it is given and hands back a
+ * lookup, so the rail's counts and the list's project tags cost a lookup per row instead of a
  * scan per row. The generated signatures carry the target row type through, which is why
  * `issuesOfProject` yields `IssueView` and not the bare `IssuesRow` the schema describes.
  */
@@ -72,9 +72,9 @@ type Joins = ReturnType<typeof joinsOver>;
 
 export function App({ store }: { readonly store: IssueStore }): ReactNode {
   useEffect(() => store.start(), [store]);
-  // Straight from `weft generate`: a hook per collection, rows already decoded into the type the
-  // schema describes. What the client knows and the schema does not — unsent work, a conflicted
-  // merge, a comment's nested author — is added on top.
+  // Each hook comes straight from `weft generate`, with rows already decoded into the type the
+  // schema describes. Unsent work, a conflicted merge and a comment's nested author come from
+  // the client, not the schema, and are added on top of what the hooks return.
   const projects = useProjects(store.source, "rank").map((row) => store.projectView(row));
   const issues = useIssues(store.source, "rank").map((row) => store.issueView(row));
   const comments = useComments(store.source, "rank").map((row) => store.commentView(row));
@@ -87,13 +87,14 @@ export function App({ store }: { readonly store: IssueStore }): ReactNode {
   const [only, setOnly] = useState<Status | undefined>(undefined);
   const [openIssue, setOpenIssue] = useState<string | undefined>(undefined);
   // A project or an issue can be deleted from another tab while it is on screen here, so both
-  // selections are checked against the rows that actually arrived rather than trusted.
+  // selections are checked against the rows that actually arrived instead of assumed to still be
+  // there.
   const project = projects.find((row) => row.id === filter);
-  // The list itself, narrowed where the rows are: `useIssuesQuery` compiles the project and the
-  // status into one statement and the storage worker runs it against SQLite, so what crosses the
-  // port is the rows on screen rather than every issue in the scope with the rest thrown away here.
-  // The joins above still read the whole collection, because a rail count and a project tag are
-  // about the tracker rather than about the slice being looked at.
+  // The list itself is narrowed where the rows are. `useIssuesQuery` compiles the project and the
+  // status into one statement, and the storage worker runs it against SQLite, so what crosses the
+  // port is only the rows on screen, and the rest is never fetched. The joins above still read
+  // the whole collection, because a rail count and a project tag describe the tracker, not the
+  // slice being looked at.
   const shown = useIssuesQuery(store.source, (statement) => {
     const scoped = filter === undefined ? statement : statement.where("project_id", "=", filter);
     return (only === undefined ? scoped : scoped.where("status", "=", only)).orderBy("rank");
@@ -153,8 +154,8 @@ function Header({ store, status }: { readonly store: IssueStore; readonly status
   return (
     <header>
       <div className="title">
-        {/* The span is the wordmark's one flourish — `db` in the accent. It leaves `textContent`
-            as "weftdb", which is what a screen reader and the tests both read. */}
+        {/* The span is the wordmark's one flourish, `db` in the accent. It leaves `textContent` as
+            "weftdb", which is what a screen reader and the tests both read. */}
         <h1>
           weft<span>db</span>
         </h1>
@@ -172,8 +173,8 @@ function Header({ store, status }: { readonly store: IssueStore; readonly status
         >
           {status.online ? "online" : "offline"}
         </button>
-        {/* Syncing shares a chip with the connection rather than mounting one of its own, so the
-            commonest change on the page cannot alter how many chips there are; `.connection`
+        {/* Syncing shares a chip with the connection instead of mounting one of its own, so the
+            commonest change on the page cannot alter how many chips there are. `.connection`
             reserves the width of the longest of the three words. */}
         <span
           className="badge connection"
@@ -242,10 +243,10 @@ function Quarantine({
 /**
  * The projects rail, and the status the list is narrowed to.
  *
- * Each project entry carries the count its `hasMany` resolves to, over every issue in the tracker
- * rather than over the slice on screen: the count says how much is in a project, and it would be
- * a strange thing for it to change because somebody chose to look only at what is closed. The
- * status below it is a bound parameter of the list's statement — see `App`.
+ * Each project entry carries the count its `hasMany` resolves to, over every issue in the
+ * tracker instead of over the slice on screen. The count says how much is in a project, and it
+ * would be strange for it to change because somebody chose to look only at what is closed. The
+ * status below it is a bound parameter of the list's statement, set in `App`.
  */
 function Rail({
   store,
@@ -500,8 +501,8 @@ function TitleField({ store, issue }: { readonly store: IssueStore; readonly iss
 
 /**
  * One issue, its project, its body, and the comments its `hasMany` resolves to, as a modal over
- * the list. The list stays where it was: a modal `<dialog>` sits in the top layer and scrolls
- * nothing behind it, so closing puts the reader back on the row they came from.
+ * the list. The list stays where it was, because a modal `<dialog>` sits in the top layer and
+ * scrolls nothing behind it, so closing puts the reader back on the row they came from.
  */
 function Detail({
   store,
@@ -520,7 +521,8 @@ function Detail({
   const owner = joins.projectOfIssue(issue);
   const thread = joins.commentsOfIssue(issue);
 
-  // It exists only while it is open: the row's control is what decides that, so it opens on mount.
+  // The dialog only exists while an issue is open, decided by the row's own control, so the
+  // effect opens it as soon as it mounts.
   const { open } = modal;
   useEffect(() => open(), [open]);
 
@@ -577,13 +579,13 @@ function Body({ store, issue }: { readonly store: IssueStore; readonly issue: Is
 }
 
 /**
- * A comment. `comment.author` does not exist in the field store: the columns there are
+ * `comment.author` does not exist in the field store, because the columns there are
  * `author__label` and `author__device`, and the generated nested mapper folds them into an
  * object on the way out.
  *
- * There is nothing to edit here. `comments` is an event log, so the row is append-class from the
- * transaction that wrote it: the generated mutators carry `create` alone, and the server refuses
- * a later `set` or `delete` whatever a client sends.
+ * There is nothing to edit here. `comments` is an event log, so the row is append-class from
+ * the transaction that wrote it. The generated mutators carry `create` alone, and the server
+ * refuses a later `set` or `delete` whatever a client sends.
  */
 function Comment({ comment }: { readonly comment: CommentView }): ReactNode {
   return (
@@ -636,11 +638,11 @@ function CommentComposer({ store, issue }: { readonly store: IssueStore; readonl
  * Clearing the demo, behind a second click.
  *
  * There is no undo, and this sits beside a button people press to read something, so the
- * confirmation is the label: a first click arms it and a second carries it out. Arming lapses,
+ * confirmation is the label. A first click arms it and a second carries it out. Arming lapses,
  * which is what keeps a click made and forgotten from arming the click after it.
  *
- * A reset in another tab retires the scope this one is on, so this is also where a tab hears that
- * and reloads onto the new one.
+ * A reset in another tab retires the scope this one is on, so this is also where a tab hears
+ * that and reloads onto the new one.
  */
 function ResetData(): ReactNode {
   const [armed, setArmed] = useState(false);
@@ -681,8 +683,8 @@ function ResetData(): ReactNode {
 const RESET_ARM_MS = 4000;
 
 /**
- * The guide is a modal rather than a panel: it is read once, at the start, and then it is in the
- * way of the thing it is describing.
+ * The guide is a modal instead of a panel, because it is read once, at the start, and then it
+ * is in the way of the thing it is describing.
  */
 function Guide(): ReactNode {
   const dialog = useRef<HTMLDialogElement>(null);
@@ -697,8 +699,8 @@ function Guide(): ReactNode {
         </button>
         <ResetData />
       </footer>
-      {/* A sibling of the trigger, not a child of it: nesting the dialog inside the trigger's
-          wrapper let `.guide-open button` reach the dialog's own button and repaint it. */}
+      {/* A sibling of the trigger, kept out of its wrapper, because nesting the dialog inside
+          would let `.guide-open button` reach the dialog's own button and repaint it too. */}
       <dialog
         className="modal guide"
         ref={dialog}
@@ -769,16 +771,16 @@ interface Modal {
 }
 
 /**
- * A modal `<dialog>`, with the two things the element does not do for itself.
+ * A modal `<dialog>`, with the closing animation and focus return this hook adds on top.
  *
- * Escape, the focus trap, the inert backdrop and the top layer are all native, which is why this
- * is a `<dialog>` and not a fixed-position div: none of that is worth reimplementing and most of
- * it is worth getting wrong. What is added here is the closing animation, and returning focus to
- * whatever opened the dialog — the element does that itself in current engines, and recording the
- * opener makes it hold wherever it does not.
+ * Escape, the focus trap, the inert backdrop and the top layer are all native to `<dialog>`, and
+ * reimplementing any of them over a fixed-position div is easy to get wrong. What is added here
+ * is the closing animation, and returning focus to whatever opened the dialog. Current engines
+ * already return focus themselves, and recording the opener makes that hold in engines that do
+ * not.
  *
- * The element's ref belongs to the caller, which is what keeps a ref out of this hook's return
- * value and off the render path.
+ * The element's ref belongs to the caller, which keeps a ref out of this hook's return value and
+ * off the render path.
  */
 function useModal(dialog: RefObject<HTMLDialogElement | null>, onClosed?: () => void): Modal {
   const ref = dialog;
@@ -804,11 +806,11 @@ function useModal(dialog: RefObject<HTMLDialogElement | null>, onClosed?: () => 
 
   /**
    * `close()` takes the dialog out of the top layer immediately, so it has to be held open for as
-   * long as the stylesheet's closing animation. The marker is set with `setAttribute` rather than
-   * through React state: a class React owns would be reconciled away by the next store update,
-   * which lands often here, and the dialog would blink out mid-animation. The close itself runs
-   * off a timer rather than `animationend`, because an animation that never fires must not leave
-   * a modal stuck open over the page.
+   * long as the stylesheet's closing animation. The marker is set with `setAttribute` instead of
+   * through React state, because a class React owns would be reconciled away by the next store
+   * update, which lands often here, and the dialog would blink out mid-animation. The close
+   * itself runs off a timer instead of `animationend`, because an animation that never fires
+   * must not leave a modal stuck open over the page.
    */
   const close = (): void => {
     const element = ref.current;
@@ -836,7 +838,7 @@ function useModal(dialog: RefObject<HTMLDialogElement | null>, onClosed?: () => 
       close();
     },
     // A click on the backdrop is dispatched to the dialog itself, so "outside" has to be measured
-    // rather than assumed — the dialog's own padding is inside its box too.
+    // instead of assumed. The dialog's own padding is inside its box too.
     onClick: (event) => {
       if (event.target !== event.currentTarget) return;
       const box = event.currentTarget.getBoundingClientRect();
@@ -852,9 +854,9 @@ const ISSUES = tableName("issues");
 
 /**
  * A text field that behaves the way a text field has to in a syncing app. Typing is local until
- * you pause, so a word is one transaction rather than six; and a value arriving from another tab
- * while you are typing is held by `Diff3EditorBuffer` until you leave the field, so nothing
- * rewrites the text under your caret mid-word.
+ * you pause, so a whole word becomes one transaction instead of one per keystroke, and a value
+ * arriving from another tab while you are typing is held by `Diff3EditorBuffer` until you leave
+ * the field, so nothing rewrites the text under your caret mid-word.
  */
 function useBufferedField(
   table: TableName,
@@ -896,9 +898,9 @@ function useBufferedField(
     if (idle.current !== undefined) clearTimeout(idle.current);
     if (next === committed.current) return;
     committed.current = next;
-    // A keystroke becomes a transaction after the typing stops, and the row can go in between:
-    // deleted here, or deleted elsewhere and pulled in while the write is on its way to the worker.
-    // Clearing the timer covers the first and cannot cover the second.
+    // A keystroke becomes a transaction after the typing stops, and the row can go in between,
+    // deleted here, or deleted elsewhere and pulled in while the write is on its way to the
+    // worker. Clearing the timer covers the first case and cannot cover the second.
     dropIfRowIsGone(commit(next));
   };
 

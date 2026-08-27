@@ -80,12 +80,12 @@ export interface PushAck {
   /**
    * The records that beat a `set` in this transaction, for the device that sent it.
    *
-   * A write losing the stamp comparison is still acknowledged, because it was valid and it
+   * A write losing the stamp comparison is still acknowledged because it was valid and it
    * arrived. The device drops an acknowledged op from its outbox and keeps what it wrote, and the
-   * record that beat it kept the sequence it already had — below that device's cursor, where no
-   * incremental pull will reach it again. Carrying the winner back on the acknowledgement is what
-   * closes that, and it survives redelivery because a second push of the same op loses to the same
-   * record and is answered with the same value.
+   * record that beat it kept the sequence it already had, below that device's cursor, where no
+   * incremental pull reaches it again. Carrying the winner back on the acknowledgement closes that
+   * gap, and it survives redelivery because a second push of the same op loses to the same record
+   * and is answered with the same value.
    */
   supersededBy: FieldRecord[];
 }
@@ -102,7 +102,7 @@ export interface PullBatch {
   epoch: string;
   /**
    * The scope's floor at the moment of the read. A client whose cursor is below it cannot be
-   * brought up to date incrementally: what it missed has been hard-purged (§5.9).
+   * brought up to date incrementally, because what it missed has been hard-purged (§5.9).
    */
   tombstoneFloorSeq: number;
   fields: FieldRecord[];
@@ -114,7 +114,7 @@ export interface Snapshot extends PullBatch {
 }
 
 /**
- * A push is transaction-granular, so it can half succeed: `acks` names the transactions that
+ * A push is transaction-granular, so it can half succeed. `acks` names the transactions that
  * were applied whether or not a later one was rejected.
  */
 export type PushOutcome = { ok: true; acks: PushAck[] } | { ok: false; rejection: Rejection; acks: PushAck[] };
@@ -139,12 +139,12 @@ export class WeftServer {
   readonly devices = new Map<string, DeviceRecord>();
   skewThresholdMs: number;
   /**
-   * Keys whose records a store may no longer agree with. A durable server writes these and
-   * nothing else: without them the only way to persist a push is to write the scope again,
-   * which makes the cost of one edit the size of everything anyone has ever written to it.
+   * Keys whose stored records may not match what is held in memory. A durable server writes
+   * only these on each push, because writing the whole scope again would make the cost of one
+   * edit the size of everything ever written to it.
    *
-   * A key is recorded whether the record was written or removed — what is here now decides
-   * which of the two the store performs.
+   * A key is recorded whether its record was written or removed. Whether the key is still
+   * present in memory decides which of the two the store performs.
    */
   protected readonly touchedFields = new Set<StoreKey>();
   protected readonly touchedRows = new Set<StoreKey>();
@@ -165,9 +165,9 @@ export class WeftServer {
   }
 
   /**
-   * Called whenever a scope moves forward, by any path. Watching here rather than at the HTTP
-   * surface is what makes a change nobody pushed — a prune raising the tombstone floor — reach
-   * the devices that need to know about it.
+   * Called whenever a scope moves forward, by any path, including a prune raising the tombstone
+   * floor that nobody pushed. Watching at this layer catches every one of those paths, so every
+   * device that needs to know about a change hears about it.
    */
   watch(listener: ScopeWatcher): () => void {
     this.#watchers.add(listener);
@@ -184,8 +184,8 @@ export class WeftServer {
     const result = operation();
     const after = this.scopes.get(scopeId);
     const seqAfter = after?.serverSeq ?? 0;
-    // A floor that rose without the sequence moving still matters: a device below it can no
-    // longer be caught up incrementally and needs to hear about that.
+    // A floor that rose without the sequence moving still matters, because a device below it
+    // cannot be caught up incrementally and needs to hear about that.
     if (seqAfter === seqBefore && (after?.tombstoneFloorSeq ?? 0) === floorBefore) return result;
     for (const watcher of this.#watchers) watcher(scopeId, seqAfter);
     return result;
@@ -212,9 +212,9 @@ export class WeftServer {
       return { ok: false, reason: "resync_required", epoch: scope.epoch };
     }
     // A cursor counted in another epoch names a record this scope never wrote, and one above the
-    // head names a record it has not written yet. Both mean the device is holding a history this
-    // server does not have, which an incremental pull cannot reconcile: it answers with what comes
-    // after the cursor, and after the cursor is nothing.
+    // head names a record it has not written yet. Both mean the device holds a history this
+    // server does not have. An incremental pull only answers with what comes after the cursor,
+    // and after the cursor there is nothing to reconcile with.
     if (request.epoch !== undefined && request.epoch !== scope.epoch) {
       return { ok: false, reason: "resync_required", epoch: scope.epoch };
     }
@@ -229,7 +229,8 @@ export class WeftServer {
   }
 
   private pushOps(scopeId: ScopeId, ops: WeftOp[]): PushOutcome {
-    // Rejection is transaction-granular: validate every op in a txn before applying any.
+    // Rejection is transaction-granular, so every op in a transaction is validated before any
+    // of it is applied.
     const txns = Map.groupBy(ops, (op) => op.txnId);
     const acks: PushAck[] = [];
     for (const [txnId, txnOps] of txns) {
@@ -237,7 +238,7 @@ export class WeftServer {
       // The transactions already applied stay applied, so they are acknowledged even though
       // the push as a whole failed. Reporting only the rejection would leave the client
       // re-sending work that has landed, which comes back as `row_exists` for a create and as
-      // `merge_required` for a prose edit competing with itself — a device manufacturing its
+      // `merge_required` for a prose edit competing with itself, a device manufacturing its
       // own conflicts out of a push that half succeeded.
       if (rejection) return { ok: false, rejection, acks };
       acks.push(this.applyTxn(scopeId, txnId, txnOps));
@@ -270,8 +271,8 @@ export class WeftServer {
   }
 
   pruneTombstones(scopeId: ScopeId, olderThanMs = 30 * 24 * 60 * 60 * 1000): number {
-    // Nobody pushed this, and it is exactly the kind of change a device most needs to hear
-    // about: one that can leave it below the floor and unable to catch up incrementally.
+    // Nobody pushed this, but it can leave a device below the floor and unable to catch up
+    // incrementally, which is exactly the kind of change a device most needs to hear about.
     return this.announcing(scopeId, () => this.prune(scopeId, olderThanMs));
   }
 
@@ -282,10 +283,10 @@ export class WeftServer {
     );
     if (doomed.length === 0) return 0;
 
-    // The floor rises before anything is removed. A reader that lands between the two steps
-    // must see a floor that already covers the rows about to vanish — the other order leaves
-    // a window where the records are gone but the floor still says an incremental pull is
-    // enough, which is precisely how a purged row gets stranded on a device (§5.9).
+    // The floor rises before anything is removed, so a reader that lands in between sees a
+    // floor that already covers the rows about to vanish. Rising it after removal would leave a
+    // window where the records are gone but the floor still says an incremental pull is enough,
+    // which is precisely how a purged row gets stranded on a device (§5.9).
     const scope = this.scope(scopeId);
     scope.tombstoneFloorSeq = doomed.reduce(
       (floor, [, row]) => Math.max(floor, row.serverSeq),
@@ -312,7 +313,7 @@ export class WeftServer {
     // What earlier ops in this same transaction leave in each field. A transaction is validated
     // whole before any of it is applied, so a write whose ancestor is a value written two ops
     // earlier would otherwise be compared against the field as it stood before the transaction
-    // began — and refused for merging with itself.
+    // began, and refused for merging with itself.
     const pending = new Map<StoreKey, { value: WireValue; hlc: HlcString }>();
     for (const op of ops) {
       if (op.scopeId !== scopeId) return { reason: "scope_mismatch", op };
@@ -348,8 +349,8 @@ export class WeftServer {
           const current = pending.get(key) ?? this.fields.get(key);
           // diff3 is server-side fast-forward only; mismatches go back to the client.
           if (stableHash(current?.value ?? null) !== op.baseHash) {
-            // The stamp travels with the value: the client has to be able to place its merge
-            // after the write it is merging with, and it has not pulled that write yet.
+            // The stamp travels with the value, because the client has to be able to place its
+            // merge after the write it is merging with, and it has not pulled that write yet.
             return current === undefined
               ? { reason: "merge_required", op, serverValue: null }
               : { reason: "merge_required", op, serverValue: current.value, serverHlc: current.hlc };
@@ -402,14 +403,14 @@ export class WeftServer {
     const key = fieldKey(op);
     const current = this.fields.get(key);
     // A write carrying a base hash has already been compared against the value it claims to
-    // follow, during validation, and a mismatch never reaches here: it went back as
+    // follow, during validation, and a mismatch never reaches here; it went back as
     // `merge_required`. So it is a certified successor of what is stored and fast-forwards
     // whatever its stamp says (§5.4). Comparing stamps as well could only discard a write this
-    // server has already accepted, and the client is told the push succeeded — the one outcome
-    // it cannot recover from.
+    // server has already told the client succeeded, and that is the one outcome it cannot
+    // recover from.
     //
     // Whether the merged value happens to equal the stored one decides nothing. The write still
-    // has to land, because what it carries is a stamp as well as a value: leaving the older
+    // has to land, because what it carries is a stamp as well as a value, and leaving the older
     // stamp in place makes every later write between the two lose a comparison it should win,
     // and those losses are silent.
     const certified = op.baseHash !== undefined;

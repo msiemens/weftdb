@@ -114,7 +114,7 @@ function openWorld(relay: BenchRelay, devices: number): World {
 
 /**
  * Sync rounds until every device holds the same state and none has anything left to send. One
- * pass is never enough: a device syncs before the devices after it have pushed anything.
+ * pass is never enough, because a device syncs before the devices after it have pushed anything.
  */
 async function settle(world: World): Promise<number> {
   for (let round = 1; round <= MAX_ROUNDS; round += 1) {
@@ -136,7 +136,7 @@ function converged(clients: readonly WeftClient[]): boolean {
   return rest.every((client) => fingerprint(client) === reference);
 }
 
-/** The state a device would show, with nothing local in it: every row's fields, in a fixed order. */
+/** The state a device would show, with nothing local in it, as every row's fields in a fixed order. */
 function fingerprint(client: WeftClient): string {
   return [...client.rows.entries()]
     .map(([key, row]) => {

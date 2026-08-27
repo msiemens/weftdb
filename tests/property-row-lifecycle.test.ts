@@ -1,4 +1,4 @@
-// DESIGN.md §9 "Application" and "Retention" — the row-lifecycle rules that need a
+// DESIGN.md §9 "Application" and "Retention", the row-lifecycle rules that need a
 // specific arrangement. §9.20, §9.21, §9.23f, §9.24 and §9.25 are checked continuously by
 // the world model instead (property-invariants.ts).
 import assert from "node:assert/strict";
@@ -293,8 +293,8 @@ test("§9.23 an append row accepts neither set nor delete from any client", asyn
       ]);
       assert.equal(rawDelete.ok, false, "a raw delete reached an append row");
 
-      // A client refuses to queue the edit at all, for the same reason it refuses the delete:
-      // the work could only ever be rejected, and quarantining it would ask a person to decide
+      // A client refuses to queue the edit at all, for the same reason it refuses the delete.
+      // The work could only ever be rejected, and quarantining it would ask a person to decide
       // about something that was never going to land.
       await assert.rejects(
         () => other.update(EVENTS, event, { [fieldName("status")]: status }, txnId("late-set")),
@@ -559,18 +559,17 @@ test("§9.23c restoring a diff3 field value sends that value with the restore", 
 });
 
 test("§9.23c a restore does not reset a field: its opening writes are resolved by HLC like any other", async () => {
-  // The failure this pins: a restore's opening `set` is accepted, the pushing device is told
-  // the push succeeded, and the field still ends on somebody else's value. That looks like
-  // silent loss, and §5.1.acked read it as one for three separate generated histories — but it
+  // This pins a specific failure. A restore's opening `set` is accepted, the pushing device is
+  // told the push succeeded, and the field still ends on somebody else's value. That looks like
+  // silent loss, and §5.1.acked read it as one for three separate generated histories, though it
   // is what §5.9 asks for. A restore moves the liveness register and nothing else; "a delete
   // does not remove fields", so the row it revives is the same row with the same field history,
   // which is the only way §9.23c's "every field it had at deletion, not a subset" can hold.
   //
-  // The alternative — a restore's own writes winning outright because the row is "new again" —
-  // is not a stricter rule, it is an incoherent one. It has no stamp to decide by, so the
-  // answer would depend on which transaction reached the relay first, and §9.1 requires any
-  // delivery order of the same op set to give byte-identical state. Both orders are pushed
-  // here for exactly that reason.
+  // An alternative design, where a restore's own writes win outright because the row is "new
+  // again," has no stamp to decide by, so the answer would depend on which transaction reached
+  // the relay first. §9.1 requires any delivery order of the same op set to give byte-identical
+  // state, so both orders are pushed here for exactly that reason.
   const row = rowId("revived-against-concurrent");
   const restorer = deviceId("device-restorer");
   const writer = deviceId("device-writer");
@@ -600,8 +599,8 @@ test("§9.23c a restore does not reset a field: its opening writes are resolved 
       txnId: restoreTxn,
     },
   ];
-  // Strictly above the restore's write, and concurrent with it: this device never saw the
-  // delete or the restore, so it had nothing to stamp itself after.
+  // Strictly above the restore's write, and concurrent with it, because this device never saw
+  // the delete or the restore, so it had nothing to stamp itself after.
   const concurrentOps: readonly WeftOp[] = [
     {
       scopeId: propertyScope,
@@ -652,9 +651,10 @@ test("§9.23c a restore does not reset a field: its opening writes are resolved 
       },
     ]);
 
-    // Both are accepted. Acceptance is about validity, not about winning the field-wise
-    // comparison the write then goes through (§5.3 step 6) — a losing `set` is not a rejected
-    // one, and reporting it as rejected is what would leave a client retrying forever.
+    // Both are accepted. Acceptance is about validity, separate from winning the field-wise
+    // comparison the write then goes through (§5.3 step 6). A losing `set` is still an accepted
+    // one, not a rejected one, and reporting it as rejected is what would leave a client
+    // retrying forever.
     for (const batch of [first, second]) {
       assert.equal(server.push(propertyScope, [...batch]).ok, true, "a valid transaction was rejected");
     }
@@ -674,7 +674,7 @@ test("§9.23c a restore does not reset a field: its opening writes are resolved 
 });
 
 test("§9.23c a restore's opening write still wins when its stamp is the highest", async () => {
-  // The other half of the rule above, so narrowing it cannot be mistaken for dropping it: a
+  // The other half of the rule above, so narrowing it cannot be mistaken for dropping it. A
   // restore's `set` is an ordinary write, which means it takes the field whenever it is the
   // later one. Losing to *nothing* would be the real silent loss.
   const row = rowId("revived-uncontested");

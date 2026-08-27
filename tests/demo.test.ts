@@ -1,12 +1,11 @@
-// The demo page, driven through its own buttons by two tabs at once. A page that builds is not
-// the same as a page that works, so this mounts the real component tree over the real assembly the
-// page opens — one storage worker holding a client per tab, syncing through the relay that runs in
-// the browser — and clicks through the scenarios the page invites people to try.
+// The demo page, driven through its own buttons by two tabs at once, mounting the real component
+// tree over the real assembly the page opens (one storage worker holding a client per tab, syncing
+// through the relay that runs in the browser), and clicking through the scenarios the page invites
+// people to try.
 //
-// The two tabs here are two *devices*, and that is the property the whole file rests on. Each takes
-// a namespace of its own under the visitor's one scope, so each holds its own database, its own
-// outbox and its own device id, and nothing either of them shows the other has arrived by any route
-// but the relay.
+// The two tabs here are two *devices*. Each takes a namespace of its own under the visitor's one
+// scope, so each holds its own database, its own outbox and its own device id, and nothing either
+// of them shows the other has arrived by any route but the relay.
 import assert from "node:assert/strict";
 import { beforeAll, test } from "vitest";
 import { JSDOM } from "jsdom";
@@ -74,9 +73,9 @@ beforeAll(async () => {
 
     const open = async (name: string, options: TabOptions = {}): Promise<Tab> => {
       const { identity, database } = await browser.tab(name, options);
-      // Constructed rather than opened through `TodoStore.open`, so these tests start from an empty
-      // list: the seed is what `todo-seed.test.ts` is about, and a page that arrives with four rows
-      // on it has nothing left to say about adding the first.
+      // Built directly, without `TodoStore.open`, so these tests start from an empty list. The seed
+      // is what `todo-seed.test.ts` is about, and a page that arrives with four rows on it has
+      // nothing left to say about adding the first.
       const store = new TodoStore({ identity, database });
 
       const container = dom.window.document.createElement("div");
@@ -86,8 +85,9 @@ beforeAll(async () => {
         root.render(createElement(App, { store }) as ReactNode);
       });
 
-      // Every write crosses the port twice — the mutator posts and the worker echoes back the rows
-      // it moved — so nothing a click did is on screen in the turn the click returned in.
+      // Every write crosses the port twice, once when the mutator posts and once when the worker
+      // echoes back the rows it moved, so nothing a click did is on screen in the turn the click
+      // returned in.
       const flush = async (): Promise<void> => {
         await act(async () => {
           await new Promise((resolve) => setTimeout(resolve, 2));
@@ -113,7 +113,7 @@ beforeAll(async () => {
         });
         await flush();
       };
-      // Typing and then moving on, which is what the page waits for: text fields hold the
+      // Typing and then moving on, which is what the page waits for. Text fields hold the
       // draft while the caret is in them and become a transaction when it leaves.
       const type = async (selector: string, value: string): Promise<void> => {
         const field = container.querySelector(selector);
@@ -196,7 +196,7 @@ test("the page mounts empty and names the device this tab is", async (t) => {
 test("tabs that race for the same ordinal are still telling themselves apart", async () => {
   // Local storage has no atomic increment, so two tabs opening at the same moment both read
   // the same counter and both write the same next value. They are still separate devices, and
-  // the label has to say so — otherwise two of them look like one and the merges make no sense
+  // the label has to say so. Otherwise two of them look like one and the merges make no sense
   // to whoever is watching.
   const contended: StorageLike = { getItem: () => "2", setItem: () => undefined, removeItem: () => undefined };
   const first = await tabIdentity(memoryStorage(), contended, { demo: DEMO });
@@ -209,13 +209,13 @@ test("tabs that race for the same ordinal are still telling themselves apart", a
 });
 
 test("minting a visitor scope is held alone across the origin", async () => {
-  // The scope separates one visitor's rows from another's, so two tabs that mint different ones are
-  // in separate worlds and neither ever sees the other's messages. Local storage has no
+  // The scope separates one visitor's rows from another's, so two tabs that mint different ones
+  // land in separate worlds and neither ever sees the other's messages. Local storage has no
   // compare-and-set, and two tabs are two contexts, so both read before either writes unless the
   // mint is held.
   //
   // What is asserted is the lock, because the race itself is between browsing contexts and one Node
-  // process cannot stage it: the read and the write have no await between them, so a second caller
+  // process cannot stage it. The read and the write have no await between them, so a second caller
   // here never runs until the first has finished writing. Two tabs in Chrome do reach it, and the
   // browser probe in the scratchpad is where that was seen.
   const held: string[] = [];
@@ -247,7 +247,7 @@ test("minting a visitor scope is held alone across the origin", async () => {
 test("a tab's token can travel as a WebSocket subprotocol", async () => {
   // The browser cannot set headers on a WebSocket, so the token goes in Sec-WebSocket-Protocol as
   // `weft.token.<token>`. RFC 6455 makes those values HTTP tokens, and the `WebSocket` constructor
-  // throws on anything else. The failure is silent: the socket never opens, the page falls back to
+  // throws on anything else. The failure is silent. The socket never opens, the page falls back to
   // polling, and nothing in the console says why. A separator chosen for the token is the likeliest
   // way an illegal character gets in.
   const separators = /[()<>@,;:\\"/[\]?={} \t]/u;
@@ -260,10 +260,10 @@ test("a tab's token can travel as a WebSocket subprotocol", async () => {
 });
 
 test("two tabs of one browser are two devices, not two views of one database", async (t) => {
-  // The arrangement everything below rests on, asserted rather than assumed. A namespace and a
-  // scope together name a database, so a namespace per tab is a database per tab: two clients in
-  // the one storage worker, two device ids, two outboxes. Were it one database with two windows on
-  // it, every merge these demos are about would be a write and a read of the same rows.
+  // The arrangement everything below rests on, checked directly instead of assumed. A namespace
+  // and a scope together name a database, so a namespace per tab is a database per tab, two
+  // clients in the one storage worker, two device ids, two outboxes. Were it one database with two
+  // windows on it, every merge these demos are about would be a write and a read of the same rows.
   const world = openWorld();
   t.onTestFinished(() => world.closeAll());
   const first = await world.open("first");
@@ -297,10 +297,10 @@ test("a todo added in one tab reaches the other through the relay", async (t) =>
 });
 
 test("the activity list is a compiled statement, and it answers with what the where matched", async (t) => {
-  // The panel reads `useTodoEventsQuery` with a `where`, an `orderBy` and a `limit`, so the rows
-  // it renders were chosen by SQLite in the storage worker rather than by the page after the whole
-  // collection had crossed the port. An event of a kind the statement does not name is the proof:
-  // it is in the scope, it is in the mirror, and it is not in the list.
+  // The panel reads `useTodoEventsQuery` with a `where`, an `orderBy` and a `limit`, so the rows it
+  // renders are chosen by SQLite in the storage worker before the page ever sees the rest of the
+  // collection. An event of a kind the statement does not name is the proof. It is in the scope,
+  // it is in the mirror, and it is not in the list.
   const world = openWorld();
   t.onTestFinished(() => world.closeAll());
   const tab = await world.open("first");
@@ -309,7 +309,7 @@ test("the activity list is a compiled statement, and it answers with what the wh
   await tab.click("Mark write the notes done");
   await tab.until(() => tab.text().includes("completed"), "the completion was never recorded");
 
-  // Written straight through the mirror, because the page has no button that files one: the whole
+  // Written straight through the mirror, because the page has no button that files one. The whole
   // question is what the statement does with a row the page did not ask for.
   await tab.store.todoEvents.create(`event-${crypto.randomUUID()}`, {
     todo_id: "todo-nobody",
@@ -336,8 +336,8 @@ test("an offline tab keeps working, and drains when it comes back", async (t) =>
   assert.match(first.badges(), /offline/u, "the toggle did not take the tab offline");
 
   await addTodo(first, "write it down");
-  // Visible immediately, before any sync: a local-first client shows what you just did rather
-  // than what a server has confirmed.
+  // Visible immediately, before any sync. A local-first client shows what you just did,
+  // independent of what a server has confirmed.
   assert.match(first.text(), /write it down/u, "a row added offline was not shown until it synced");
   assert.equal(first.store.rows()[0]?.title, "write it down");
   assert.notEqual(first.store.rows()[0]?.id, "", "the new row has no id until it has been pushed");
@@ -355,10 +355,10 @@ test("an offline tab keeps working, and drains when it comes back", async (t) =>
 });
 
 test("a browser with no relay to run one in still has a working list", async (t) => {
-  // The whole point of the thing. The relay lives in a `SharedWorker`, and a browser that will not
-  // give one — or a page opened where nothing is serving — leaves this device with no session at
-  // all. Nothing else changes: the database opens, the statements answer, the writes land, and the
-  // work waits in the outbox for a relay that may never come.
+  // A browser that will not give the relay a `SharedWorker`, or a page opened where nothing is
+  // serving, leaves this device with no session at all. Nothing else changes. The database opens,
+  // the statements answer, the writes land, and the work waits in the outbox for a relay that may
+  // never come.
   const world = openWorld();
   t.onTestFinished(() => world.closeAll());
   const tab = await world.open("first", { relay: false });
@@ -366,12 +366,12 @@ test("a browser with no relay to run one in still has a working list", async (t)
   await addTodo(tab, "still works");
   assert.match(tab.text(), /still works/u, "a device with no relay could not write to its own database");
   assert.equal(tab.store.rows().length, 1);
-  // The statement ran, which is the half a device with no session might have been expected to lose:
-  // the SQL runs against this device's own SQLite and has nothing to do with syncing.
+  // The statement ran, which is the half a device with no session might have been expected to
+  // lose. The SQL runs against this device's own SQLite and has nothing to do with syncing.
   await tab.until(() => tab.text().includes("added"), "the compiled activity statement answered with nothing");
 
-  // And it says so rather than claiming a connection. `sync` is a verb the page still offers, and
-  // over a device with no session it does nothing instead of throwing.
+  // The device correctly reports no live connection. `sync` is still a verb the page offers, and
+  // over a device with no session it resolves without doing anything or throwing.
   assert.equal(tab.store.status().live, false, "a device with no relay reported a live connection");
   await tab.sync();
   assert.match(tab.text(), /still works/u);
@@ -402,7 +402,7 @@ test("two tabs editing the same note line surface both versions, and resolving c
   assert.match(conflicted, /book the room/u);
   assert.match(conflicted, /Two tabs edited the same line/u, "the page did not explain the markers");
 
-  // Resolving is an ordinary edit: there is no conflict record to clear afterwards.
+  // Resolving is an ordinary edit. There is no conflict record to clear afterwards.
   await first.type("textarea", "Tuesday: send the draft, then book the room");
   await first.sync();
   await second.sync();
@@ -449,7 +449,7 @@ test("edits to different fields both survive", async (t) => {
 
 test("a tab that is started twice keeps working, and reordering moves a row", async (t) => {
   // React runs an effect twice in development, so `start` and its cleanup both run before the
-  // page settles. Reordering is the part that breaks underneath that: a rank written into a list
+  // page settles. Reordering is the part that breaks underneath that. A rank written into a list
   // the page has stopped reading is a row that does not move.
   const world = openWorld();
   t.onTestFinished(() => world.closeAll());
@@ -500,15 +500,16 @@ test("a reload keeps unsent work: the device's database is the state, not a cach
   const deviceId = first.store.deviceId;
   await first.unmount();
 
-  // Same tab name, same session storage: this is the tab reloading, not a new device. It elects
-  // itself again, starts a worker again, and opens the database the tab before it left behind.
+  // Same tab name, same session storage, which is what makes this a reload of the same device
+  // instead of a new one entering. It elects itself again, starts a worker again, and opens the
+  // database the tab before it left behind.
   const reloaded = await world.open("first");
   await reloaded.until(() => reloaded.text().includes("survive the reload"), "the reload lost the row");
   assert.equal(reloaded.store.deviceId, deviceId, "the reload changed the device identity");
   assert.equal(reloaded.store.identity.label, first.store.identity.label);
 
   // A reloaded tab comes back online and pushes what it was holding, so the proof that the
-  // outbox survived is what the *other* device can see: work made offline, in a tab that was then
+  // outbox survived is what the *other* device can see. Work made offline, in a tab that was then
   // closed, reaches a second tab that was never open at the time.
   await drain(reloaded.store, "the reloaded tab never pushed what it was holding");
   const witness = await world.open("second");
@@ -518,7 +519,7 @@ test("a reload keeps unsent work: the device's database is the state, not a cach
 });
 
 test("a mutation the worker refuses rejects the promise the caller was given", async (t) => {
-  // The event log is where the demo can arrange a refusal: its rows are append-class, and the
+  // The event log is where the demo can arrange a refusal. Its rows are append-class, and the
   // client in the worker refuses an edit to one whatever the page sends.
   const world = openWorld();
   t.onTestFinished(() => world.closeAll());
@@ -533,7 +534,7 @@ test("a mutation the worker refuses rejects the promise the caller was given", a
     /append-class/u,
     "an edit to an append-class row was accepted in silence",
   );
-  // And the row is as it was: nothing is applied on the page first, so nothing had to be undone.
+  // The row is as it was, because nothing is applied on the page first, so nothing had to be undone.
   await tab.flush();
   assert.equal(
     tab.store.source.getRow(todoEventsTable, event.id)?.fields.get(fieldName("actor")),

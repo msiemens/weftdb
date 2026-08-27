@@ -1,12 +1,11 @@
 // Mutation testing for the packages the protocol actually lives in.
 //
-// Stryker's sandbox is the wrong shape for this workspace: there is no build step, so the
-// tests import `weftdb` subpaths through pnpm's `node_modules` links, and those links
-// are absolute paths back into `packages/`. A copied sandbox would therefore keep loading the
-// unmutated originals and every mutant would "survive". Mutating in place is the only way the
-// change is visible to the suite, so this harness edits the real file, runs the suite, and
-// restores it — with the restore wired to process exit so an interrupt cannot leave a mutation
-// behind.
+// Stryker's sandbox is the wrong shape for this workspace. There is no build step, so the tests
+// import `weftdb` subpaths through pnpm's `node_modules` links, and those links are absolute paths
+// back into `packages/`. A copied sandbox would therefore keep loading the unmutated originals and
+// every mutant would "survive". Mutating in place is the only way the change is visible to the
+// suite, so this harness edits the real file, runs the suite, and restores it, with the restore
+// wired to process exit so an interrupt cannot leave a mutation behind.
 
 import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -15,10 +14,10 @@ import path from "node:path";
 import process from "node:process";
 import ts from "typescript";
 
-// The three files the protocol's decisions live in, then the modules around them that decide
-// what is accepted, what is stored, and what is generated. The second group was added after a
-// bug hunt found defects in every one of them — an unmeasured module is one where nobody knows
-// whether the tests would notice, and "the harness never looked there" is not an answer.
+// The files the protocol's decisions live in, then the modules around them that decide what is
+// accepted, what is stored, and what is generated. The second group was added after a bug hunt
+// found defects in every one of them. An unmeasured module is one where nobody knows whether the
+// tests would notice.
 //
 // `--only` takes a substring, so `--only server/` or `--only client/index` narrows a run to one
 // group without editing this list.
@@ -46,19 +45,19 @@ const TARGETS = [
 //
 // The waves decide accuracy as well as speed. A mutant only a test outside them would catch is
 // reported as a survivor, which reads as "no test notices this" when the truth is "the harness
-// never ran the test that does" — and a survivor list nobody trusts is worse than none. Because
+// never ran the test that does", and a survivor list nobody trusts is worse than none. Because
 // a wave is only reached by a mutant everything before it missed, a slow test file placed last
 // costs nothing for the mutants that die early and is paid for only by survivors, which is
 // exactly where the accuracy is needed. So every test file that exercises a target belongs in
-// some wave, however slow: the ordering is what makes that affordable.
-// Membership and order are both taken from measurement, not from which file looks cheap. The
+// some wave however slow, and the ordering is what makes that affordable.
+// Membership and order are both taken from measurement rather than from which file looks cheap. The
 // seconds below are one isolated run of each file under TEST_ENV; around half a second of each is
 // process start, so a file marked 6s is doing five seconds of work.
 //
-// Two things decide a wave. Its cost is its slowest member, because a wave's files run at once.
-// Its *size* matters as well: fifteen files spawned together measured 132s against 82s for the
-// same fifteen in one process, because fifteen module graphs on sixteen cores thrash. So a wave
-// holds at most eight files even where a ninth would be free on cost alone.
+// A wave's cost is its slowest member, because its files run at once. Its size counts as well.
+// Fifteen files spawned together measured 132s against 82s for the same fifteen in one process,
+// because fifteen module graphs on sixteen cores thrash. So a wave holds at most eight files even
+// where a ninth would be free on cost alone.
 //
 // A survivor pays every wave, which is the point of putting the expensive files last: only a
 // mutant that nothing cheaper could see gets there.
@@ -114,10 +113,10 @@ const TEST_WAVES = [
   // checks durability across a kill; `react.test.ts` and `demo.test.ts` drive the bindings and a
   // whole application over the client.
   //
-  // `demo-issues.test.ts` and `todo-seed.test.ts` are deliberately absent. They assert seeded
-  // content and rendered layout, so they fail when a demo's copy changes rather than when the
-  // protocol does — and because the harness refuses to measure anything until the baseline is
-  // green, a demo edit would stop mutation testing outright. `demo.test.ts` earns its place by
+  // `demo-issues.test.ts` and `todo-seed.test.ts` are in no wave. They assert seeded content and
+  // rendered layout, so a demo's copy changing fails them while the protocol is untouched, and the
+  // harness refuses to measure anything until the baseline is green, so a demo edit would stop
+  // mutation testing outright. `demo.test.ts` earns its place by
   // exercising sync itself rather than what the page happens to say. `trace-validation.test.ts`
   // checks the TLA+ spec rather than this source, and skips without TLC on PATH.
   [
@@ -146,10 +145,10 @@ const TEST_ENV = {
 
 // A mutant can turn a bounded loop into an unbounded one, so a wave gets a wall-clock budget.
 //
-// Per wave, not per run. A timeout is scored as a detection — the mutant changed behaviour
-// enough to hang the suite — so a budget that a healthy run can exhaust on its own turns every
-// survivor into a false detection and quietly inflates the score. Only a survivor reaches the
-// last wave, so a whole-run budget is spent precisely where the answer matters most.
+// The budget is per wave. A timeout is scored as a detection, on the grounds that the mutant
+// changed behaviour enough to hang the suite, so a budget a healthy run can exhaust on its own
+// turns every survivor into a false detection and quietly inflates the score. Only a survivor
+// reaches the last wave, so a whole-run budget is spent precisely where the answer matters most.
 //
 // It is generous against the slowest wave because sharded runs contend for the same cores, and a
 // mutant timing out for want of a core rather than for want of a fixed point is not a detection

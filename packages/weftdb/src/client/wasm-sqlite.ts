@@ -1,10 +1,10 @@
-// The `AsyncSqlExecutor` port for a browser: SQLite compiled to WebAssembly over a VFS the
-// application chooses, so a device's durable state is a real database rather than a JSON string in
+// The `AsyncSqlExecutor` port for a browser. SQLite compiled to WebAssembly over a VFS the
+// application chooses, so a device's durable state is a real database instead of a JSON string in
 // `localStorage`.
 //
 // The client module has no SQLite runtime dependency. The caller passes in an initialised wa-sqlite
-// API, the Emscripten module it was built over, and the VFS to store in, so which build ships — or
-// whether one ships at all — stays the application's decision, and this package stays importable by
+// API, the Emscripten module it was built over, and the VFS to store in, so which build ships, or
+// whether one ships at all, stays the application's decision, and this package stays importable by
 // a server that has no use for it.
 //
 // The VFS is the application's for a second reason. `IDBMirrorVFS` holds every open database in
@@ -31,8 +31,8 @@ const NUL = String.fromCodePoint(0);
  * Refuses a string this build cannot store whole.
  *
  * `wa-sqlite` binds text by pointer with no length, so SQLite reads it up to the first NUL and a
- * value that carries one is stored truncated — a note whose tail is gone on the next hydrate, with
- * nothing anywhere reporting it. Refused here, the write rejects and the caller is told.
+ * value that carries one is stored truncated, its tail gone silently by the next hydrate. Refused
+ * here, the write rejects and the caller is told.
  */
 function checked(parameters: SqlParameters): SqlValue[] {
   for (const value of parameters) {
@@ -58,7 +58,7 @@ export interface WaSqliteVfs {
 /**
  * The slice of `SQLite.Factory(module)` this uses.
  *
- * Declared structurally rather than imported, for the reason the module is: assigning the real
+ * Declared structurally instead of imported, for the reason the module is. Assigning the real
  * factory's result to this is what checks that the port still describes the library.
  */
 export interface WaSqliteApi {
@@ -72,12 +72,11 @@ export interface WaSqliteApi {
   column_names(statement: number): readonly string[];
 }
 
-/** This application's SQLite build, and how a database opened through it is stored. */
 /**
  * Adopts the API `wa-sqlite`'s own `Factory` returns.
  *
  * Its `row()` is typed to hand back a blob column as `number[]`, which is wider than `SqlValue`.
- * weftdb never writes a blob — `encodeFieldValue` stores a value as text, a number, or JSON — so
+ * weftdb never writes a blob (`encodeFieldValue` stores a value as text, a number, or JSON), so
  * nothing here ever reads one back, and the narrowing is asserted at this one point because this is
  * where the reason for it lives.
  */
@@ -85,9 +84,10 @@ export function adoptWaSqlite(api: unknown): WaSqliteApi {
   return api as WaSqliteApi;
 }
 
+/** This application's SQLite build, and how a database opened through it is stored. */
 export interface WaSqliteBuild {
   readonly sqlite3: WaSqliteApi;
-  /** The module `sqlite3` was built over. A VFS is constructed against it rather than against the API. */
+  /** The module `sqlite3` was built over; a VFS is constructed against it. */
   readonly module: WaSqliteModule;
   /**
    * Builds a VFS under the given name, e.g. `(module, name) => IDBMirrorVFS.create(name, module)`.
@@ -164,7 +164,7 @@ function waSqliteExecutor(sqlite3: WaSqliteApi, database: number): AsyncSqlExecu
     visit: (handle: number, columns: readonly string[]) => void,
   ): Promise<void> => {
     for await (const handle of sqlite3.statements(database, statement.sql)) {
-      // Binding nothing to a statement with no placeholders is an error rather than a no-op.
+      // `bind_collection` throws on a statement with no placeholders, so it is skipped here.
       if (statement.parameters.length > 0) sqlite3.bind_collection(handle, checked(statement.parameters));
       const columns = sqlite3.column_names(handle);
       while ((await sqlite3.step(handle)) === SQLITE_ROW) visit(handle, columns);

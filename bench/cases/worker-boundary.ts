@@ -1,7 +1,7 @@
 // What it costs to put the client behind a boundary rather than in the page's own heap: one
 // request/response hop across a port, the structured clone of the rows that come back over it, and
 // the commit the durable path pays per mutation. The transport cases here are a *control*, not a
-// prediction — Node's structured clone and its worker scheduling are a different implementation
+// prediction. Node's structured clone and its worker scheduling are a different implementation
 // from a browser's, and the browser harness is what says what a tab actually pays.
 import { MessageChannel, Worker, type MessagePort } from "node:worker_threads";
 import { asyncSqlExecutor } from "weftdb/shared";
@@ -52,8 +52,8 @@ export const workerBoundary: BenchGroup = {
 };
 
 /**
- * The boundary with nothing behind it: both ends are this thread, so what is left is the port hop
- * and the clone of whatever the answer carries.
+ * The boundary with nothing behind it, where both ends are this thread, so what is left is the
+ * port hop and the clone of whatever the answer carries.
  */
 async function messageChannelCases(config: BenchConfig): Promise<readonly CaseResult[]> {
   const results: CaseResult[] = [
@@ -68,7 +68,7 @@ async function messageChannelCases(config: BenchConfig): Promise<readonly CaseRe
     ),
   ];
   // One channel at a time. Two of these in flight together share a thread, so each would be
-  // measuring the other's clone as well as its own — and both would report the larger one.
+  // measuring the other's clone as well as its own, and both would report the larger one.
   for (const rows of DELTA_ROWS) {
     results.push(
       duration(
@@ -98,8 +98,9 @@ async function roundTripOverChannel(config: BenchConfig, value: QueryDelta | nul
 }
 
 /**
- * A real thread rather than a port pair. It is the closer analogue to a browser Worker: the answer
- * is produced somewhere else and has to be scheduled back, which a same-thread channel never shows.
+ * A real thread rather than a port pair. It is the closer analogue to a browser Worker, because
+ * the answer is produced somewhere else and has to be scheduled back, which a same-thread channel
+ * never shows.
  */
 async function realWorkerCase(config: BenchConfig): Promise<CaseResult> {
   const worker = new Worker(WORKER_SOURCE, { eval: true });
@@ -120,7 +121,7 @@ async function realWorkerCase(config: BenchConfig): Promise<CaseResult> {
 
 /**
  * The worker end of the protocol: answer every request, and serve a port that arrives the way a
- * second tab's does. Everything else is left out — the number is the hop, not the query.
+ * second tab's does. Everything else is left out, so the number is the hop, not the query.
  */
 const WORKER_SOURCE = [
   'const { parentPort } = require("node:worker_threads");',
@@ -137,18 +138,17 @@ const WORKER_SOURCE = [
 ].join("\n");
 
 /**
- * What a tab that does not hold the worker pays to reach it: nothing extra.
- *
- * That is the measurement. A second tab is given a `MessagePort` straight to the one worker rather
- * than proxying its traffic through the tab that made it, so its request crosses one boundary — the
- * same one the owning tab's crosses. Compared against `boundary.worker.empty`, this says whether
- * being the second tab costs anything at all.
+ * What a tab that does not hold the worker pays to reach it is nothing extra. A second tab is
+ * given a `MessagePort` straight to the one worker rather than proxying its traffic through the
+ * tab that made it, so its request crosses one boundary, the same one the owning tab's crosses.
+ * Compared against `boundary.worker.empty`, this says whether being the second tab costs anything
+ * at all.
  */
 async function brokeredPortCase(config: BenchConfig): Promise<CaseResult> {
   const worker = new Worker(WORKER_SOURCE, { eval: true });
   const channel = new MessageChannel();
   try {
-    // The handover, exactly as the leader tab performs it: the port is transferred into the worker,
+    // The handover, exactly as the leader tab performs it, transfers the port into the worker,
     // and from here on this end talks to the worker with nobody in between.
     worker.postMessage({ weft: "connect", port: channel.port2 }, [channel.port2]);
     return duration(
@@ -167,8 +167,8 @@ async function brokeredPortCase(config: BenchConfig): Promise<CaseResult> {
 }
 
 /**
- * The durability window on the other side of the boundary: one `update` on a client whose store is
- * attached, so the timed region contains the mutation and the SQLite transaction it commits.
+ * The durability window on the other side of the boundary is one `update` on a client whose store
+ * is attached, so the timed region contains the mutation and the SQLite transaction it commits.
  */
 async function sqliteCommitCases(config: BenchConfig, directory: TempDirectory): Promise<readonly CaseResult[]> {
   const results: CaseResult[] = [];
@@ -191,7 +191,7 @@ async function sqliteCommitCase(config: BenchConfig, rows: number, path: string)
     await client.update(TODOS, row, { [TITLE]: `title ${counter}` }, updateTxn(row));
   };
   // The database is opened once here rather than per sample, so the first few commits against it
-  // pay for creating the write-ahead log and preparing each statement — a cost a running
+  // pay for creating the write-ahead log and preparing each statement, a cost a running
   // application pays once at startup, not per keystroke. Those commits happen off the clock.
   for (let index = 0; index < COMMITS_BEFORE_MEASURING; index += 1) await commit();
   const samples = await repeatAsync(async () => {
@@ -210,7 +210,7 @@ async function sqliteCommitCase(config: BenchConfig, rows: number, path: string)
   );
 }
 
-/** The far end of the boundary: answer every request with the same value. */
+/** The far end of the boundary answers every request with the same value. */
 function answerOn(port: MessagePort, value: QueryDelta | null): void {
   port.on("message", (request: WorkerRequest) => {
     const response: WorkerResponse = { id: request.id, ok: true, value };
@@ -261,7 +261,7 @@ function changedRows(value: unknown): number {
   return delta === null ? 0 : delta.changed.length;
 }
 
-/** A delta shaped the way a subscription hands one out: every row of a synced client, changed. */
+/** A delta shaped the way a subscription hands one out, with every row of a synced client marked changed. */
 async function deltaOf(rows: number): Promise<QueryDelta> {
   return { added: [], removed: [], changed: (await syncedClient(rows)).listRows(TODOS) };
 }

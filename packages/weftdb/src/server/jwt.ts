@@ -2,9 +2,9 @@
 // list them. The static table this ships alongside suits one self-hosted relay; anything with
 // more than one user needs tokens that expire, and that means a signature to check.
 //
-// Deliberately small: HMAC and RSA/ECDSA verification with keys the caller supplies, no
-// network, no key discovery. Fetching a JWKS, caching it and rotating on `kid` is a policy
-// decision — the `keys` callback is where that goes, so this file never has to know.
+// This covers HMAC and RSA/ECDSA verification with keys the caller supplies, with no network
+// access and no key discovery. Fetching a JWKS, caching it and rotating on `kid` is a policy
+// decision that lives in the `keys` callback, so this file never has to know.
 import { createHmac, createPublicKey, createVerify, KeyObject, timingSafeEqual } from "node:crypto";
 import { deviceId, scopeId } from "weftdb/core";
 import type { AuthContext, TokenVerifier } from "./relay.ts";
@@ -25,7 +25,7 @@ export interface JwtClaims {
   readonly [claim: string]: unknown;
 }
 
-/** The algorithms this verifies. Anything else is refused rather than guessed at. */
+/** The algorithms this verifies. Anything else is refused. */
 export type JwtAlgorithm = "HS256" | "HS384" | "HS512" | "RS256" | "RS384" | "RS512" | "ES256" | "ES384";
 
 export interface JwtVerifierOptions {
@@ -72,8 +72,9 @@ export function jwtVerifier(options: JwtVerifierOptions): TokenVerifier {
       const claims = decodeJson<JwtClaims>(encodedPayload);
       if (header === undefined || claims === undefined) return undefined;
 
-      // The algorithm comes from the deployment, never from the token: a token that names
-      // `none`, or names HMAC where a public key is configured, is choosing its own verifier.
+      // The algorithm comes from the deployment, never from the token. A token that names
+      // `none`, or names HMAC where a public key is configured, would otherwise choose its own
+      // verifier.
       const algorithm = options.algorithms.find((candidate) => candidate === header.alg);
       if (algorithm === undefined) return undefined;
 
@@ -124,14 +125,14 @@ function verifySignature(
     return provided.length === expected.length && timingSafeEqual(provided, expected);
   }
   try {
-    // A key that is already public is used as it is: `createPublicKey` takes key *material* or
-    // a private key, and throws on a public `KeyObject`.
+    // A key that is already public is used as it is, because `createPublicKey` takes key
+    // material or a private key and throws on a public `KeyObject`.
     const publicKey = key instanceof KeyObject && key.type === "public" ? key : createPublicKey(key);
     const verifier = createVerify(digest);
     verifier.update(signed);
     verifier.end();
-    // ECDSA signatures are the raw `r || s` pair in a JWT rather than the DER the verifier
-    // expects, which is what `dsaEncoding` says here.
+    // A JWT's ECDSA signature is the raw `r || s` pair (RFC 7518 §3.4). The verifier's default
+    // expects DER, so `dsaEncoding` is set here to match.
     return verifier.verify(
       { key: publicKey, ...(algorithm.startsWith("ES") ? { dsaEncoding: "ieee-p1363" as const } : {}) },
       provided,

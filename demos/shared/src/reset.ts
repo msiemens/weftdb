@@ -2,7 +2,7 @@
 //
 // A visitor is a scope and a tab is a device, and `identity.ts` mints both from storage the first
 // time something asks for one. Clearing what this demo has written is therefore the whole of the
-// reset: the next load mints a new scope, and the relay holds no records under a scope nothing has
+// reset. The next load mints a new scope, and the relay holds no records under a scope nothing has
 // pushed to yet.
 //
 // The relay is left running. It keeps its records in memory (`relay-worker.ts`) under the scope
@@ -14,13 +14,13 @@
 import type { StorageLike } from "weftdb/client";
 import { demoKeyPrefix } from "./identity.ts";
 
-/** `Storage` in the part a reset needs: what is in it, and taking things out of it. */
+/** The part of `Storage` a reset needs. What is in it, and taking things out of it. */
 export interface EnumerableStorage extends StorageLike {
   readonly length: number;
   key(index: number): string | null;
 }
 
-/** `IDBFactory` in the two members a reset uses: what this origin holds, and dropping one. */
+/** The part of `IDBFactory` a reset uses. What this origin holds, and dropping one. */
 export interface DatabaseRegistry {
   databases(): Promise<{ name?: string | undefined }[]>;
   deleteDatabase(name: string): unknown;

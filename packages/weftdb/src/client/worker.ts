@@ -3,7 +3,7 @@ import type { CompiledQuery } from "./query.ts";
 import type { SessionStatus } from "./session.ts";
 
 /**
- * A change the page asks the worker to carry out. Only the intent crosses, never the result: the
+ * A change the page asks the worker to carry out. Only the intent crosses, never the result. The
  * `WeftClient` lives in the worker, beside the database it writes itself through to, so the page
  * has nothing to apply the mutation to. What comes back is the rows that moved, as a `WorkerPush`.
  *
@@ -31,7 +31,7 @@ export type WorkerRequestBody =
   /**
    * This port is going away, and whatever it registered goes with it.
    *
-   * It exists because a `MessagePort` has no liveness signal the host can rely on: the `close`
+   * It exists because a `MessagePort` has no liveness signal the host can rely on. The `close`
    * event is young enough that not every browser weftdb runs in fires it, and a tab that is killed
    * fires nothing anywhere. So an orderly exit says so, and the host releases that port's watches
    * rather than recomputing statements for a tab that has gone.
@@ -46,7 +46,7 @@ export type WorkerRequestBody =
   | { readonly type: "disconnect" }
   /**
    * Every row of a scope. The first thing any tab sends, and the message that says which database
-   * this port is for: a `SharedWorker` is identified by its script URL alone, so one instance
+   * this port is for. A `SharedWorker` is identified by its script URL alone, so one instance
    * serves every tab of the origin and a port arrives carrying no statement of what it wants.
    *
    * `schemaHash` comes back in the reply rather than being checked here, because the page is where
@@ -66,7 +66,7 @@ export type WorkerRequestBody =
    * The credential the sync session runs under. It crosses because the session runs beside the
    * client, in the worker, where there is no `localStorage` to read it from and no page to ask.
    *
-   * A new token is not a setting to update in place: a socket presents its token once, when it
+   * A new token is not a setting to update in place. A socket presents its token once, when it
    * connects, so the session is rebuilt around the new credential and the socket reopened. `null`
    * signs the device out and leaves the outbox exactly as it is, because unsent work belongs to
    * the device rather than to the session that would have pushed it (§4.1).
@@ -78,7 +78,7 @@ export type WorkerRequestBody =
   | { readonly type: "discardQuarantine" };
 
 /**
- * Written as an intersection rather than as a second hand-maintained union: a second union has to
+ * Written as an intersection rather than as a second hand-maintained union. A second union has to
  * be edited for every verb added here, and drifts from this one the moment it is not. Narrowing on
  * `.type` still works, because an intersection over a union distributes into a union of
  * intersections.
@@ -89,13 +89,14 @@ export type WorkerResponse =
   | { readonly id: number; readonly ok: true; readonly value: unknown }
   | { readonly id: number; readonly ok: false; readonly error: string; readonly errorName?: string };
 
-/** A row as it crosses the boundary. Maps do not survive a structured clone with their key order
- * stated, and a `LocalRow`'s sync internals — per-field HLCs, diff3 ancestors — are the worker's
+/**
+ * A row as it crosses the boundary. Maps do not survive a structured clone with their key order
+ * stated, and a `LocalRow`'s sync internals (per-field HLCs, diff3 ancestors) are the worker's
  * business, so only what the page renders from is sent.
  *
- * `rev` is the row's revision exactly as the worker holds it. It is not decoration: `RowIdentityCache`
+ * `rev` is the row's revision exactly as the worker holds it. It is not decoration. `RowIdentityCache`
  * treats it as the row's identity, so a mirror that renumbered it would hand React a new object for
- * an unchanged row on every push — or, worse, an old object for a row that changed.
+ * an unchanged row on every push, or worse, an old object for a row that changed.
  */
 export interface WireRow {
   readonly tableName: string;
@@ -109,7 +110,7 @@ export interface WireRow {
 
 /**
  * What changed, and what the statements *this port* registered now answer. Rows are only those that
- * moved — the mirror keeps the rest, which is what preserves their object identity — and `removed`
+ * moved (the mirror keeps the rest, which is what preserves their object identity), and `removed`
  * names the `${tableName}\0${id}` keys the worker no longer holds.
  *
  * Rows and results are scoped differently. A row belongs to the scope, so every port
@@ -123,7 +124,7 @@ export interface WorkerDelta {
   readonly removed: readonly string[];
   /**
    * cacheKey -> the ids that statement matched, in order. Only the statements the port this delta
-   * is addressed to registered: see `WeftWorkerHost.#push`.
+   * is addressed to registered. See `WeftWorkerHost.#push`.
    */
   readonly results: readonly (readonly [string, readonly string[]])[];
 }
@@ -139,7 +140,7 @@ export interface WorkerDeltaPush extends WorkerDelta {
 /**
  * What the sync session in the worker is doing, on its way to whatever the page renders from it.
  *
- * Sent only when something in it has actually moved: the session compares each status against the
+ * Sent only when something in it has actually moved. The session compares each status against the
  * last one it published and tells nobody when they match, so this is one message per real change
  * rather than one per poll. That comparison is also what lets the mirror hold the object it was
  * given and hand it to `useSyncExternalStore` unchanged.
@@ -174,7 +175,7 @@ export function isWorkerHydrated(value: unknown): value is WorkerHydrated {
 
 /**
  * Which of the two a message is. A response carries `id` and a push carries `push`, so this is the
- * whole test — and it has to be made, because a transport that read `id` off every message would
+ * whole test. It has to be made, because a transport that read `id` off every message would
  * settle request number `undefined` for each push that went by.
  */
 function isWorkerPush(message: WorkerMessage): message is WorkerPush {
@@ -191,7 +192,7 @@ export function isDeltaPush(message: WorkerMessage): message is WorkerDeltaPush 
 }
 
 /**
- * The far end of the protocol as the page holds it: a `SharedWorker`'s `port`, which is a
+ * The far end of the protocol as the page holds it. A `SharedWorker`'s `port`, which is a
  * `MessagePort`.
  *
  * `start` is required of a `MessagePort` reached through `addEventListener`, which delivers nothing
@@ -228,7 +229,7 @@ export interface WorkerPortTransportOptions {
  * browser stopped waits for ever on every write it makes.
  *
  * A running worker answers in milliseconds and a stopped one answers never, so this has only to
- * clear the slowest true answer — a hydrate of a large database against a cold WebAssembly module.
+ * clear the slowest true answer (a hydrate of a large database against a cold WebAssembly module).
  */
 const REQUEST_DEADLINE_MS = 20_000;
 
@@ -297,8 +298,8 @@ export class WorkerPortTransport {
 
   /**
    * Subscribes to the deltas the worker sends unasked. A set rather than a single handler because a
-   * mirror outlives the transport under it — a worker the browser stopped is replaced beneath a
-   * page that carries on — and a returned unsubscribe is what makes the two independent.
+   * mirror outlives the transport under it (a worker the browser stopped is replaced beneath a
+   * page that carries on), and a returned unsubscribe is what makes the two independent.
    */
   onPush(handler: WorkerPushHandler): () => void {
     this.#pushHandlers.add(handler);
@@ -312,7 +313,7 @@ export class WorkerPortTransport {
    *
    * The reason is a parameter because the two callers mean different things by it. A tab closing
    * its own database is one; a tab whose worker the browser stopped is the other, and a caller
-   * awaiting a write deserves to be told which — dropping the entries instead would leave it
+   * awaiting a write deserves to be told which, because dropping the entries instead would leave it
    * awaiting a promise nothing is left to settle.
    *
    * Closing the port is what tells the worker at the far end that this connection has gone.
@@ -344,7 +345,7 @@ export class WorkerPortTransport {
     this.#announceClosed();
   }
 
-  /** Once per transport: every request outstanding when a worker goes times out separately. */
+  /** Once per transport. Every request outstanding when a worker goes times out separately. */
   readonly #announceClosed = (): void => {
     if (this.#closed) return;
     this.#closed = true;
@@ -357,8 +358,9 @@ export class WorkerPortTransport {
     // one as a response would look `undefined` up in the pending map on a good day and mis-settle
     // whichever request happened to be numbered like the push on a bad one.
     if (isWorkerPush(message)) {
-      // Over a copy: a handler is allowed to unsubscribe from inside itself — the mirror's does, by
-      // way of `dispose` — and mutating the set mid-iteration would skip whoever came after it.
+      // Over a copy, because a handler is allowed to unsubscribe from inside itself (the mirror's
+      // does, by way of `dispose`), and mutating the set mid-iteration would skip whoever came
+      // after it.
       for (const handler of [...this.#pushHandlers]) handler(message);
       return;
     }

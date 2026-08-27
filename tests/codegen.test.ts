@@ -23,7 +23,7 @@ test("a field the schema marks indexed gets an index led by scope_id, and no oth
   });
   const ddl = generateClientDdl(schema);
 
-  // Led by `scope_id` because every statement a device runs is scoped: one database file holds
+  // Led by `scope_id` because every statement a device runs is scoped. One database file holds
   // every scope this device is signed into, so a query narrows by it before anything else.
   assert.match(ddl, /CREATE INDEX IF NOT EXISTS "todos_done" ON "todos" \(scope_id, "done"\);/u);
   assert.doesNotMatch(ddl, /"todos_title"/u, "a field the schema said nothing about was indexed");
@@ -48,7 +48,7 @@ test("an index is invisible to the schema hash, so adding one syncs no different
 test("the generated query builder scopes its statement and selects the id the engine reads", async () => {
   const bindings = generateBindings(defineSchema({ todos: S.collection({ title: S.string() }) }));
   // Scoping is applied before the caller's callback runs, so an application cannot write a
-  // statement that ranges past its own scope: one database file holds every scope.
+  // statement that ranges past its own scope. One database file holds every scope.
   assert.match(bindings, /selectFrom\("todos"\)\.select\("id"\)\.where\("scope_id", "=", scopeId\)/u);
   assert.match(bindings, /build: TodosQueryBuilder = \(statement\) => statement/u);
   assert.match(bindings, /export function useTodosQuery\(source: WeftSource/u);
@@ -59,15 +59,14 @@ test("the generated hooks name one source type, so a component never has to pick
     defineSchema({ todos: S.collection({ title: S.string() }), notes: S.collection({ body: S.string() }) }),
   );
 
-  // Both read paths take the same source. A row-map read needs less than a statement-backed one,
-  // but an application that names two types has to work out which of them each component takes,
-  // and a component whose read later grows a `where` has to be re-typed to get it.
+  // Both read paths take the same source, so a component that starts with a row-map read is not
+  // retyped when a later `where` turns it into a statement-backed one.
   assert.match(bindings, /export function useTodos\(source: WeftSource/u);
   assert.match(bindings, /export function useTodosQuery\(source: WeftSource/u);
   assert.match(bindings, /export function useNotes\(source: WeftSource/u);
   assert.match(bindings, /export function useNotesQuery\(source: WeftSource/u);
-  // Re-exported rather than aliased, so the name in an application's imports is the name
-  // `weftdb-react` declares and the two cannot drift.
+  // Re-exported, so the name in an application's imports is the name `weftdb-react` declares and
+  // the two cannot drift.
   assert.match(bindings, /^import \{ useWeftRows, useWeftSqlRows, type WeftSource \} from "weftdb-react";$/mu);
   assert.match(bindings, /^export type \{ WeftSource \};$/mu);
   assert.doesNotMatch(bindings, /WeftSqlSource|QueryLifecycleSource|SqlQuerySource/u);
@@ -105,7 +104,7 @@ test("generated mutators take the transaction their caller wants them in", async
   assert.match(mutators, /^import type \{ TxnId \} from "weftdb\/core";/mu);
 });
 
-/** The smallest executor that is really SQLite, and really one statement per call. */
+/** An executor backed by real SQLite, one statement per call. */
 function executorOver(database: DatabaseSync): SqlExecutor {
   return {
     all: (statement) =>
@@ -160,11 +159,11 @@ test("evolution lint rejects non-additive schema changes", async () => {
 test("changing a field's type leaves the column a device already has as it was", async () => {
   // Reconciliation on open adds the columns a local database is missing and decides what is
   // missing by name alone. A field whose `type` changed still has a column, so nothing is added
-  // and nothing is altered: the column keeps the storage class the old schema declared while the
+  // and nothing is altered. The column keeps the storage class the old schema declared while the
   // device writes the new type into it, which SQLite's affinity rules accept without complaint.
   //
-  // Pinned rather than endorsed. Teaching reconciliation to migrate a column fails this test, and
-  // the safety table in the schema-changes guide changes with it.
+  // This test only pins current behavior. Teaching reconciliation to migrate a column fails it,
+  // and the safety table in the schema-changes guide changes along with it.
   const before = defineSchema({ tasks: S.collection({ count: S.number() }) }, 1);
   const after = defineSchema({ tasks: S.collection({ count: S.string() }) }, 2);
 
@@ -250,7 +249,7 @@ test("a relationship result is the row type of the collection it names", async (
   assert.deepEqual(typeDiagnostics("relationships.ts", relationships, relationshipSiblings(schema)), []);
 });
 
-/** A parent and a child joined both ways: the smallest schema with a `hasMany` and a `hasOne`. */
+/** The smallest schema with a `hasMany` and a `hasOne`, joining a parent and a child both ways. */
 const JOINED = defineSchema({
   projects: S.collection({ name: S.string() }, { issues: S.hasMany("issues", "id", "project_id") }),
   issues: S.collection(
@@ -287,13 +286,13 @@ const ISSUES: readonly IssueRow[] = [
 ];
 
 /**
- * The generated relationship module, run rather than read.
+ * The generated relationship module runs here, because an index built once and reused is
+ * behaviour, and text is all a diagnostic can see.
  *
  * `import type` is erased by transpilation, so what is left has no imports and the whole file is
  * a module body, which the wrapper turns into a function of its own `exports`. The rest of this
- * suite checks generated text against a compiler; an index that is built once and reused is
- * behaviour, and text is all a diagnostic can see. Compiled in this context rather than a new
- * one, so the arrays the module builds have the same `Array.prototype` as the ones asserted
+ * suite checks generated text against a compiler; this function executes it in this context
+ * instead, so the arrays the module builds share the same `Array.prototype` as the ones asserted
  * against them.
  */
 function relationshipModule(schema: SchemaDefinition): Readonly<Record<string, unknown>> {
@@ -313,8 +312,8 @@ test("a generated accessor relates a parent to its children and a child back to 
   const issuesOf = (generated["projects_issuesRelation"] as IssuesOfProject)(ISSUES);
   const projectOf = (generated["issues_projectRelation"] as ProjectOfIssue)(PROJECTS);
 
-  // Both directions come out of the same declaration, and neither call site names a foreign key:
-  // the join fields are in the generated code, which is the point of declaring the relationship.
+  // Both directions come out of the same declaration, and neither call site names a foreign key.
+  // The join fields are in the generated code, which is the point of declaring the relationship.
   assert.deepEqual(
     issuesOf({ id: "p1" }).map((issue) => issue.id),
     ["i1", "i2"],
@@ -333,11 +332,11 @@ test("a parent with no children resolves empty, and a child whose parent is abse
   const projectOf = (generated["issues_projectRelation"] as ProjectOfIssue)(PROJECTS);
 
   assert.deepEqual(issuesOf({ id: "p3" }), []);
-  // A row pointing at a target this device has not synced is an ordinary state in a syncing
-  // database, not an error, so the caller decides what to show for it.
+  // A row pointing at a target this device has not synced is ordinary in a syncing database, so
+  // the caller decides what to show for it.
   assert.equal(projectOf({ project_id: "p9" }), undefined);
-  // And the same empty list every time: a fresh `[]` per miss is a new identity per render,
-  // which is what a memoised child compares against.
+  // The same empty array comes back on every miss, because a fresh `[]` each time would be a new
+  // identity per render, which is what a memoised child compares against.
   assert.equal(issuesOf({ id: "p3" }), issuesOf({ id: "p4" }));
 });
 
@@ -383,8 +382,8 @@ test("an accessor's result is the target row type, so a call site needs no cast"
       "export function owner(issue: Database['issues'], projects: readonly Database['projects'][]): string {",
       "  return issues_projectRelation(projects)(issue)?.name ?? 'none';",
       "}",
-      // What an application actually holds: the generated row with what only the client knows
-      // added to it. The accessor carries that row through rather than flattening it back.
+      // An application actually holds the generated row with what only the client knows added to
+      // it, and the accessor carries that whole row through to preserve it.
       "type IssueView = Database['issues'] & { readonly dirty: boolean };",
       "export function unsent(project: Database['projects'], issues: readonly IssueView[]): boolean {",
       "  return projects_issuesRelation(issues)(project).some((issue) => issue.dirty);",
@@ -392,8 +391,8 @@ test("an accessor's result is the target row type, so a call site needs no cast"
     ].join("\n");
 
   assert.deepEqual(typeDiagnostics("application.ts", application("title"), siblings), []);
-  // Not `any` either, which would have swallowed the point: a field the target row does not
-  // declare is still an error at the call site.
+  // The result type is not `any`, so a field the target row does not declare is still an error at
+  // the call site.
   assert.notDeepEqual(
     typeDiagnostics("application.ts", application("ttile"), siblings),
     [],
@@ -402,11 +401,11 @@ test("an accessor's result is the target row type, so a call site needs no cast"
 });
 
 test("a relationship naming a collection the schema does not define stays unknown", async () => {
-  // Unreachable through `defineSchema`, which refuses this schema outright — in both senses,
-  // since the literal below is a compile error as well as a throw. It is written by hand here
-  // because generation still has to tolerate a `SchemaDefinition` that reached it another way: a
-  // `.json` schema loaded by the CLI never passes through `defineSchema`, and `Database["absent"]`
-  // would turn `weft doctor`'s warning into a file that does not compile.
+  // Unreachable through `defineSchema`, which refuses this schema outright in both senses, since
+  // the literal below is a compile error as well as a throw. It is written by hand here because
+  // generation still has to tolerate a `SchemaDefinition` that reached it another way. A `.json`
+  // schema loaded by the CLI never passes through `defineSchema`, and `Database["absent"]` would
+  // turn `weft doctor`'s warning into a file that does not compile.
   const schema: SchemaDefinition = {
     schemaVersion: 1,
     collections: {
@@ -415,8 +414,8 @@ test("a relationship naming a collection the schema does not define stays unknow
   };
   const relationships = generateRelationshipHelpers(schema);
 
-  // The far side has no row type to name, so the accessor is bound by what it actually reads —
-  // a row carrying the joined field — and hands back whatever the caller gave it.
+  // The far side has no row type to name, so the accessor is bound only by what it actually
+  // reads, a row carrying the joined field, and hands back whatever the caller gave it.
   assert.match(relationships, /export type TasksOwnerResult<Target = unknown> = Target \| undefined;/u);
   assert.match(relationships, /<Target extends Readonly<Record<string, unknown>>>/u);
   // The near side is still this schema's own collection, so the source is typed against it.
@@ -436,7 +435,7 @@ test("relationship helper names are unambiguous after generation", async () => {
 
   // `a_b.c` and `a.b_c` both read as `a_b_cRelation`, and no separator escapes it because a table
   // may contain whichever separator the join uses. Emitting both would redeclare the helper and
-  // its result type, so the pair is refused by name — the same answer two collections that
+  // its result type, so the pair is refused by name, the same refusal two collections that
   // generate one name already get.
   const colliding = defineSchema({
     a_b: S.collection({}, { c: S.hasOne("x", "id", "id") }),
@@ -448,7 +447,7 @@ test("relationship helper names are unambiguous after generation", async () => {
 
 test("names SQLite folds together are refused where the schema declares them", async () => {
   // SQLite compares identifiers with the case of ASCII letters folded away, so each pair below
-  // reaches the database as one name. A column pair is a `duplicate column name`: the
+  // reaches the database as one name. A column pair is a `duplicate column name`, so the
   // `CREATE TABLE` does not run, and it takes the install script and the device's whole database
   // with it. A table pair is silent instead, because every table in the file is created
   // `IF NOT EXISTS` and the second declaration simply does nothing, leaving that collection
@@ -512,8 +511,8 @@ test("an index name that is already a table is refused before the DDL runs", asy
     () => defineSchema({ sync: S.collection({ state: S.string({ index: true }) }) }),
     /the index on sync\.state is named "sync_state", which is already the table "sync_state"/u,
   );
-  // Two indexes are quieter — the second `CREATE INDEX IF NOT EXISTS` does nothing — so one of
-  // the two fields the schema asked to index never has one.
+  // Two indexes are quieter, since the second `CREATE INDEX IF NOT EXISTS` does nothing, so one
+  // of the two fields the schema asked to index never has one.
   assert.throws(
     () =>
       defineSchema({
@@ -542,9 +541,9 @@ test("a schema that never passed the DSL is still refused before it reaches a da
 });
 
 test("a relationship is refused unless all three of its names resolve", async () => {
-  // A relationship is three names into the rest of the schema, and unchecked they fail quietly:
-  // the join matches no row at runtime, and the result type degrades to `unknown` — a typo that
-  // gets quieter rather than louder the more the generator learns.
+  // A relationship is three names into the rest of the schema, and unchecked they fail quietly.
+  // The join matches no row at runtime, and the result type degrades to `unknown`, so a typo gets
+  // quieter the more the generator learns.
   assert.throws(
     () =>
       defineSchema({
@@ -575,8 +574,8 @@ test("a relationship is refused unless all three of its names resolve", async ()
     /projects\.issues joins on issues\."projct_id", which issues does not declare/u,
   );
 
-  // A name inherited rather than declared is not a field: `Object.prototype` has a `toString` and
-  // no collection has a `toString` column.
+  // A name inherited from `Object.prototype`, such as `toString`, is not a field. No collection
+  // declares a `toString` column.
   assert.throws(
     () =>
       defineSchema({
@@ -598,7 +597,7 @@ test("a relationship is refused unless all three of its names resolve", async ()
 });
 
 test("checking a relationship leaves the schema hash where it was", async () => {
-  // Which collection a join names is a local concern: no row travels differently for it, and the
+  // Which collection a join names is a local concern, and no row travels differently for it. The
   // hash is protocol visible, so two devices that disagreed about it would force a resync over a
   // change neither can see.
   const schema = defineSchema({
@@ -609,9 +608,9 @@ test("checking a relationship leaves the schema hash where it was", async () => 
 });
 
 test("a relationship that names something the schema does not have is a compile error", async () => {
-  // The runtime check is the safety net; this is the point of the exercise. `S.hasMany` keeps its
-  // three arguments as the literals they were written as, so `defineSchema` can hold each one to
-  // the names that would actually resolve.
+  // The runtime check is the safety net, and `S.hasMany` keeps its three arguments as the literals
+  // they were written as, so `defineSchema` can hold each one to the names that would actually
+  // resolve.
   const schema = (relationship: string): string =>
     [
       'import { defineSchema, S } from "weftdb/schema";',
@@ -627,8 +626,9 @@ test("a relationship that names something the schema does not have is a compile 
     "a correct schema stopped compiling",
   );
 
-  // Each one names the offending string and the names it could have been, rather than unrolling
-  // the whole collection type: a constraint whose failure is unreadable is worse than none.
+  // Each one names the offending string and the names it could have been. Unrolling the whole
+  // collection type would make the constraint's failure unreadable, which is worse than no
+  // constraint at all.
   assert.match(
     typeDiagnostics("schema.ts", schema('S.hasMany("issus", "id", "project_id")')).join("\n"),
     /Type '"issus"' is not assignable to type '"projects" \| "issues"'/u,
@@ -657,8 +657,8 @@ test("a schema that declares no relationship is inferred exactly as it was", asy
     title: "write it down",
     done: false,
   };
-  // Every field the schema declares, at the type the schema declares it — none of which survives
-  // if `Collections` is inferred as anything wider than the literal it was written as.
+  // Every field the schema declares, at the type the schema declares it. None of this survives if
+  // `Collections` is inferred as anything wider than the literal it was written as.
   assert.deepEqual(Object.keys(schema.collections["todos"]?.fields ?? {}), [
     "id",
     "scope_id",
@@ -688,7 +688,7 @@ test("an enum field is worth its values everywhere they can be enforced", async 
   });
   const artifacts = generateArtifacts(schema);
 
-  // In the row type, as a union rather than `string`.
+  // In the row type, as a union of the declared values.
   assert.match(artifacts.databaseDts, /status: "open" \| "doing" \| "done";/u);
   assert.match(artifacts.databaseDts, /priority: "low" \| "high" \| null;/u);
   assert.match(artifacts.mutatorsTs, /readonly status\?: "open" \| "doing" \| "done";/u);
@@ -698,8 +698,8 @@ test("an enum field is worth its values everywhere they can be enforced", async 
   assert.match(artifacts.clientDdl, /CHECK \("status" IN \('open', 'doing', 'done'/u);
   assert.match(artifacts.clientDdl, /"priority" IS NULL/u);
 
-  // And in the decoder, which reads anything else as absent rather than returning a value that
-  // is not a member of the union it promises.
+  // In the decoder, which reads anything else back as absent, keeping every value it returns a
+  // member of the union it promises.
   const bindings = generateBindings(schema);
   assert.match(bindings, /\["open", "doing", "done"\] as unknown\[\]\)\.includes/u);
   assert.match(bindings, /: "open"/u, "a non-nullable enum falls back to something outside its own values");
@@ -709,12 +709,12 @@ test("an enum cannot be declared with a value twice", async () => {
   assert.throws(() => S.enum(["open", "open"]), /repeat/u);
 });
 
-/** The one file `relationships.ts` imports: the row types `weft generate` writes beside it. */
+/** `relationships.ts` imports one file, the row types `weft generate` writes beside it. */
 function relationshipSiblings(schema: SchemaDefinition): Readonly<Record<string, string>> {
   return { "database.d.ts": generateArtifacts(schema).databaseDts };
 }
 
-/** An application's own type for what a json field holds — an interface, as one usually is. */
+/** An application's own type for what a json field holds, an interface here as one usually is. */
 const LABEL_MODULE = [
   "export interface Label {",
   "  readonly text: string;",
@@ -739,8 +739,8 @@ test("a json field is worth the type the schema declares for it", async () => {
   assert.match(artifacts.databaseDts, /sketch: readonly string\[\] \| null;/u);
   assert.match(artifacts.mutatorsTs, /readonly label\?: Label;/u);
 
-  // Declaring nothing is still `unknown`: a field whose shape the schema does not fix has no
-  // more honest type, and every schema written before this option existed depends on it.
+  // Declaring nothing is still `unknown`, because a field whose shape the schema does not fix has
+  // no more honest type, and every schema written before this option existed depends on it.
   assert.match(artifacts.databaseDts, /freeform: unknown;/u);
   assert.match(artifacts.mutatorsTs, /readonly freeform\?: unknown;/u);
 
@@ -758,11 +758,11 @@ test("a declared json type is checked against what JSON can carry", async () => 
 
   // A json value is stored with `encodeWireValue`, so a type JSON cannot carry describes a field
   // that throws on its first write. The bindings instantiate the check, so the declaration fails
-  // to compile rather than failing at runtime on a device somebody is using.
+  // to compile, catching the problem before it reaches a device somebody is using.
   const bindings = generateArtifacts(schema).bindingsTs;
   assert.match(bindings, /type WeftJsonCheck1 = WeftDeclaredJson<Label, WeftJsonCarriable<Label>>;/u);
 
-  // The guard alone, lifted out of the bindings: the rest of the file names a client and a React
+  // The guard alone, lifted out of the bindings. The rest of the file names a client and a React
   // hook that only the real module graph resolves, and neither is what is under test here.
   const guard = bindings.slice(
     bindings.indexOf("type WeftJsonCarriable"),
@@ -787,9 +787,8 @@ test("a declared json type is read and written without a cast", async () => {
   const schema = defineSchema({ cards: S.collection({ label: S.json({ as: "Label", from: "./types.ts" }) }) });
   const artifacts = generateArtifacts(schema);
 
-  // The point of the whole option, stated as the application that would otherwise need the two
-  // casts: one to read the field as anything but `unknown`, one to write a value the mutation
-  // type is willing to accept.
+  // Without this option, the application below would need two casts: one to read the field as
+  // anything but `unknown`, one to write a value the mutation type is willing to accept.
   const application = [
     'import type { Database } from "./database.d.ts";',
     'import type { CardsMutation } from "./mutators.ts";',
@@ -833,7 +832,7 @@ test("two json types cannot share a name", async () => {
   });
   assert.throws(() => generateArtifacts(colliding), /both named "Label"/u);
 
-  // The same name from the same module is one import, not a collision.
+  // The same name from the same module is one import, so nothing collides.
   const shared = defineSchema({
     cards: S.collection({ label: S.json({ as: "Label", from: "./types.ts" }) }),
     tickets: S.collection({ label: S.json({ as: "Label", from: "./types.ts" }) }),
@@ -865,7 +864,7 @@ test("bindings give an application a hook, a decoder and mutators per collection
   const bindings = generateBindings(schema);
   assert.equal(bindings, generateArtifacts(schema).bindingsTs);
 
-  // Names are the ones a person would write by hand, not the raw table names.
+  // Names are the camelCase a person would write by hand.
   for (const expected of ["todoItemsTable", "todoItemsQuery", "decodeTodoItems", "todoItemsMutators", "useTodoItems"]) {
     assert.match(bindings, new RegExp(`export (const|function) ${expected}\\b`, "u"), `missing ${expected}`);
   }
@@ -882,8 +881,8 @@ test("bindings give an application a hook, a decoder and mutators per collection
     /export type TodoItemsField = "id" \| "scope_id" \| "created" \| "title" \| "done" \| "due_at"/u,
   );
 
-  // Decoding follows the declared type: a boolean is not a truthy string, and a nullable
-  // number is null rather than zero when the field has never been written.
+  // Decoding follows the declared type. A boolean checks for an exact `true`, and an absent
+  // nullable number decodes as `null`, matching what the schema promises.
   assert.match(bindings, /done: row\.fields\.get\(fieldName\("done"\)\) === true,/u);
   assert.match(bindings, /due_at: typeof row\.fields\.get\(fieldName\("due_at"\)\) === "number" \? .* : null,/u);
   assert.match(bindings, /title: typeof row\.fields\.get\(fieldName\("title"\)\) === "string" \? .* : '',/u);
@@ -896,8 +895,8 @@ test("bindings give an application a hook, a decoder and mutators per collection
 });
 
 // Compiled against the real standard library. Without it every use of `Array`, `length` or an
-// index signature is reported as a missing global, and the diagnostics that matter — a redeclared
-// helper, a type modifier where none is allowed — have to be picked out of that noise by hand,
+// index signature is reported as a missing global, and the diagnostics that matter (a redeclared
+// helper, a type modifier where none is allowed) have to be picked out of that noise by hand,
 // which is how a genuine error gets filtered away with the artifacts.
 const TYPE_OPTIONS: ts.CompilerOptions = {
   strict: true,
@@ -919,7 +918,7 @@ const libraryFiles = new Map<string, ts.SourceFile | undefined>();
 
 /**
  * Compiles one generated file, with whichever of its siblings it imports supplied alongside it.
- * `weft generate` writes a directory, not a file: `relationships.ts` names the row types in
+ * `weft generate` writes a whole directory, and `relationships.ts` names the row types in
  * `database.d.ts`, so checking it in isolation would be checking a file that does not exist.
  */
 function typeDiagnostics(
@@ -958,8 +957,9 @@ function typeDiagnostics(
       return ts.resolveModuleName(literal.text, containingFile, compilerOptions, host, undefined, redirected);
     });
   const program = ts.createProgram([...files.keys()], options, host);
-  // Reaching `weftdb` for the types the bindings name pulls its own sources into the program, and
-  // what those say about themselves is the workspace's `tsc` to report, not this test's.
+  // Reaching `weftdb` for the types the bindings name pulls its own sources into the program.
+  // Diagnostics are read back only for the files supplied here; whatever `weftdb`'s own sources
+  // say about themselves is the workspace's `tsc` to report.
   const sources = [...files.keys()].map((name) => program.getSourceFile(name));
   return sources
     .flatMap((file) => [...program.getSyntacticDiagnostics(file), ...program.getSemanticDiagnostics(file)])

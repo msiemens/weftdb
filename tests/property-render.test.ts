@@ -1,12 +1,12 @@
 // Render stability, as a property. Three separate bugs in this repository have been infinite
-// render loops — a subscription engine shared by two clients, a query snapshot rebuilt on every
-// read, and a decoded row list handed back as a fresh array. Each was found by a person opening
+// render loops (a subscription engine shared by two clients, a query snapshot rebuilt on every
+// read, and a decoded row list handed back as a fresh array). Each was found by a person opening
 // the page and watching it die, because every existing test asserts what the page *says* and
 // none of them assert how many times it had to render to say it.
 //
-// So: mount the page, drive generated sequences of the things a person can do, and hold it to a
-// budget. A loop blows the budget immediately; a merely wasteful render shows up as a number
-// that climbs when it should not.
+// This mounts the page, drives generated sequences of the things a person can do, and holds it
+// to a budget. A loop blows the budget immediately; a merely wasteful render shows up as a
+// number that climbs when it should not.
 import assert from "node:assert/strict";
 import { beforeAll, test } from "vitest";
 import fc from "fast-check";
@@ -19,8 +19,8 @@ import { DemoBrowser } from "./demo-fixtures.ts";
 
 const RUNS = Number(process.env["WEFT_RENDER_RUNS"] ?? 25);
 /**
- * What one action is allowed to cost. A click legitimately commits a few times — the store
- * publishes, the query notifies, React batches what it can — but nothing a person does should
+ * What one action is allowed to cost. A click legitimately commits a few times (the store
+ * publishes, the query notifies, React batches what it can), but nothing a person does should
  * cost dozens of renders, and a loop costs thousands.
  */
 const COMMITS_PER_ACTION = 12;
@@ -260,8 +260,7 @@ test("no sequence of things a person can do makes the page render without bound"
         for (const action of actions) {
           await page.run(action);
           await settle([page]);
-          // Checked after every action rather than at the end, so the failure names the action
-          // that ran away rather than the sequence that contained it.
+          // Checked after every action, so a failure points directly at the action that ran away.
           assert.ok(
             page.commits() <= budget,
             `${action.kind} pushed the page to ${page.commits()} renders, past the ${budget} a run of ${actions.length} actions is allowed`,

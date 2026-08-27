@@ -1,6 +1,6 @@
-// The wake-up socket, checked at both levels: the framing on its own, and then the whole thing
-// end to end against Node's built-in WebSocket client — which is the same implementation a
-// browser would use, so a handshake or framing mistake shows up here rather than in a tab.
+// The wake-up socket, checked at the framing level on its own and then end to end against
+// Node's built-in WebSocket client, the same implementation a browser uses, so a handshake or
+// framing mistake surfaces here before it would reach a tab.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { connect, type Socket } from "node:net";
@@ -36,7 +36,7 @@ function values(input: Record<string, WireValue>): Record<FieldName, WireValue> 
   return input;
 }
 
-/** A client frame, as a browser would put it on the wire: masked, with a random key. */
+/** A client frame, masked with a random key, as a browser would put it on the wire. */
 function maskedFrame(opcode: number, payload: Buffer, fin = true): Buffer {
   const mask = Buffer.from([0x12, 0x34, 0x56, 0x78]);
   const masked = Buffer.from(payload);
@@ -96,7 +96,7 @@ test("frames arriving in pieces are held until they are whole, and extras are ke
   assert.equal(read.status, "frame");
   if (read.status !== "frame") return;
   assert.equal(read.frame.payload.toString("utf8"), "wake up");
-  // The second frame must still be there: dropping it loses a wake-up nobody will resend.
+  // The second frame must still be there, because dropping it loses a wake-up nobody will resend.
   assert.deepEqual([...read.rest], [...second], "the bytes after the frame were discarded");
 });
 
@@ -200,8 +200,7 @@ test("a push by one device wakes another, which then pulls it", async (t) => {
   const wakes: (ScopeAdvanced | undefined)[] = [];
   const connected = nextWake();
   let pending = nextWake();
-  // The relay sends a bare announcement to a connection that has not subscribed, and that
-  // announcement is what this test follows.
+  // The relay sends a bare announcement to a connection that has not subscribed.
   const connection = connectSocketTransport({
     url: running.socketUrl,
     token: "token-beta",
@@ -230,7 +229,7 @@ test("a push by one device wakes another, which then pulls it", async (t) => {
   assert.equal(advanced?.scopeId, SCOPE);
   assert.ok((advanced?.serverSeq ?? 0) > 0, "the wake-up carried no sequence to catch up to");
 
-  // The wake-up carries no data — beta learns what changed the ordinary way.
+  // The wake-up carries no data, so beta learns what changed the ordinary way.
   const beta = client("beta");
   await beta.syncWith(httpTransport({ baseUrl: running.url, token: "token-beta" }), HASH);
   assert.equal(beta.getRow(TODOS, rowId("todo-1"))?.fields.get(fieldName("title")), "buy milk");
@@ -245,9 +244,9 @@ test("a push by one device wakes another, which then pulls it", async (t) => {
 });
 
 test("a change nobody pushed still wakes the devices it affects", async (t) => {
-  // Pruning raises the tombstone floor, which is exactly the change a device most needs to
-  // hear about — below the floor it can no longer be caught up incrementally at all. Nothing
-  // was pushed, so a relay that only broadcasts from its push route says nothing.
+  // Pruning raises the tombstone floor. A device that falls behind the floor cannot catch up
+  // incrementally, so this announcement matters more than an ordinary push. Nothing here is
+  // pushed, so a relay that only broadcasts from its push route would announce nothing.
   const running = await relay();
   t.onTestFinished(() => running.close());
 
@@ -261,7 +260,7 @@ test("a change nobody pushed still wakes the devices it affects", async (t) => {
   t.onTestFinished(() => connection.close());
   await connected.promise;
 
-  // Something to prune: a row deleted long enough ago to be past the retention window.
+  // A row deleted long enough ago to be past the retention window, so there is something to prune.
   const alpha = client("alpha");
   await alpha.create(
     TODOS,
@@ -295,7 +294,7 @@ test("a socket that stops answering is dropped rather than kept forever", async 
     host: "127.0.0.1",
     port: 0,
     tokens: new Map([["token-beta", authContext("shared-list", "beta")]]),
-    // Driven by hand below rather than by waiting for a real interval.
+    // The sweep below is triggered by hand, so the test does not wait for a real keepalive interval.
     keepaliveMs: 0,
   });
   t.onTestFinished(() => running.close());
@@ -495,8 +494,8 @@ test("a whole sync session runs over the socket", async (t) => {
 });
 
 test("the socket transport ends where the HTTP one does", async (t) => {
-  // The two carry the same four calls, so a history run over each has to land in the same
-  // place. Anything else means the transport is doing something of its own.
+  // The two carry the same calls, so a history run over each has to land in the same place.
+  // Anything else means the transport is doing something of its own.
   const running = await relay();
   t.onTestFinished(() => running.close());
   const socket = await connected(running, "token-alpha");
@@ -530,8 +529,8 @@ test("the socket transport ends where the HTTP one does", async (t) => {
     await target.syncWith(transport, HASH);
   }
 
-  // Both catch up on everything before being compared, so what is left is what the transports
-  // did rather than what order the test happened to run them in.
+  // Both catch up on everything before being compared, so any difference left reflects the
+  // transports themselves.
   await overSocket.syncWith(socket, HASH);
   await overHttp.syncWith(http, HASH);
   await overSocket.syncWith(socket, HASH);
@@ -566,8 +565,8 @@ test("a rejection comes back over the socket as a rejection, not an error", asyn
   );
   await alpha.syncWith(socket, HASH);
 
-  // A second create for a row that exists is refused by the server, and the client has to see
-  // that as a rejection it can act on rather than as the connection failing.
+  // A second create for a row that exists is refused by the server, and the client must surface
+  // that refusal as an actionable rejection while the connection itself stays open.
   const other = client("beta");
   await other.create(
     TODOS,
@@ -592,8 +591,8 @@ test("a rejection comes back over the socket as a rejection, not an error", asyn
 test("a large answer does not hold up everything behind it", async (t) => {
   // One socket carries every request and every wake-up, so a megabyte written in one go is a
   // megabyte during which nothing else on that connection moves. Large answers go out in
-  // pieces; this checks that something sent during one actually arrives in the middle of it
-  // rather than after the whole thing.
+  // pieces, and this checks that a wake-up sent while one is still going out arrives interleaved
+  // with its chunks, ahead of the snapshot's last one.
   const running = await relay();
   t.onTestFinished(() => running.close());
 
@@ -632,7 +631,7 @@ test("a large answer does not hold up everything behind it", async (t) => {
       const message = JSON.parse(String(event.data)) as { readonly type?: string; readonly last?: boolean };
       order.push(message.type ?? "?");
       if (message.type === "chunk") sawFirstChunk();
-      // A wake-up landing while chunks are still coming is the whole point.
+      // This resolves true only if a wake-up lands while chunks are still arriving.
       if (message.type === "advanced") resolve(order.filter((kind) => kind === "chunk").length > 0);
       if (message.type === "chunk" && message.last === true) resolve(false);
     });
@@ -651,9 +650,9 @@ test("a large answer does not hold up everything behind it", async (t) => {
 });
 
 test("a request the relay cannot carry out is refused, and the connection carries on", async (t) => {
-  // The socket names operations rather than routes, so the ways a request can be wrong are
-  // "no such operation" and "that operation needs an argument you did not send". Neither may
-  // take the connection down: everything else a device has in flight is on it.
+  // Requests to the socket name an operation, so the ways one can be wrong are "no such
+  // operation" and "that operation needs an argument you did not send". Neither failure takes
+  // the connection down, because a device may have other requests in flight on the same socket.
   const running = await relay();
   t.onTestFinished(() => running.close());
 
@@ -679,10 +678,10 @@ test("a request the relay cannot carry out is refused, and the connection carrie
 });
 
 test("a subscribed client is sent what changed, not a note saying something did", async (t) => {
-  // The wake-up costs a round trip: the relay knows what moved, and telling a client to come
-  // and ask for it is a second message carrying nothing. A client that says where its cursor
-  // is gets the records instead — the same batch `/pull` would have answered with, applied by
-  // the same code, so nothing about merging changes.
+  // The wake-up costs a round trip. The relay already knows what changed, so a bare notice
+  // telling a client to come ask for it is a second message carrying nothing new. A client that
+  // reports its cursor instead gets the records directly, the same batch `/pull` would answer
+  // with and applied by the same code, so there is no separate merge path for this case.
   const running = await relay();
   t.onTestFinished(() => running.close());
 
@@ -709,7 +708,7 @@ test("a subscribed client is sent what changed, not a note saying something did"
   );
   await writer.syncWith(httpTransport({ baseUrl: running.url, token: "token-alpha" }), HASH);
 
-  // No pull from this client at any point: everything it holds arrived unasked.
+  // No pull happens from this client at any point, because everything it holds arrived unasked.
   await waitFor(
     () => reader.getRow(TODOS, rowId("todo-1"))?.fields.get(fieldName("title")) === "buy milk",
     "the change never arrived without being asked for",
@@ -791,8 +790,8 @@ test("a fragmented websocket request is answered or rejected instead of ignored"
   const running = await relay();
   t.onTestFinished(() => running.close());
   const socket = await rawWebSocket(running.socketUrl, "token-alpha");
-  // A block body, not an expression one: `destroy()` answers with the socket, and a cleanup
-  // callback is typed as returning nothing or a promise.
+  // `destroy()` returns the socket, and a cleanup callback here is typed as returning nothing or
+  // a promise, so this arrow needs a block body.
   t.onTestFinished(() => {
     socket.destroy();
   });
@@ -850,7 +849,7 @@ test("a socket the relay refuses does not become a transport", async (t) => {
 
   await new Promise((resolve) => setTimeout(resolve, 200));
   assert.equal(transport.connected, false);
-  // Failing loudly is the point: work stays in the outbox rather than looking as if it synced.
+  // This failure keeps the pull from silently marking work as synced when it never reached the server.
   await assert.rejects(transport.pull(SCOPE, 0), /not connected/u);
 });
 

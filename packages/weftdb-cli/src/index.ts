@@ -32,9 +32,9 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
   if (command === "serve") {
-    // Imported lazily, and for the same reason the SQLite executor is: `weft generate` runs in
-    // build steps that will never listen on a port, and it should not pay for the server's
-    // socket stack and SQLite binding to find that out.
+    // Imported lazily, for the same reason the SQLite executor is, because `weft generate` runs
+    // in build steps that will never listen on a port and should not pay for the server's socket
+    // stack and SQLite binding to find that out.
     const { main: serve } = await import("weftdb/server/serve");
     await serve(process.env, args);
     return;
@@ -96,9 +96,9 @@ export type LoadedSchema =
   | { readonly ok: false; readonly errors: readonly string[] };
 
 /**
- * The schema DSL is TypeScript, so that module is the source of truth: a `.ts`/`.js` schema
- * is imported and its exported `SchemaDefinition` taken. A `.json` file is still accepted
- * for pipelines that would rather not execute project code.
+ * The schema DSL is TypeScript, so a `.ts`/`.js` schema is imported and its exported
+ * `SchemaDefinition` taken directly from the module. A `.json` file is still accepted for
+ * pipelines that would rather not execute project code.
  */
 export async function loadSchema(path: string): Promise<LoadedSchema> {
   const resolved = resolve(path);
@@ -247,9 +247,9 @@ function validateSchemaJson(value: unknown): SchemaJsonValidation {
       }
       if (typeof field["nullable"] !== "boolean")
         errors.push(`${collectionName}.${fieldName}.nullable must be boolean`);
-      // An enum is worth exactly its values: they decide the row type, the mutator's argument
-      // type, and the column's `CHECK`. A field declared `enum` without them is a `string` the
-      // generator would go on to describe as a union of nothing.
+      // An enum is worth exactly its values, because they decide the row type, the mutator's
+      // argument type, and the column's `CHECK`. A field declared `enum` without them is a
+      // `string` the generator would go on to describe as a union of nothing.
       if (field["type"] === "enum") {
         const values = field["values"];
         if (!Array.isArray(values) || values.length === 0 || values.some((value) => typeof value !== "string")) {
@@ -260,9 +260,9 @@ function validateSchemaJson(value: unknown): SchemaJsonValidation {
       } else if (field["values"] !== undefined) {
         errors.push(`${collectionName}.${fieldName}.values is only valid on an enum field`);
       }
-      // A declared TypeScript type is only meaningful where the generator would otherwise write
-      // `unknown`, and it is written verbatim into an import and a type position, so a shape the
-      // schema DSL would have refused has to be refused here too rather than emitted.
+      // A declared TypeScript type matters only where the generator would otherwise write
+      // `unknown`, and because it is written verbatim into an import and a type position, a
+      // shape the schema DSL would have refused has to be refused here too.
       const jsonType = field["jsonType"];
       if (jsonType !== undefined) {
         if (field["type"] !== "json") {
@@ -274,10 +274,11 @@ function validateSchemaJson(value: unknown): SchemaJsonValidation {
         }
       }
     }
-    // The framework owns these three: the server refuses a write to any of them, the client
-    // fills them in, and the generated table keys on `(scope_id, id)`. A JSON schema that leaves
-    // them out describes a table the rest of the system does not implement, and generation would
-    // go on to emit a primary key over columns that are not there.
+    // The framework owns `id`, `scope_id`, and `created`, because the server refuses a write to
+    // any of them, the client fills them in, and the generated table keys on `(scope_id, id)`. A
+    // JSON schema that leaves them out describes a table the rest of the system does not
+    // implement, and generation would go on to emit a primary key over columns that are not
+    // there.
     for (const base of ["id", "scope_id", "created"]) {
       if (!(base in fields))
         errors.push(`${collectionName}.${base} is missing; every collection carries id, scope_id and created`);
@@ -292,10 +293,10 @@ function validateSchemaJson(value: unknown): SchemaJsonValidation {
 /**
  * `defineSchema` throws on all three of these before a schema can be built, but `loadSchema` also
  * accepts a `.json` file for pipelines that would rather not execute project code, and that value
- * never passes through the DSL: it is cast to a `SchemaDefinition` after `validateSchemaJson`, so
- * this is the only thing standing between such a schema and a generated join that matches no row.
- * For a `.ts` schema it repeats a check the DSL has already made; for a `.json` one it is the whole
- * check, the two field names included.
+ * never passes through the DSL. It is cast to a `SchemaDefinition` after `validateSchemaJson`, so
+ * this function is the only thing standing between such a schema and a generated join that
+ * matches no row. For a `.ts` schema it repeats a check the DSL has already made; for a `.json`
+ * one it is the whole check, field names included.
  */
 function validateRelationshipReferences(schema: import("weftdb/schema").SchemaDefinition): readonly string[] {
   const warnings: string[] = [];
@@ -361,8 +362,8 @@ function sqlLiteral(value: unknown): string {
   if (typeof value === "number") return Number.isFinite(value) ? String(value) : "NULL";
   if (typeof value === "boolean") return value ? "1" : "0";
   // A snapshot's values are whatever JSON carried, so a collection or an array reaches here too.
-  // `String(...)` would write '[object Object]' into the rehydrated database; the JSON shape the
-  // value arrived in is at least the thing that was stored.
+  // `String(...)` would write '[object Object]' into the rehydrated database, so a non-string
+  // value is serialized back into the JSON form it was stored in.
   const text = typeof value === "string" ? value : JSON.stringify(value);
   return `'${text.replaceAll("'", "''")}'`;
 }
@@ -372,8 +373,8 @@ function quoteIdent(value: string): string {
 }
 
 // `file://${path}` is not a URL on Windows (`file://D:\weft\cli.ts`) and is wrong anywhere the
-// path needs escaping, so the entry check goes through the proper conversion — otherwise the
-// CLI is imported, runs nothing, and exits 0 as if it had worked.
+// path needs escaping, so the entry check goes through the proper conversion. Skipping it lets
+// the CLI be imported, run nothing, and exit 0 as if it had worked.
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
 }

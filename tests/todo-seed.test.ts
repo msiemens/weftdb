@@ -1,7 +1,6 @@
-// The rows a visitor arrives to, and the rule that they are written once. Seeding is the one
-// thing the demo does behind the visitor's back, so it is held to the shape of the storage it
-// reads: a scope shared by every tab of a browser, a device per tab, and a list that stays as the
-// visitor left it.
+// Seeding writes a scope's initial rows once. Local storage is shared by every tab of a
+// browser, session storage gives each tab its own device, and the list persists as the visitor
+// left it.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { TodoStore } from "weftdb-demo-todo";
@@ -21,10 +20,10 @@ function openBrowser(): DemoBrowser {
  * Opens a tab, runs it until its outbox is empty, closes it, and hands back the titles it was
  * showing in rank order.
  *
- * Every write crosses a port twice — the mutator posts and the worker echoes — so what a list holds
- * a tick after `start` is not what it holds once the echoes have landed. Draining the outbox is the
- * one condition that covers both: nothing is pending until every mutation has been applied in the
- * worker, and nothing is unsent once the relay has taken them.
+ * A write crosses the port when the mutator posts it, then again when the worker echoes it back,
+ * so what a list holds a tick after `start` is not what it holds once the echo has landed.
+ * Draining the outbox waits out both crossings, so nothing is pending until the worker has
+ * applied every mutation, and nothing is unsent once the relay has taken it.
  */
 async function titles(browser: DemoBrowser, name: string): Promise<readonly string[]> {
   const store = await TodoStore.open(browser.window(name), browser.overrides());
@@ -95,14 +94,14 @@ test("three tabs opened together seed the list once between them", async (t) => 
   t.onTestFinished(async () => {
     for (const store of stores) await store.dispose();
   });
-  // Started in one turn, which is what three tabs opened at once are: every one of them reads the
-  // mark before any of them has written it.
+  // Opening three tabs in the same turn means every one of them reads the seeded mark before any
+  // of them has written it.
   const stops = stores.map((store) => store.start());
   t.onTestFinished(() => {
     for (const stop of stops) stop();
   });
   await Promise.all(stores.map((store) => store.seeded()));
-  // Twice: the first pass sends what each tab wrote, the second is what pulls the others' work.
+  // The first pass sends what each tab wrote; the second pulls in what the others wrote.
   for (const pass of [0, 1]) for (const store of stores) await drain(store, `pass ${pass} never drained`);
 
   for (const store of stores) {
@@ -118,8 +117,8 @@ test("a tab that arrives to a scope with rows in it seeds nothing", async (t) =>
   const list = await titles(browser, "one");
   assert.ok(list.length > 0);
 
-  // The state of a browser whose demo storage has been cleared while the relay kept the rows: the
-  // list exists, and nothing on this machine remembers writing it.
+  // This simulates a browser whose demo storage was cleared while the relay kept the rows, so
+  // the list exists but nothing on this machine remembers writing it.
   const scope = browser.local.getItem(`weftdb-demo/${DEMO}/scope`);
   browser.local.removeItem(`weftdb-demo/${DEMO}/seeded/${String(scope)}`);
 

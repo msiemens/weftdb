@@ -1,6 +1,6 @@
-// The SQLite build the storage worker is served over in these tests, and it is a real one: the
-// `wa-sqlite` asynchronous WebAssembly module, the same one a browser loads, over a VFS that keeps
-// its files in memory.
+// The SQLite build the storage worker is served over in these tests is a real one, the `wa-sqlite`
+// asynchronous WebAssembly module a browser loads, running over a VFS that keeps its files in
+// memory.
 //
 // `IDBMirrorVFS` is what ships, and it needs IndexedDB, which Node has not got. `MemoryAsyncVFS` is
 // the same author's VFS with the same asynchronous interface and the same suspend-inside-a-page-
@@ -19,15 +19,15 @@ const require = createRequire(import.meta.url);
 const wasmBinary = readFileSync(require.resolve("wa-sqlite/dist/wa-sqlite-async.wasm"));
 
 /**
- * One browser's storage: one WebAssembly module, and a VFS per name that outlives every database
+ * One browser's storage is one WebAssembly module, and a VFS per name that outlives every database
  * opened in it.
  *
  * A file survives being closed and opened again, which is the property a device depends on and an
- * ordinary in-memory database has not got — it is what a tab coming back to a scope another tab
- * finished with reads. Two names are two VFSs, which is what makes two namespaces two files.
+ * ordinary in-memory database lacks, so a tab coming back to a scope another tab finished with
+ * reads what that tab left. Two names are two VFSs, which is what makes two namespaces two files.
  *
- * A VFS holds its files, so `close` is left to do nothing: closing one would take the database with
- * it and the next open would find an empty file.
+ * A VFS holds its files, so `close` is left to do nothing. Closing one would take the database with
+ * it, and the next open would find an empty file.
  */
 export function memorySqlite(): () => Promise<WaSqliteBuild> {
   const kept = new Map<string, WaSqliteVfs>();

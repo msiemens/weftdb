@@ -7,8 +7,8 @@
  * for everything the machine reports about itself. Hairline rules instead of boxes, and one
  * raised surface at a time.
  *
- * This file holds the palette and nothing else. What each surface does with it — the ground and
- * its weave, the body type, the components — belongs to that surface.
+ * This file holds the palette and nothing else. What each surface does with it (the ground and
+ * its weave, the body type, the components) belongs to that surface.
  *
  * The values are written through `light-dark()` so one declaration serves both themes. That
  * matters because the two consumers settle the theme differently: the documentation offers a
@@ -29,15 +29,15 @@
 
   --ground: light-dark(#e6e2d8, #121210);
   --surface: light-dark(#fcfbf8, #1b1a17);
-  /* Recessed: fields, code, chips — anything that should read as cut into the surface rather than
-     laid on top of it. */
+  /* Recessed: fields, code, chips, and anything else that should read as cut into the surface
+     rather than laid on top of it. */
   --sunken: light-dark(#f1eee5, #232119);
   --rule: light-dark(#dcd6c8, #322f28);
   --rule-strong: light-dark(#c8c0ae, #47433a);
 
   --ink: light-dark(#191813, #f0ede4);
   --ink-2: light-dark(#5a554a, #a69f91);
-  /* The faintest ink still cleared for text at this size — 4.8:1 on --surface. Anything quieter
+  /* The faintest ink still cleared for text at this size, 4.8:1 on --surface. Anything quieter
      than this is a border, not a word. */
   --ink-3: light-dark(#756f62, #837c6d);
 
@@ -55,9 +55,9 @@
   --bad: light-dark(#9a2b26, #f08c86);
   --bad-wash: light-dark(#f7dfdc, #2e1a18);
 
-  /* Twill: the single diagonal a fabric weave leaves, faint enough to be felt rather than seen.
-     Crossing it with its mirror produced a cross-hatch that read as wallpaper, so it runs one way
-     only. */
+  /* Twill: the single diagonal a fabric weave leaves, faint enough to be felt rather than seen. It
+     runs one way only, since crossing it with its mirror reads as a cross-hatch that looks like
+     wallpaper. */
   --weave: light-dark(rgb(25 24 19 / 4%), rgb(240 237 228 / 2.5%));
 
   --radius: 10px;
@@ -69,7 +69,7 @@
 
 /*
  * `--shadow` is the one token `light-dark()` cannot carry, because it is not a colour. These three
- * rules are what the single declaration above would have been. Order matters: the two
+ * rules are what the single declaration above would have been. Order matters. The two
  * `[data-theme]` rules have the same specificity as the guarded one in the media query, so they
  * have to come after it to win when a reader has chosen a theme against their system's.
  */

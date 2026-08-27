@@ -11,15 +11,14 @@ import type {
 } from "weftdb/client";
 
 /**
- * A store this can subscribe to, and the keys it accepts. The key type comes from the source
- * rather than being `string`: a source that knows its own keys — a union of the queries it
- * was built with, or a branded id — makes asking it for something it does not have a compile
- * error instead of an `undefined` at runtime.
+ * A store this can subscribe to, and the keys it accepts. The key type is generic on the source,
+ * so a source whose keys are a union of the queries it was built with, or a branded id, turns
+ * asking it for a key it does not have into a compile error instead of an `undefined` at runtime.
  */
 export interface SubscriptionSource<Value, Key extends SubscriptionKey = string> {
-  // Written as function properties rather than methods on purpose: TypeScript compares method
-  // parameters bivariantly, which would let a source that accepts two keys stand in for one
-  // asked for a third — exactly the mistake this type exists to catch.
+  // Function properties rather than methods, because TypeScript compares method parameters
+  // bivariantly, which would let a source that accepts two keys stand in for one asked for a
+  // third, the mistake this type exists to catch.
   readonly getSnapshot: (key: Key) => Value;
   readonly subscribe: (key: Key, listener: () => void) => () => void;
 }
@@ -44,10 +43,10 @@ export interface SuspenseSubscriptionSource<Value, Key extends SubscriptionKey =
 }
 
 /**
- * In-flight loads, per source. A key is only unique within the source that issues it, so a
- * single map of keys makes two sources asked for `"shared-key"` share one load: the second is
- * never asked for its own, and renders the first one's value. The outer map is weak so a source
- * that goes out of scope takes its in-flight loads with it.
+ * In-flight loads, keyed first by source and then by key. A key is unique only within the source
+ * that issues it, so keying only by key would let two sources asked for `"shared-key"` share one
+ * load, with the second rendering the first one's value instead of its own. The outer map is
+ * weak, so a source that goes out of scope takes its in-flight loads with it.
  */
 const suspensePromises = new WeakMap<object, Map<SubscriptionKey, Promise<unknown>>>();
 
@@ -61,8 +60,7 @@ export function useWeftSuspenseQuery<Value, Key extends SubscriptionKey>(
   suspensePromises.set(source, pending);
   const promise = pending.get(key) ?? source.load(key).finally(() => pending.delete(key));
   pending.set(key, promise);
-  // Throwing the promise is how Suspense is told to wait for it, so this is the protocol rather
-  // than an error being raised.
+  // Throwing the promise is how Suspense is told to wait for it.
   // eslint-disable-next-line @typescript-eslint/only-throw-error
   throw promise;
 }
@@ -78,9 +76,9 @@ export function useWeftQuerySnapshot(source: QueryLifecycleSource, key: QueryKey
 
 /**
  * A query's rows, decoded into whatever the schema says they are. The decoded array is cached
- * against the snapshot it came from: rebuilding it on every render would hand React a new
- * array each time, which is an infinite update loop rather than a slow render. Generated hooks
- * are built on this, so an application never has to know that.
+ * against the snapshot it came from, because rebuilding it on every render would hand React a
+ * new array each time and turn a slow render into an infinite update loop. Generated hooks build
+ * on this so application code never manages the cache itself.
  */
 export function useWeftRows<Row>(
   source: QueryLifecycleSource,
@@ -110,17 +108,17 @@ export function useWeftSqlSnapshot(source: WeftSource, query: ReactiveSqlQuery):
     () => source.engine.getSqlSnapshot(latest.current, source.select, source.rows),
     [source, cacheKey],
   );
-  // Registers the statement with whatever holds the database, where that is not this thread.
+  // Registers the statement with whatever holds the database when that is not this thread.
   //
-  // Without it a worker-backed source has no answer for this statement for as long as the page is
-  // open, because it answers out of what the worker last pushed and the worker was never asked to
-  // run it — a list that renders empty rather than a list that is broken. Called outright rather
-  // than through `?.`: a source whose database is on this thread implements the pair as no-ops, and
-  // a source that implemented neither would be skipped in silence.
+  // A worker-backed source needs this call, because it answers a query out of what the worker
+  // last pushed, and a query the worker was never asked to run answers empty instead of erroring.
+  // The call is unconditional rather than through `?.`, because a source whose database lives on
+  // this thread implements watch and unwatch as no-ops, and a source implementing neither would
+  // otherwise be skipped in silence instead of failing loudly.
   //
-  // Keyed on the cache key rather than on the query, for the reason above: a generated builder
-  // compiles a fresh statement every render, and re-registering one a pass would have the worker
-  // retiring and re-running it for ever. The registration is handed back on unmount, or the worker
+  // The effect is keyed on the cache key rather than on the query object, because a generated
+  // builder compiles a fresh statement on every render, and keying on identity would retire and
+  // re-run the registration every pass. The registration is released on unmount, or the worker
   // goes on recomputing a statement nobody reads.
   useEffect(() => {
     const query = latest.current;

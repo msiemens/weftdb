@@ -1,10 +1,9 @@
 /**
- * SHA-256, in portable TypeScript.
+ * SHA-256, computed synchronously.
  *
- * Schema hashes and diff3 base hashes are protocol values: two devices comparing them must
- * compute the same digest from the same bytes, whatever they are running on. `node:crypto`
- * would tie the client — the half that lives in a browser — to Node, and the Web Crypto API
- * is asynchronous where these call sites are not. Sixty lines of arithmetic avoids both.
+ * `stableHash` runs inside the relay's `validateTxn`, which is synchronous, and the snapshot digest
+ * inside `contentAddressSnapshot`, which is too. The Web Crypto API answers a digest with a promise
+ * and has no synchronous form, so it cannot be called from either.
  */
 
 const K = new Uint32Array([
@@ -21,10 +20,10 @@ const K = new Uint32Array([
 export function sha256Hex(input: string): string {
   const blocks = paddedBlocks(new TextEncoder().encode(input));
   const schedule = new Uint32Array(64);
-  // The eight words of state are locals rather than an array. This loop runs once per 64 bytes
-  // of everything the protocol hashes, and reading the state out of an array — let alone
-  // destructuring it, which builds an iterator — costs more per block than the compression
-  // does.
+  // The eight words of state are locals rather than array elements, because reading state out
+  // of an array costs more per block than the compression does, and destructuring it would cost
+  // more still by building an iterator. This loop runs once per 64 bytes of everything the
+  // protocol hashes.
   let hash0 = 0x6a09e667;
   let hash1 = 0xbb67ae85;
   let hash2 = 0x3c6ef372;
@@ -60,8 +59,8 @@ export function sha256Hex(input: string): string {
     let g = hash6;
     let h = hash7;
     for (let index = 0; index < 64; index += 1) {
-      // Rotations are written out rather than called: the compression function is the whole
-      // cost of a hash, and each round has six of them.
+      // Rotations are written out rather than called, because the compression function is the
+      // whole cost of a hash, and each round has six of them.
       const s1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
       const choice = (e & f) ^ (~e & g);
       const temp1 = (h + s1 + choice + (K[index] ?? 0) + (schedule[index] ?? 0)) >>> 0;

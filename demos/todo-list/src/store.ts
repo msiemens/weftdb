@@ -34,7 +34,7 @@ import {
 export { todoEventsQuery, todosQuery, useTodoEvents, useTodoEventsQuery, useTodos } from "./generated/bindings.ts";
 export type { TodoEventsRow, TodosRow } from "./generated/bindings.ts";
 
-/** A row as the list needs it: the generated row type plus what only the client knows. */
+/** A row as the list needs it, the generated row type plus what only the client knows. */
 export interface TodoView extends TodosRow {
   /** Local work the server has not acknowledged. */
   readonly dirty: boolean;
@@ -101,9 +101,9 @@ export class TodoStore {
   readonly identity: TabIdentity;
   readonly database: DemoDatabase;
   /**
-   * What the React hooks read from and what the mutators write through: the mirror of the client
+   * What the React hooks read from and what the mutators write through, the mirror of the client
    * the storage worker holds. It is a `WeftSource`, so `use<Collection>` and `use<Collection>Query`
-   * both work over it — the second because there is a real SQLite on the other side of the port for
+   * both work over it, the second because there is a real SQLite on the other side of the port for
    * a compiled statement to run against.
    */
   readonly source: WeftClientMirror;
@@ -123,8 +123,8 @@ export class TodoStore {
     this.deviceId = toDeviceId(this.source.deviceId);
     this.connection = new DemoSync(options.database);
     this.#seedStorage = options.seedStorage;
-    // No `notify` callback: the worker's echo wakes the subscriptions when the change arrives, and
-    // a callback fired when the mutator returned would wake them before there was anything new.
+    // The worker's echo wakes the subscriptions when the change arrives, so a `notify` callback
+    // fired when the mutator returns would wake them before there was anything new.
     this.todos = todosMutators(this.source);
     this.todoEvents = todoEventsMutators(this.source);
   }
@@ -134,8 +134,8 @@ export class TodoStore {
    *
    * The scope comes from local storage, so every tab of this browser opens the same list while
    * another visitor opens their own. The namespace comes from session storage, so **each tab is a
-   * database of its own** — its own client in the storage worker, its own file and its own device
-   * id — which is what makes a second tab a second device rather than a second view.
+   * database of its own**: its own client in the storage worker, its own file and its own device
+   * id, which makes a second tab a second device rather than a second view.
    */
   static async open(window: WindowLike, overrides?: DemoOpenOverrides): Promise<TodoStore> {
     const identity = await tabIdentity(window.sessionStorage, window.localStorage, { demo: DEMO });
@@ -158,8 +158,8 @@ export class TodoStore {
 
   /**
    * Settles once this tab has decided whether its scope needed seeding, and written the rows if it
-   * did. For a test to await: the decision waits on a sync, so a list read before it has settled is
-   * a list read before there is one.
+   * did. A test can await it because the decision waits on a sync, so a list read before this has
+   * settled is a list read before there is one.
    */
   seeded(): Promise<void> {
     return this.#seeding;
@@ -203,7 +203,7 @@ export class TodoStore {
     }
   }
 
-  /** The list outside a render — for the handlers that need to know where a row sits. */
+  /** The list outside a render, for the handlers that need to know where a row sits. */
   rows(): readonly TodoView[] {
     return this.source.engine
       .getSnapshot(todosQuery("rank"), this.source.rows.values())

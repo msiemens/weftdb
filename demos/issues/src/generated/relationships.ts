@@ -11,8 +11,8 @@ export type ProjectsIssuesResult<Target = Database["issues"]> = readonly Target[
  * `projects.issues`, over rows the caller already holds.
  *
  * The targets are indexed on `project_id` here, once; the function this returns
- * answers a source row from that index, so a list costs one pass over the targets rather than one
- * pass per row. A source row with nothing on the far side gets the same empty list every time.
+ * answers a source row from that index in a single lookup, instead of a fresh filter over every
+ * target per call. A source row with nothing on the far side gets the same empty list every time.
  */
 export function projects_issuesRelation<Target extends Pick<Database["issues"], "project_id">>(
   targets: readonly Target[],
@@ -34,8 +34,9 @@ export type IssuesProjectResult<Target = Database["projects"]> = Target | undefi
  * `issues.project`, over rows the caller already holds.
  *
  * The targets are indexed on `id` here, once; the function this returns
- * answers a source row from that index, so a list costs one pass over the targets rather than one
- * pass per row. A row may point at a target this device has not synced, which is what `undefined` is.
+ * answers a source row from that index in a single lookup, instead of a fresh filter over every
+ * target per call. A row may point at a target this device has not synced, which is what
+ * `undefined` is.
  */
 export function issues_projectRelation<Target extends Pick<Database["projects"], "id">>(
   targets: readonly Target[],
@@ -55,8 +56,8 @@ export type IssuesCommentsResult<Target = Database["comments"]> = readonly Targe
  * `issues.comments`, over rows the caller already holds.
  *
  * The targets are indexed on `issue_id` here, once; the function this returns
- * answers a source row from that index, so a list costs one pass over the targets rather than one
- * pass per row. A source row with nothing on the far side gets the same empty list every time.
+ * answers a source row from that index in a single lookup, instead of a fresh filter over every
+ * target per call. A source row with nothing on the far side gets the same empty list every time.
  */
 export function issues_commentsRelation<Target extends Pick<Database["comments"], "issue_id">>(
   targets: readonly Target[],
@@ -78,8 +79,9 @@ export type CommentsIssueResult<Target = Database["issues"]> = Target | undefine
  * `comments.issue`, over rows the caller already holds.
  *
  * The targets are indexed on `id` here, once; the function this returns
- * answers a source row from that index, so a list costs one pass over the targets rather than one
- * pass per row. A row may point at a target this device has not synced, which is what `undefined` is.
+ * answers a source row from that index in a single lookup, instead of a fresh filter over every
+ * target per call. A row may point at a target this device has not synced, which is what
+ * `undefined` is.
  */
 export function comments_issueRelation<Target extends Pick<Database["issues"], "id">>(
   targets: readonly Target[],

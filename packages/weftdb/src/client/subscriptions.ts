@@ -14,7 +14,7 @@ declare const rowType: unique symbol;
 
 /**
  * A query key that remembers what a row of it decodes to. Nothing carries the row type at
- * runtime — this is a phantom — but it means a key and a decoder cannot be paired unless they
+ * runtime (this is a phantom), but it means a key and a decoder cannot be paired unless they
  * agree, so reading a `todos` query with the decoder for `todo_events` is a compile error.
  */
 export interface TypedQueryKey<Row> extends QueryKey {
@@ -23,7 +23,7 @@ export interface TypedQueryKey<Row> extends QueryKey {
 
 /**
  * The keys a type actually declares. `SchemaDefinition` types its collections as
- * `Record<string, ...>`, and `keyof` on anything carrying an index signature is `string` — so
+ * `Record<string, ...>`, and `keyof` on anything carrying an index signature is `string`, so
  * without this, every "field" would be a valid field and the checking would be theatre.
  */
 type DeclaredKeys<T> = keyof {
@@ -96,9 +96,9 @@ export function reactiveSqlQuery(options: ReactiveSqlQueryOptions): ReactiveSqlQ
 /**
  * One database file holds every scope a person is signed into, and every read the store makes
  * itself is filtered on `scope_id`. A statement that leaves it out is refused here rather than
- * answered: materializing out of `client.rows` already drops ids this scope does not hold, but a
- * row id is unique only within its collection, so two scopes can hold the same id and the other
- * scope's match would come back as this scope's row. This is a guard, not a SQL parser.
+ * answered. Materializing out of `client.rows` already drops ids this scope does not hold;
+ * however a row id is unique only within its collection, so two scopes can hold the same id and
+ * the other scope's match would come back as this scope's row. This is a guard, not a SQL parser.
  */
 function assertScoped(query: CompiledQuery): void {
   if (!/\bscope_id\b/u.test(query.sql)) {
@@ -124,7 +124,7 @@ export class RowIdentityCache {
 
   materialize(row: LocalRow): MaterializedRow {
     // Keyed by table and id together. A row id is unique within its collection and nowhere else,
-    // so two collections holding the same id would hand each other's rows back — and a revision
+    // so two collections holding the same id would hand each other's rows back, and a revision
     // that happened to match would make it look like a cache hit.
     const key = `${row.tableName}\0${row.id}`;
     const cached = this.#rows.get(key);
@@ -146,7 +146,7 @@ const NO_IDS: readonly RowId[] = [];
 /**
  * One engine per client. It caches the last result per query and the identity of each row by
  * id, so pointing two clients at the same engine makes them evict each other's entries on
- * every render — which `useSyncExternalStore` turns into an infinite update loop rather than
+ * every render, which `useSyncExternalStore` turns into an infinite update loop rather than
  * a slow one.
  */
 export class SubscriptionEngine {
@@ -166,8 +166,8 @@ export class SubscriptionEngine {
       .map((row) => this.#rowCache.materialize(row));
     const cached = this.#snapshots.get(cacheKey);
     // `useSyncExternalStore` calls this during render and re-renders whenever the result is
-    // a new reference, so an unchanged result must be the *same* object — handing back a
-    // fresh one every call is an infinite render loop, not merely a wasted render (§8.3).
+    // a new reference, so an unchanged result must be the *same* object. Handing back a
+    // fresh one every call is an infinite render loop rather than merely a wasted render (§8.3).
     if (cached !== undefined && sameRows(cached.rows, nextRows)) return cached;
     const snapshot = Object.freeze({ rows: nextRows, delta: computeDelta(cached?.rows ?? [], nextRows) });
     this.#snapshots.set(cacheKey, snapshot);
@@ -180,8 +180,8 @@ export class SubscriptionEngine {
    * `React.memo` still holds.
    *
    * `select` rather than an executor, because the database is not on the thread that renders. The
-   * page reads the ids the worker last pushed, which is synchronous — what `useSyncExternalStore`
-   * requires of a snapshot — and invisible to a component.
+   * page reads the ids the worker last pushed, which is synchronous (what `useSyncExternalStore`
+   * requires of a snapshot) and invisible to a component.
    *
    * A statement `select` has no answer for yet snapshots as no rows, because a component has
    * nowhere to put "pending" and a first paint has to be something. The state is reported by
@@ -203,7 +203,7 @@ export class SubscriptionEngine {
     for (const id of select(query) ?? NO_IDS) {
       const row = rows.get(`${query.tableName}\0${id}`);
       // A row the statement matched that this client does not hold is dropped rather than
-      // reported: the database outlives any one hydrate, and a scope holds only its own rows.
+      // reported. The database outlives any one hydrate, and a scope holds only its own rows.
       if (row !== undefined) nextRows.push(this.#rowCache.materialize(row));
     }
 
@@ -260,11 +260,11 @@ export class SubscriptionEngine {
 export type RowSelect = (query: ReactiveSqlQuery) => readonly RowId[] | undefined;
 
 /**
- * The selection for whoever holds the database: run the statement. It answers every statement it is
- * given, because it runs it on the spot — there is nothing to register — so its result is the
- * narrower one and a caller reading through it never meets the absent answer.
+ * The selection for whoever holds the database. It runs the statement directly, answering every
+ * statement it is given because it runs it on the spot (there is nothing to register), so its
+ * result is the narrower one and a caller reading through it never meets the absent answer.
  *
- * A promise, so it is not a `RowSelect` and cannot be handed to `getSqlSnapshot`: the worker runs
+ * A promise, so it is not a `RowSelect` and cannot be handed to `getSqlSnapshot`. The worker runs
  * statements and pushes what they matched, and the page answers a render out of the last push.
  */
 export function executorRowSelect(executor: AsyncSqlExecutor): (query: ReactiveSqlQuery) => Promise<readonly RowId[]> {
@@ -285,10 +285,10 @@ function selectMatchingIds(query: ReactiveSqlQuery): SqlStatement<RowId> {
 
 /**
  * A bind parameter as the executor takes it. A query builder types its parameters `unknown`
- * because a dialect may accept anything, and SQLite takes four kinds of which a boolean is not
- * one: without this, `where("done", "=", false)` reaches the driver as a boolean and fails at the
- * binding rather than answering. Anything else is refused here, where the value is still
- * attached to the query that produced it.
+ * because a dialect may accept anything, and SQLite binds no boolean. Without this,
+ * `where("done", "=", false)` reaches the driver as a boolean and fails at the binding instead of
+ * answering. Anything else is refused here, where the value is still attached to the query that
+ * produced it.
  */
 function toSqlValue(value: unknown): SqlValue {
   if (typeof value === "boolean") return value ? 1 : 0;
@@ -311,12 +311,11 @@ function rowMatches(row: LocalRow, key: QueryKey): boolean {
 }
 
 /**
- * Ordering is by code unit, not by locale. `localeCompare` weighs punctuation and case
- * differently — it is built for showing a person an alphabetical list — and two things here
- * depend on it not doing that. A fractional index is only "between" its neighbours under plain
- * comparison, so a locale-collated list ignores a reorder and stays where it was; and two
- * devices with different locales would sort the same rows into different orders, which is the
- * one thing a shared list cannot do.
+ * Ordering is by code unit. `localeCompare` weighs punctuation and case differently, because it is
+ * built for showing a person an alphabetical list, and this ordering cannot afford that. A
+ * fractional index is only "between" its neighbours under plain comparison, so a locale-collated
+ * list ignores a reorder and stays where it was. Devices with different locales would also sort the
+ * same rows into different orders, which is the one thing a shared list cannot do.
  */
 function compareStrings(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -331,7 +330,7 @@ function compareRows(left: LocalRow, right: LocalRow, key: QueryKey): number {
 
 function computeDelta(previous: readonly MaterializedRow[], next: readonly MaterializedRow[]): QueryDelta {
   // Previous rows are indexed rather than searched. A delta is computed on every change to
-  // every subscribed query, so a scan per row here is a scan per row per row: at ten thousand
+  // every subscribed query, so a scan per row here is a scan per row per row. At ten thousand
   // rows that is a hundred million identity comparisons to report that one of them moved.
   const previousById = new Map(previous.map((row) => [row.id, row]));
   const nextIds = new Set(next.map((row) => row.id));

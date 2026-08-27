@@ -1,5 +1,5 @@
 // The page's front door. Everything between "this application has a schema and a scope" and
-// "components can read rows", paid once here rather than once per application.
+// "components can read rows", paid once here instead of once per application.
 //
 // One `SharedWorker` holds every database this origin has open, and a tab reaches it by
 // constructing one at the same URL and taking the port. A `SharedWorker` is identified by its
@@ -17,26 +17,26 @@ import type { SessionStatus } from "./session.ts";
 import { WorkerPortTransport, type WorkerLike } from "./worker.ts";
 import { WeftClientMirror } from "./worker-mirror.ts";
 
-/** The slice of the DOM `Storage` interface the device id needs — `localStorage` satisfies it. */
+/** The slice of the DOM `Storage` interface the device id needs. `localStorage` satisfies it. */
 export interface StorageLike {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
   removeItem(key: string): void;
 }
 
-/** Where this device's credential comes from. Read again per credential — see `setToken`. */
+/** Where this device's credential comes from. Read again per credential; see `setToken`. */
 export interface OpenRelayOptions {
   /**
    * The token the worker's sync session runs under, or `null` for a device that has not signed in.
    *
-   * A function, not a value, because a transport carries its token: HTTP sends one per request and
-   * a socket presents one when it connects, so signing in as somebody else is a new transport
-   * rather than a mutated one. Re-reading it is how a refreshed token reaches the session, which is
-   * what `setToken()` with no argument does.
+   * A function, because a transport carries its own token. HTTP sends one per request and
+   * a socket presents one when it connects, so signing in as somebody else means building a new
+   * transport instead of patching the current one. Re-reading it is how a refreshed token reaches
+   * the session, which is what `setToken()` with no argument does.
    *
    * Where the relay is does not appear here. That belongs in the worker's own
-   * `serveWeftStorageWorker({ relay })`, because the worker is where the transport is built — and
-   * a base URL declared in two places that have to agree is exactly the class of mistake this
+   * `serveWeftStorageWorker({ relay })`, because the worker is where the transport is built, and
+   * a base URL declared both here and in the worker's options is exactly the class of mistake this
    * module exists to remove.
    */
   readonly token: () => string | null;
@@ -44,8 +44,8 @@ export interface OpenRelayOptions {
 
 export interface OpenWeftDatabaseOptions {
   /**
-   * This application's schema. It is not used to open anything — the worker holds the database and
-   * imports the schema itself — but its hash is compared against the one the worker reports, so a
+   * This application's schema. It is not used to open anything (the worker holds the database and
+   * imports the schema itself), but its hash is compared against the one the worker reports, so a
    * page bundle and a worker bundle built from different schemas are refused instead of quietly
    * selecting columns the other one has never heard of.
    */
@@ -54,9 +54,9 @@ export interface OpenWeftDatabaseOptions {
   /**
    * The storage worker's module, as `new URL("./storage-worker.ts", import.meta.url)`.
    *
-   * It is a `SharedWorker`, and a `SharedWorker` is identified by its script URL — so every tab of
-   * the origin has to name the same one, which is why this is a URL the application owns rather
-   * than something derived here.
+   * It is a `SharedWorker`, and a `SharedWorker` is identified by its script URL, so every tab of
+   * the origin has to name the same one. That is why this is a URL the application owns instead
+   * of something derived here.
    */
   readonly worker: URL | string;
   readonly relay?: OpenRelayOptions;
@@ -76,8 +76,8 @@ export interface OpenWeftDatabaseOptions {
    *
    * It is half of the database's identity, and the scope is the other half. Two calls that agree on
    * both are two tabs of one database: one client in the worker, one outbox, one device id. Two
-   * calls that differ in either are two databases that share nothing — separate entries in the
-   * worker, separate files, separate device ids — even where the `scopeId` is the same string.
+   * calls that differ in either are two databases that share nothing (separate entries in the
+   * worker, separate files, separate device ids), even where the `scopeId` is the same string.
    *
    * It also prefixes every key the device id is kept under.
    */
@@ -86,7 +86,7 @@ export interface OpenWeftDatabaseOptions {
    * How the connection to the storage worker is made. The default constructs a `SharedWorker` and
    * hands back its port.
    *
-   * Node has no `SharedWorker`, so this is what lets the assembly run there: a test connects a
+   * Node has no `SharedWorker`, so this is what lets the assembly run there. A test connects a
    * `MessageChannel` end to a `serveWeftWorker` in the same process, which is the shipped host with
    * the process boundary taken out.
    */
@@ -117,7 +117,7 @@ export interface WeftDatabase {
   setToken(token?: string | null): Promise<void>;
   /**
    * Unwinds everything this opened, in an order that leaves nothing running. Safe to call more than
-   * once, and safe to call without awaiting — a `pagehide` handler should not block on it.
+   * once, and safe to call without awaiting, since a `pagehide` handler should not block on it.
    */
   dispose(): Promise<void>;
 }
@@ -146,7 +146,7 @@ const LOST = "the storage worker went away; the write's outcome is unknown";
 /**
  * The device this browser is, for this scope.
  *
- * Namespaced by scope, so being signed into two scopes from one browser is two devices: the relay
+ * Namespaced by scope, so being signed into two scopes from one browser is two devices. The relay
  * counts devices per scope, and one id shared between them would have each scope's cursor advanced
  * by the other's pulls. Minted once and kept, because a device that renamed itself on every reload
  * would leave the relay a new device per visit and this device's own past writes stamped by
@@ -227,14 +227,14 @@ class DatabaseTab {
       namespace: this.#namespace,
       // One mirror, one engine. Sharing an engine between two mirrors has them evicting each
       // other's cached snapshots on every render, which `useSyncExternalStore` turns into an update
-      // loop rather than a slow render — so the engine is built here and never handed out.
+      // loop rather than a slow render, so the engine is built here and never handed out.
       engine: new SubscriptionEngine(),
       ...(this.#options.onError === undefined ? {} : { onError: this.#options.onError }),
     });
     this.#mirror = mirror;
     await mirror.hydrate();
     this.#requireSchemaMatch(mirror);
-    // Handed over here because a mirror with no token has a client and no session: the worker holds
+    // Handed over here because a mirror with no token has a client and no session. The worker holds
     // the rows and never syncs them, which is a device that works perfectly offline and never comes
     // back.
     const token = this.#options.relay?.token;
@@ -255,8 +255,8 @@ class DatabaseTab {
       status: () => mirror.status(),
       subscribeStatus: (listener) => mirror.subscribeStatus(listener),
       setToken: async (next) => {
-        // No argument re-reads the option: a token that has been refreshed since the open is a new
-        // credential, and the session is rebuilt around it rather than having one patched in place.
+        // No argument re-reads the option. A token that has been refreshed since the open is a new
+        // credential, and the session is rebuilt around it instead of being patched in place.
         await this.setToken(next === undefined ? (token?.() ?? null) : next);
       },
       dispose: () => this.dispose(),
@@ -297,7 +297,7 @@ class DatabaseTab {
     if (mirror === undefined) return;
     // First, and unconditionally. A request issued a moment before the worker vanished is never
     // going to be answered, and leaving it pending is a caller awaiting a promise nothing is left
-    // to settle. It rejects rather than resolving: telling a mutator that a write nobody performed
+    // to settle. It rejects instead of resolving. Telling a mutator that a write nobody performed
     // had succeeded is the one outcome worse than not knowing.
     this.#transport?.dispose(LOST);
     this.#transport = undefined;
@@ -368,7 +368,7 @@ function defaultDeviceStorage(): StorageLike {
  * This origin's storage worker, as a port.
  *
  * A `SharedWorker` is identified by its script URL, which is the whole reason one worker can serve
- * every tab: two tabs constructing one from the same URL get the same instance, and a tab whose
+ * every tab. Two tabs constructing one from the same URL get the same instance, and a tab whose
  * worker the browser stopped gets it started again by constructing one more.
  */
 function defaultConnect(url: URL | string): WorkerLike {

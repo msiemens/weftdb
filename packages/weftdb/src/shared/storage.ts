@@ -1,8 +1,9 @@
 // What a value becomes on its way into a column, and what the relay's own tables hold.
 //
-// Type-only, so naming core from inside shared costs no runtime edge: core imports the wire-value
-// guard from here, and a value import back would close the cycle. The same holds for the schema:
-// a field definition is read for its declared type, which is erased before anything runs.
+// Type-only, so naming core from inside shared costs no runtime edge, because core imports the
+// wire-value guard from here, and a value import back would close the cycle. The same holds for
+// the schema, because a field definition is read for its declared type, which is erased before
+// anything runs.
 import type { FieldName, HlcString, RowId, SchemaHash, ScopeId, TableName, TxnId, WireValue } from "../core.ts";
 import type { FieldDefinition } from "../schema.ts";
 import type { SqlRow, SqlValue } from "./executor.ts";
@@ -28,9 +29,9 @@ export interface EncodedScopeState extends SqlRow {
 
 /**
  * Refuses what JSON cannot carry. `JSON.stringify` renders `NaN` and both infinities as `null`,
- * so three distinct numbers and an actual null all reach storage as one value with one hash —
- * and a diff3 base check comparing a field that held `NaN` against one that held `null` sees no
- * change and lets a merge through as a fast-forward.
+ * so three distinct numbers and an actual null all reach storage as one value with one hash.
+ * A diff3 base check comparing a field that held `NaN` against one that held `null` then sees
+ * no change and lets a merge through as a fast-forward.
  */
 export function encodeWireValue(value: WireValue): string {
   assertWireValue(value);
@@ -58,7 +59,7 @@ export function decodeWireValue(value: string | null): WireValue {
 /**
  * How a declared field sits in the column of its own that the client table gives it. The DDL
  * generator declares the column from this and the client store writes it from this, so the two
- * cannot drift: a query compiled against the generated `Database` binds the type the column
+ * cannot drift. A query compiled against the generated `Database` binds the type the column
  * actually holds.
  */
 export type FieldStorage = "number" | "boolean" | "text" | "json";
@@ -76,13 +77,13 @@ export function fieldStorage(field: FieldDefinition): FieldStorage {
  * A declared field's value as its own column holds it. JSON text in these columns made the
  * generated types describe a table nothing wrote: `where title = 'buy milk'` matched no row
  * because the column held `"buy milk"` quotes and all, and a boolean bound against an INTEGER
- * column holding the text `false` matched nothing either. Only what SQLite has no column type
- * for — an object, an array, or a value that disagrees with what the schema declares — stays
- * JSON, which is also the one form that can carry it back unchanged.
+ * column holding the text `false` matched nothing either. Only a value SQLite has no column type
+ * for stays JSON: an object, an array, or a value that disagrees with what the schema declares.
+ * JSON is also the one form that can carry it back unchanged.
  */
 export function encodeFieldValue(field: FieldDefinition | undefined, value: WireValue): SqlValue {
-  // Kept from the JSON path: a non-finite number has no wire form, and letting one into a raw
-  // INTEGER column would put it back as null on the next hydrate — a value nobody wrote.
+  // A non-finite number has no wire form, so it stays on the JSON path. Letting one into a raw
+  // INTEGER column would put it back as null on the next hydrate, producing a value nobody wrote.
   assertWireValue(value);
   if (value === null) return null;
   switch (field === undefined ? "json" : fieldStorage(field)) {
@@ -107,8 +108,8 @@ export function decodeFieldValue(field: FieldDefinition | undefined, raw: SqlVal
   switch (field === undefined ? "json" : fieldStorage(field)) {
     case "number":
       // A number column that came back as text holds a value the schema does not describe,
-      // written by a device that declares the field as something else. It went in as JSON
-      // precisely so it could come back as what it was rather than as a coerced number.
+      // written by a device that declares the field as something else. It went in as JSON so it
+      // could come back as what it was.
       return typeof raw === "string" ? decodeWireValue(raw) : sqlNumber(raw);
     case "boolean":
       return typeof raw === "string" ? decodeWireValue(raw) : sqlNumber(raw) !== 0;

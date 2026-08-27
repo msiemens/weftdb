@@ -1,7 +1,7 @@
 // The world every case measures against: the demo schema, a todo row shaped the way the
-// generated mutators write one, and the two ways to stand a relay up. Transaction ids follow
-// what `weft generate` emits — a deterministic one per create, a fresh one per update — so the
-// numbers describe the calls an application actually makes.
+// generated mutators write one, and how a relay gets stood up, in process or as a loopback
+// server. Transaction ids follow what `weft generate` emits: a deterministic one per create, a
+// fresh one per update, so the numbers describe the calls an application actually makes.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -99,15 +99,15 @@ export interface BenchRelay {
 }
 
 /**
- * A relay on the loopback interface with one token per device. Keepalive is off: a ping timer
- * firing inside a timed section is noise the numbers do not need.
+ * A relay on the loopback interface with one token per device. Keepalive is off because a ping
+ * timer firing inside a timed section would be noise the numbers do not need.
  *
- * It is returned only once `/health` has answered over it, which settles two things at once. An
- * ephemeral port sometimes lands on one the fetch specification refuses to connect to at all, and
- * a relay there is unusable rather than slow; and the answer leaves the pooled connection open,
- * so no timed section afterwards pays for a TCP handshake. That last part is also what makes the
- * HTTP transport comparable with the socket one, which is connected before its first request by
- * construction.
+ * It is returned only once `/health` has answered over it. An ephemeral port sometimes lands on
+ * one the fetch specification refuses to connect to at all, so waiting for the answer catches a
+ * relay that is unreachable rather than merely slow to start. The same wait also leaves the
+ * pooled connection open, so no timed section afterwards pays for a TCP handshake, which is what
+ * makes the HTTP transport comparable with the socket one, already connected before its first
+ * request by construction.
  */
 export async function startBenchRelay(devices: number, databasePath?: string): Promise<BenchRelay> {
   const tokens = new Map(

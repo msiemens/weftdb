@@ -1,4 +1,4 @@
-// The model-based half of the DESIGN.md §9 suite: fast-check generates histories over the
+// The model-based half of the DESIGN.md §9 suite. fast-check generates histories over the
 // world model in property-model.ts, and every invariant in property-invariants.ts is
 // asserted after each command and again once the history has settled.
 import { test } from "vitest";
@@ -65,8 +65,9 @@ test("the invariant registry covers the world-checkable §9 invariants", async (
     "§9.25",
     "§9.30",
     "§9.31",
-    // Not §9 rules, but continuously checkable: an unsent write must survive a pull, a revision
-    // must not run backwards, and quarantining must move work rather than copy it.
+    // Continuously checkable properties outside the numbered §9 rules: an unsent write must
+    // survive a pull, a revision must not run backwards, and quarantining must move work
+    // instead of copying it.
     "§5.8.unsent",
     "§8.2.rev",
     "§5.5.move",
@@ -80,15 +81,15 @@ test("a restore competing with an independent create of the same id settles with
   // The arrangement three generated histories shrank to, written out so it does not depend on
   // a seed. Two devices make the same id independently; only the first push wins the id, and
   // the loser's create is quarantined as `row_exists` (§5.5). Its queued delete and restore are
-  // separate transactions, so they go on to apply to the row that did win — and the restore's
+  // separate transactions, so they go on to apply to the row that did win, and the restore's
   // opening title arrives concurrent with, and stamped below, the title the winning create
   // gave the row.
   //
   // The server keeps the higher-stamped value, which is §5.9: a restore moves the liveness
   // register and leaves field values in place, so the id's field history survives the round
-  // trip rather than starting over. A §5.1.acked replay that treated every row op as a new life
-  // of the row would read that as a write accepted and then lost. Only `create` and `append` are,
-  // and this history is here to keep the two apart.
+  // trip instead of starting over. A §5.1.acked replay that treated every row op as a new life
+  // of the row would read that as a write accepted and then lost. Only `create` and `append`
+  // start a new life of a row; `restore` does not, and this history exists to keep the two apart.
   const world = createWorld(5);
   const row = rowId("row-0");
   const loser = deviceAt(world, 3).client;
@@ -103,7 +104,7 @@ test("a restore competing with an independent create of the same id settles with
   });
 
   await loser.create(TASKS, row, values("loser-title", "a:loser"), txnId("create-loser"));
-  // Enough for the two creates to be told apart by their stamps, and no more: the restore that
+  // Enough for the two creates to be told apart by their stamps, and no more. The restore that
   // follows is emitted in this same millisecond, which is what puts it under the winning create.
   world.now += 1;
   await winner.create(TASKS, row, values("winner-title", "a:winner"), txnId("create-winner"));

@@ -1,7 +1,6 @@
-// The page. A chat room, one device per tab, with the relay pushing over a WebSocket. Two
-// things are on show: the message log is append-class, so a message is written once and is
-// immutable from the next transaction on, and the socket means a message typed in one tab lands
-// in another without either of them asking for it.
+// A chat room, one device per tab, with the relay pushing over a WebSocket. The message log is
+// append-class, so a message is written once and is immutable from the next transaction on. The
+// socket means a message typed in one tab lands in another without either of them asking for it.
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { resetDemoData, watchDemoReset } from "weftdb-demo-shared/reset";
 import {
@@ -16,14 +15,14 @@ import { DEMO } from "./scope.ts";
 
 export function App({ store }: { readonly store: ChatStore }): ReactNode {
   useEffect(() => store.start(), [store]);
-  // Straight from `weft generate`: a hook per collection, rows already decoded into the type the
-  // schema describes. `created` is stamped when the row is written and never changes, so it is
+  // A hook per collection, straight from `weft generate`, with rows already decoded into the type
+  // the schema describes. `created` is stamped when the row is written and never changes, so it is
   // the log's order as well as its timestamp.
   const messages = useMessages(store.source, "created").map((row) => store.view(row));
-  // A compiled statement rather than the collection sorted afterwards: the strip's order is a
-  // total one over the device id, and SQLite in the storage worker is where that ordering belongs.
-  // The `where` is the guard the sort could not be: a device row whose label has not arrived yet —
-  // a create still crossing, or a partial pull — would otherwise render as a nameless chip.
+  // The query is compiled, so the strip's order is a total one over the device id, computed by
+  // SQLite in the storage worker. The `where` guards against a device row whose label has not
+  // arrived yet, such as a create still crossing or a partial pull, which would otherwise render
+  // as a nameless chip.
   const devices = store.presence(
     useDevicesQuery(store.source, (statement) => statement.where("label", "!=", "").orderBy("id")),
   );
@@ -36,8 +35,7 @@ export function App({ store }: { readonly store: ChatStore }): ReactNode {
         <Quarantine store={store} count={status.quarantined} reasons={status.quarantineReasons} />
       ) : null}
       <Presence devices={devices} />
-      {/* Log and composer are one surface: it is a single conversation, and the styling reads it
-          that way. */}
+      {/* Log and composer share one surface because they are one conversation. */}
       <section className="room">
         <Log messages={messages} />
         <Composer store={store} />
@@ -51,7 +49,7 @@ function Header({ store, status }: { readonly store: ChatStore; readonly status:
   return (
     <header>
       <div className="title">
-        {/* The span is the wordmark's one flourish — `db` in the accent. It leaves `textContent`
+        {/* The span is the wordmark's one flourish, `db` in the accent. It leaves `textContent`
             as "weftdb", which is what a screen reader and the tests both read. */}
         <h1>
           weft<span>db</span>
@@ -71,9 +69,8 @@ function Header({ store, status }: { readonly store: ChatStore; readonly status:
           {status.online ? "online" : "offline"}
         </button>
         {/* Syncing turns over several times a second while messages are landing, so it shares a
-            chip with the connection rather than mounting one of its own; `.connection` reserves
-            the width of the longest of the three words, so the row's width does not move
-            either. */}
+            chip with the connection. `.connection` reserves the width of the longest of the
+            three words, so the row's width does not move either. */}
         <span
           className="badge connection"
           title={
@@ -139,10 +136,9 @@ function Quarantine({
 }
 
 /**
- * Who else is in the room. Each tab rewrites one device row every few seconds; a row whose last
- * heartbeat is older than the window reads as gone. That is the mutable half of the schema, and
- * it is the opposite of the log below it: a device record is a current value, and only its
- * newest writer is interesting.
+ * Who else is in the room. Each tab rewrites one device row every few seconds, and a row whose
+ * last heartbeat is older than the window reads as gone. A device record is a current value, and
+ * only its newest writer is interesting.
  */
 function Presence({ devices }: { readonly devices: readonly DeviceView[] }): ReactNode {
   if (devices.length === 0) return null;
@@ -166,7 +162,7 @@ function Log({ messages }: { readonly messages: readonly MessageView[] }): React
   const log = useRef<HTMLOListElement>(null);
 
   // A message arriving from another tab is only useful if it is on screen, and the newest one
-  // sits at the bottom. Scrolling the log rather than the page leaves the composer where it is.
+  // sits at the bottom. Scrolling the log leaves the composer where it is.
   useEffect(() => {
     const element = log.current;
     if (element === null) return;
@@ -225,20 +221,19 @@ function Composer({ store }: { readonly store: ChatStore }): ReactNode {
 }
 
 /**
- * The guide is a modal rather than a panel: it is read once, at the start, and then it is in the
- * way of the thing it is describing. `<dialog>` is used natively for it, which is where Escape,
- * the focus trap and the inert backdrop come from — none of that is worth reimplementing.
+ * The guide is a modal because it is read once, at the start, and then it is in the way of what
+ * it describes. `<dialog>` is used natively for it, so Escape, the focus trap and the inert
+ * backdrop come from the browser without needing to be reimplemented.
  */
 function Guide(): ReactNode {
   const dialog = useRef<HTMLDialogElement>(null);
 
   /**
    * `close()` takes the dialog out of the top layer immediately, so it has to be held open for
-   * as long as the stylesheet's closing animation. The marker is set with `setAttribute` rather
-   * than through React state: a class React owns would be reconciled away by the next store
-   * update, which lands often here, and the dialog would blink out mid-animation. The close
-   * itself runs off a timer rather than `animationend`, because an animation that never fires
-   * must not leave a modal stuck open over the page.
+   * as long as the stylesheet's closing animation. The marker is set with `setAttribute`, because
+   * a class held in React state would be reconciled away by the next store update, which lands
+   * often here, and the dialog would blink out mid-animation. The close itself runs off a timer,
+   * because an animation that never fires must not leave a modal stuck open over the page.
    */
   const close = (): void => {
     const element = dialog.current;
@@ -262,8 +257,8 @@ function Guide(): ReactNode {
         </button>
         <ResetData />
       </footer>
-      {/* A sibling of the trigger, not a child of it: nesting the dialog inside the trigger's
-          wrapper lets `.guide-open button` reach the dialog's own button and repaint it. */}
+      {/* The dialog is a sibling of the trigger. Nesting it inside the trigger's wrapper would
+          let `.guide-open button` reach the dialog's own button and repaint it. */}
       <dialog
         className="guide"
         ref={dialog}
@@ -272,8 +267,8 @@ function Guide(): ReactNode {
           event.preventDefault();
           close();
         }}
-        // A click on the backdrop is dispatched to the dialog itself, so "outside" has to be
-        // measured rather than assumed — the dialog's own padding is inside its box too.
+        // A click on the backdrop is dispatched to the dialog itself, so "outside" is measured
+        // against the bounding box; the dialog's own padding is inside that box too.
         onClick={(event) => {
           if (event.target !== event.currentTarget) return;
           const box = event.currentTarget.getBoundingClientRect();
@@ -328,8 +323,8 @@ function GuideBody({ onClose }: { readonly onClose: () => void }): ReactNode {
  * Clearing the demo, behind a second click.
  *
  * There is no undo, and this sits beside a button people press to read something, so the
- * confirmation is the label: a first click arms it and a second carries it out. Arming lapses,
- * which is what keeps a click made and forgotten from arming the click after it.
+ * confirmation is the label. A first click arms it and a second carries it out. Arming lapses,
+ * which keeps a click made and forgotten from arming the click after it.
  *
  * A reset in another tab retires the scope this one is on, so this is also where a tab hears that
  * and reloads onto the new one.

@@ -1,4 +1,4 @@
-// DESIGN.md §9 "Conflict handling" and "Reactivity" — invariants 34 to 42.
+// DESIGN.md §9 "Conflict handling" and "Reactivity", invariants 34 to 42.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import fc from "fast-check";
@@ -343,7 +343,7 @@ test("§9.41 no notification is emitted mid-transaction", async () => {
     notifications += 1;
   });
 
-  // One transaction: several mutations, each announcing itself, all before the microtask
+  // One transaction. Several mutations, each announcing itself, all before the microtask
   // checkpoint that ends it.
   for (let index = 0; index < 5; index += 1) engine.notify();
   assert.equal(notifications, 0, "a notification escaped mid-transaction");
@@ -362,7 +362,7 @@ interface ConflictRecord {
   readonly value: string;
 }
 
-/** §6: conflicts are surfaced by scanning for marker syntax, not by a stored table. */
+/** Conflicts are surfaced by scanning for marker syntax (§6). */
 function scanForConflicts(rows: readonly MaterializedRow[]): readonly ConflictRecord[] {
   return rows.flatMap((row) =>
     [...row.fields.entries()].flatMap(([field, value]) =>

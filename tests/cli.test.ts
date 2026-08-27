@@ -106,10 +106,10 @@ test("JSON schemas accept enum fields with their allowed values", async () => {
 });
 
 test("doctor still checks the joins in a JSON schema, which never sees defineSchema", async () => {
-  // `defineSchema` refuses all three of these, at compile time and again at run time — but a
-  // `.json` schema is loaded for pipelines that would rather not execute project code, and that
-  // value is cast to a `SchemaDefinition` without passing through the DSL at all. Here the
-  // duplicated check is the only check.
+  // `defineSchema` refuses all three of these, at compile time and again at run time. A `.json`
+  // schema is loaded for pipelines that would rather not execute project code, so that value is
+  // cast to a `SchemaDefinition` without passing through the DSL at all, and the duplicated check
+  // here is the only check it gets.
   const directory = await mkdtemp(join(tmpdir(), "weftdb-cli-"));
   const schemaPath = join(directory, "schema.json");
   const base = {
@@ -188,7 +188,7 @@ test("rehydrate materializes snapshot fields into table inserts", () => {
 });
 
 /**
- * A throwaway project directory inside the workspace: a schema module imports `weftdb/schema`,
+ * A throwaway project directory inside the workspace. A schema module imports `weftdb/schema`,
  * so it has to sit somewhere that package resolves from, exactly as a user project would.
  */
 async function projectDirectory(t: TestContext): Promise<string> {

@@ -1,12 +1,12 @@
-// §8.7 end to end across tabs: one worker, and every tab holding a `MessagePort` straight to it.
+// §8.7 end to end across tabs. One worker, and every tab holds a `MessagePort` straight to it.
 //
 // This is the case the pieces were built for and none of them shows alone. `worker-bridge` proves a
-// mirror works against a worker port; only two of them against one worker answer the question that
-// matters: does a tab render the same rows as the tab beside it while the worker answers each of
-// them on its own port.
+// mirror works against a worker port; only two of them against one worker answer whether a tab
+// renders the same rows as the tab beside it while the worker answers each of them on its own
+// port.
 //
 // Everything real except the browser. A `node:worker_threads` MessageChannel stands in for each
-// tab's connection, so messages really are structured-cloned and really do arrive on a later turn —
+// tab's connection, so messages really are structured-cloned and really do arrive on a later turn,
 // which is where the ordering mistakes are.
 import assert from "node:assert/strict";
 import { MessageChannel } from "node:worker_threads";
@@ -60,8 +60,8 @@ test("§8.7 a tab that was handed a port hydrates, mutates and watches through i
   using tabs = await Tabs.open();
   await tabs.seed("todo-1", { title: "alpha", done: false, rank: 1 });
   await tabs.seed("todo-2", { title: "beta", done: true, rank: 2 });
-  // Edited in that earlier session, so the rows arrive on different revisions and a tab that
-  // renumbered them from one would be caught here rather than in a re-render three screens later.
+  // Edited in that earlier session, so the rows arrive on different revisions, and a tab that
+  // renumbered them from one is caught right here.
   await tabs.seedUpdate("todo-1", "alpha prime");
   const guest = tabs.guest();
 
@@ -82,7 +82,7 @@ test("§8.7 a tab that was handed a port hydrates, mutates and watches through i
     assert.equal(row.internals._weft_rev, tabs.host.client?.rows.get(key)?.internals._weft_rev);
   }
 
-  // And it can drive the worker, not only read it.
+  // The second tab drives the worker here too, through its own port.
   const open = tabs.query((statement) => statement.where("done", "=", false).orderBy("rank"));
   await guest.mirror.watch(open);
   assert.deepEqual(ids(guest.mirror, open), ["todo-1"], "the second tab's watch answered with nothing");
@@ -108,8 +108,8 @@ test("§8.7 one tab's mutation reaches every tab's mirror", async () => {
   await guest.mirror.watch(all);
 
   // From one tab, and back out to both. A worker that answered only the port that asked would leave
-  // the other tab's list stale until something else happened to it — and that is the mistake this
-  // design makes possible, because a response now *is* addressed to one port.
+  // the other tab's list stale until something else happened to it. Responses are addressed to one
+  // port at a time, which is exactly the trap this design has to avoid.
   await guest.mirror.create(
     TODOS,
     rowId("todo-1"),
@@ -139,12 +139,12 @@ test("§8.7 one tab's mutation reaches every tab's mirror", async () => {
 });
 
 test("§8.7 a tab is sent its own statements' results and never another tab's", async () => {
-  // The routing rule for results, and the whole reason the host counts watches per port. A tab
-  // rendering one list has no use for the lists its neighbours are rendering: a delta carrying them
-  // wakes this tab's engine and it re-scans its own subscriptions to learn that nothing it reads
-  // has moved. So the assertion is on what crossed the port, not on what the mirror kept — a mirror
-  // that filtered the surplus out would pass a test written the second way while the tab went on
-  // being woken by every query in the browser.
+  // This test covers the routing rule for results, and the whole reason the host counts watches
+  // per port. A tab rendering one list has no use for the lists its neighbours are rendering,
+  // since a delta carrying them would wake this tab's engine to re-scan its own subscriptions and
+  // learn that nothing it reads has moved. The assertions check what crossed the port itself,
+  // because a mirror that filtered the surplus out on its own end would pass a test that only
+  // checked its final state, while the tab kept being woken by every query in the browser.
   using tabs = await Tabs.open();
   await tabs.seed("todo-1", { title: "alpha", done: false, rank: 1 });
   await tabs.seed("todo-2", { title: "beta", done: true, rank: 2 });
@@ -164,9 +164,9 @@ test("§8.7 a tab is sent its own statements' results and never another tab's", 
   assert.deepEqual(ids(second.mirror, done), ["todo-2"]);
   assert.deepEqual(ids(second.mirror, open), [], "a tab answered from a statement the other tab watches");
 
-  // A change that moves a row between the two lists has to move both, from one mutation. The rows
-  // go to everybody — a row belongs to the scope — so both tabs are pushed to, and the point is
-  // what each push carries.
+  // A change that moves a row between the two lists has to move both, from one mutation. Rows
+  // belong to the scope, so they go to everybody and both tabs are pushed to; the point of this
+  // test is what each push carries.
   const ownerPushes = tabs.owner.pushes();
   first.clearPushes();
   second.clearPushes();
@@ -176,8 +176,8 @@ test("§8.7 a tab is sent its own statements' results and never another tab's", 
 
   assert.deepEqual(first.results(), [open.cacheKey], "a tab was sent the results of another tab's statement");
   assert.deepEqual(second.results(), [done.cacheKey], "a tab was sent the results of another tab's statement");
-  // And the tab that watches nothing at all is pushed to — the row is the scope's — and told about
-  // no statement whatever.
+  // The tab that watches nothing at all is still pushed to, since the row belongs to the scope,
+  // but it is told about no statement.
   assert.ok(tabs.owner.pushes() > ownerPushes, "the tab that watches nothing was not told the row had moved");
   assert.deepEqual(tabs.owner.results(), [], "a tab watching nothing was sent somebody else's results");
 });
@@ -189,7 +189,7 @@ test("§8.7 two tabs watching one statement do not retire it from under each oth
   await tabs.owner.mirror.hydrate();
   await guest.mirror.hydrate();
 
-  // The same statement, so the same cache key: the host keys its registry by that and nothing else.
+  // The same statement produces the same cache key, and the host keys its registry by that alone.
   const all = tabs.query((statement) => statement.orderBy("rank"));
   await tabs.owner.mirror.watch(all);
   await guest.mirror.watch(all);
@@ -198,28 +198,28 @@ test("§8.7 two tabs watching one statement do not retire it from under each oth
   guest.mirror.unwatch(all);
   await settle(() => guest.mirror.select(all) === undefined);
 
-  // A row joining the list, not merely changing inside it. A mirror whose registration was retired
-  // keeps the ids it last had, so an edit to an existing row leaves the two indistinguishable —
-  // only a change of membership tells a live list from a frozen one.
+  // This tests a row joining the watched list. A mirror whose registration was retired keeps the
+  // ids it last had, so an edit to an existing row would look the same as a frozen list; only a
+  // change of membership tells the two apart.
   await tabs.owner.mirror.create(TODOS, rowId("todo-2"), { title: "beta", done: false, rank: 2 }, txnId("txn-1"));
   await settle(() => tabs.owner.mirror.rows.size === 2);
 
   // Without a reference count the second tab's unwatch deletes the shared registration, and the
-  // first tab's list silently stops updating — no error anywhere, just a list frozen at the ids it
-  // happened to have when the other tab let go.
+  // first tab's list silently stops updating. No error appears anywhere, just a list frozen at the
+  // ids it happened to have when the other tab let go.
   assert.deepEqual(
     ids(tabs.owner.mirror, all),
     ["todo-1", "todo-2"],
     "one tab's unwatch retired a statement another tab was reading",
   );
-  // No answer, rather than an answer of no rows: the tab let the statement go, so it holds nothing
-  // the worker said about it — which is a different thing from the worker having said "nothing".
+  // The tab let the statement go, so it holds nothing the worker said about it. That is different
+  // from the worker having answered with no rows.
   assert.equal(guest.mirror.select(all), undefined, "the tab that unwatched kept being answered");
 
-  // And the last release really does retire it, or the count leaks the other way and the worker
-  // re-runs statements nobody reads for the rest of the session. Read off the worker's own registry:
-  // a delta carries only the statements the tab it is addressed to registered, so a statement left
-  // standing on behalf of a tab that has let go is invisible from every port.
+  // The last release must really retire it, or the count leaks the other way and the worker
+  // re-runs statements nobody reads for the rest of the session. This is read off the worker's own
+  // registry, because a delta carries only the statements the tab it is addressed to registered,
+  // so a statement left standing on behalf of a tab that has let go is invisible from every port.
   tabs.owner.mirror.unwatch(all);
   const before = tabs.owner.pushes();
   await tabs.owner.mirror.update(TODOS, rowId("todo-1"), { title: "alpha prime" }, txnId("txn-2"));
@@ -238,9 +238,10 @@ test("§8.7 a tab that disconnects has its watches released by the worker", asyn
   await guest.mirror.watch(all);
   assert.deepEqual(tabs.host.watching, [all.cacheKey], "the guest's statement was never registered");
 
-  // A tab going away, orderly: `pagehide` disposes the mirror and says goodbye on its port. A
-  // `MessagePort` has no liveness signal the worker can rely on, so a tab that simply stopped would
-  // leave the worker running this statement after every mutation any tab makes, for ever.
+  // A tab going away the ordinary way has `pagehide` dispose the mirror and say goodbye on its
+  // port. A `MessagePort` has no liveness signal the worker can rely on, so a tab that simply
+  // stopped would leave the worker running this statement after every mutation any tab makes, for
+  // ever.
   await guest.close();
 
   await tabs.owner.mirror.create(TODOS, rowId("todo-2"), { title: "beta", done: false, rank: 2 }, txnId("txn-1"));
@@ -261,9 +262,9 @@ test("§8.7 a tab may not release a registration it never took", async () => {
   await tabs.owner.mirror.watch(all);
   assert.deepEqual(ids(tabs.owner.mirror, all), ["todo-1"]);
 
-  // Straight down the port, bypassing the mirror's own reference counting: a tab handing back a
-  // registration it never made. The worker counts per port precisely so this cannot retire the
-  // statement the other tab is reading.
+  // This goes straight down the port, bypassing the mirror's own reference counting, as a tab
+  // handing back a registration it never made. The worker counts per port precisely so this
+  // cannot retire the statement the other tab is reading.
   await guest.transport.request({ type: "unwatch", cacheKey: all.cacheKey });
 
   await tabs.owner.mirror.create(TODOS, rowId("todo-2"), { title: "beta", done: false, rank: 2 }, txnId("txn-1"));
@@ -357,12 +358,12 @@ class Tabs {
 }
 
 /**
- * One tab: its channel to the worker, the transport over it, and the mirror a page would read.
+ * One tab is its channel to the worker, the transport over it, and the mirror a page would read.
  *
- * Every push that reached *this tab's* port is kept, read off the transport rather than out of the
- * mirror. What the mirror kept is a second question: a mirror that was sent the whole scope's
- * statements and quietly dropped the surplus looks identical from the outside, and the tab is
- * woken either way.
+ * Every push that reached *this tab's* port is kept by reading it off the transport. What the
+ * mirror kept is a second question, because a mirror that was sent the whole scope's statements
+ * and quietly dropped the surplus looks identical from the outside, and the tab is woken either
+ * way.
  */
 class Tab {
   readonly transport: WorkerPortTransport;
@@ -415,8 +416,8 @@ class Tab {
 
   #release(): void {
     this.transport.dispose();
-    // An open port keeps Node's event loop alive, so a failing run that skipped this would hang the
-    // whole file rather than report a failure.
+    // An open port keeps Node's event loop alive, so closing this is what lets a failing run
+    // report its failure.
     this.#channel.port1.close();
     this.#channel.port2.close();
   }

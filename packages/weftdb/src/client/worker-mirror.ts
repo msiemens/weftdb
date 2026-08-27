@@ -4,7 +4,7 @@
 // It is an echo mirror, not an optimistic cache. A mutator posts and hands back the worker's own
 // promise; the worker applies it, commits it to SQLite, and pushes back the rows that moved; this
 // applies the push and wakes the subscriptions. Nothing is applied here first, so nothing here can
-// need undoing — which is what keeps DESIGN.md §259's "the client has no rollback path" true of
+// need undoing, which is what keeps §3.5's "the client has no rollback path" true of
 // the worker-backed path too.
 //
 // The boundary is affordable at this granularity. Measured in Firefox, a round trip over the port
@@ -39,9 +39,9 @@ import {
 
 export interface WeftClientMirrorOptions {
   /**
-   * What this mirror talks to: a worker port, whether this tab made the worker or was handed a
-   * port to it. Nothing below this line can tell which, which is the point. The caller owns it —
-   * a tab holding the worker also forwards ports into it — so a mirror that constructed and
+   * What this mirror talks to. A worker port, whether this tab made the worker or was handed a
+   * port to it. Nothing below this line can tell which, which is the point. The caller owns it,
+   * because a tab holding the worker also forwards ports into it, so a mirror that constructed and
    * disposed one privately would be taking a handle its tab still needs.
    */
   readonly transport: WorkerPortTransport;
@@ -54,7 +54,7 @@ export interface WeftClientMirrorOptions {
    */
   readonly namespace?: string;
   /**
-   * The engine whose snapshots this mirror invalidates. One per mirror: an engine shared between
+   * The engine whose snapshots this mirror invalidates. One per mirror. An engine shared between
    * two of them has them evicting each other's cached rows on every render, which
    * `useSyncExternalStore` turns into an infinite update loop rather than a slow one.
    */
@@ -102,13 +102,13 @@ export class WeftClientMirror {
   }
 
   /**
-   * Which rows a statement matched, in order — read out of what the worker last pushed rather than
+   * Which rows a statement matched, in order. Read out of what the worker last pushed rather than
    * run here, because the database is on the other thread. Synchronous, which is what
    * `useSyncExternalStore` requires of a snapshot; a statement whose registration has not come back
    * yet answers with no answer rather than blocking a render on a round trip.
    *
    * `undefined` is that absence, and it is not `[]`. A statement nobody registered and one whose
-   * first answer is still crossing are both of them the same thing — the worker has not said — while
+   * first answer is still crossing are both of them the same thing (the worker has not said), while
    * a statement it ran and that matched nothing answers with an empty list. Reporting both as empty
    * is what makes a list that will never fill look exactly like a list that is legitimately empty.
    *
@@ -120,15 +120,15 @@ export class WeftClientMirror {
   /**
    * Points this mirror at another transport and reloads everything through it.
    *
-   * This is what a tab does when the worker it was talking to has gone — a browser may stop a
+   * This is what a tab does when the worker it was talking to has gone. A browser may stop a
    * `SharedWorker` under memory pressure, and every port to it dies at once. The mirror is then
    * holding rows from a worker that no longer exists and registrations in a registry that went
    * with it.
    *
    * Both are dropped rather than carried over. The rows go because the tab was disconnected for
-   * some interval and cannot know what happened during it: the database is durable and the same
+   * some interval and cannot know what happened during it. The database is durable and the same
    * file is being reopened, so what comes back is whatever committed, which is exactly the right
-   * answer — including for a write that was in flight when the worker died and whose fate the
+   * answer, including for a write that was in flight when the worker died and whose fate the
    * caller was told it could not know. The registrations go because the new worker has never heard
    * of them; they are made again from the statements this mirror kept, which is what stops a list
    * from silently freezing after a migration nobody noticed.
@@ -177,7 +177,7 @@ export class WeftClientMirror {
    *
    * Registrations are counted, not replaced. Two components rendering the same list watch the same
    * cache key, and without a count the first of them to unmount would unwatch the statement out
-   * from under the second — which shows up as a list that silently stops updating, not as an error.
+   * from under the second. That shows up as a list that silently stops updating, not as an error.
    * The second and later callers await the first one's round trip rather than opening their own, so
    * one statement is one registration in the worker however many places read it.
    */
@@ -190,7 +190,7 @@ export class WeftClientMirror {
     // Recorded before the round trip, so a push that beats the reply is recognised rather than
     // dropped as belonging to a statement nobody asked for.
     // `ready` is filled in straight after rather than passed in, because `#register` resolves
-    // against this very entry: the map has to hold it before the round trip can end.
+    // against this very entry. The map has to hold it before the round trip can end.
     const entry: MirrorWatch = { query, refs: 1, ready: Promise.resolve() };
     this.#watched.set(query.cacheKey, entry);
     entry.ready = this.#register(query);
@@ -210,8 +210,8 @@ export class WeftClientMirror {
 
   /**
    * One row, read from the last push rather than from the database. The fields are the ones the
-   * worker sent, so a row this mirror has not been told about — one outside the hydrated scope, or
-   * one whose delta is still crossing — reads as missing rather than stale.
+   * worker sent, so a row this mirror has not been told about (one outside the hydrated scope, or
+   * one whose delta is still crossing) reads as missing rather than stale.
    */
   getRow(tableName: TableName, rowId: RowId): MaterializedRow | undefined {
     const row = this.rows.get(localKey(tableName, rowId));
@@ -226,7 +226,7 @@ export class WeftClientMirror {
 
   /**
    * Whether this row has work the scope has not seen. Synchronous and local, because a list asks
-   * it of every row it renders: it reads the dirty counter the worker mirrored onto the row, which
+   * it of every row it renders. It reads the dirty counter the worker mirrored onto the row, which
    * is the same number `WeftClient.isRowDirty` computes from its outbox and quarantine.
    */
   isRowDirty(tableName: TableName, rowId: RowId): boolean {
@@ -257,7 +257,7 @@ export class WeftClientMirror {
   /**
    * Hands the worker the credential its session runs under, or `null` to sign out.
    *
-   * The page keeps the token, because the page is where it can be got: a worker has no
+   * The page keeps the token, because the page is where it can be got. A worker has no
    * `localStorage` and no redirect to read one out of. What it does not keep is the session, so
    * this is the whole of the arrangement rather than a side-channel beside it.
    *
@@ -283,7 +283,7 @@ export class WeftClientMirror {
   }
 
   /**
-   * What the worker's session last reported, or nothing before it has reported anything — which is
+   * What the worker's session last reported, or nothing before it has reported anything. That is
    * the state of a device that has not signed in yet, not an error. The object is the one the
    * worker sent and is replaced only when a new push arrives, so `useSyncExternalStore` can compare
    * it by identity.
@@ -300,8 +300,8 @@ export class WeftClientMirror {
   }
 
   /**
-   * Stops applying pushes. The transport is left alone: the caller made it, and on a migration the
-   * caller replaces it under a mirror that carries on — so tearing it down here would take the
+   * Stops applying pushes. The transport is left alone. The caller made it, and on a migration the
+   * caller replaces it under a mirror that carries on, so tearing it down here would take the
    * tab's connection with the mirror.
    */
   dispose(): void {
@@ -313,9 +313,9 @@ export class WeftClientMirror {
    * Asks the worker to run a statement, and settles whichever way it goes.
    *
    * It resolves on a refusal rather than rejecting, and reports it through `onError` instead, for
-   * the reason a mutation does: the caller is a component's effect, which has nowhere to put a
-   * rejection and no decision to make about one. A statement the worker refuses — one that does not
-   * constrain `scope_id` is the case that exists — is a fault in the page, and this is where the
+   * the reason a mutation does. The caller is a component's effect, which has nowhere to put a
+   * rejection and no decision to make about one. A statement the worker refuses (one that does not
+   * constrain `scope_id` is the case that exists) is a fault in the page, and this is where the
    * page hears about it; every other failure is this tab losing its worker, which the mirror is
    * already reconnecting from.
    */
@@ -334,7 +334,7 @@ export class WeftClientMirror {
       if (!this.#disposed) this.#onError(error instanceof Error ? error : new Error(String(error)));
       return;
     }
-    // Unwatched while the registration was in flight: the answer is for a statement this page has
+    // Unwatched while the registration was in flight. The answer is for a statement this page has
     // already stopped caring about, and caching it would resurrect it.
     if (!this.#watched.has(query.cacheKey)) return;
     this.#results.set(query.cacheKey, asIds(ids));
@@ -345,10 +345,10 @@ export class WeftClientMirror {
     await this.#transport.request({ type: "mutate", mutation });
   }
 
-  /** A verb with no caller to answer: the failure reaches `onError` or it reaches nobody. */
+  /** A verb with no caller to answer. The failure reaches `onError` or it reaches nobody. */
   #send(body: WorkerRequestBody): void {
     void this.#transport.request(body).catch((error: unknown) => {
-      // Except on the way out, for the reason `#register` gives: a tab that has been disposed of
+      // Except on the way out, for the reason `#register` gives. A tab that has been disposed of
       // has no list left to correct and nobody left to tell.
       if (this.#disposed) return;
       this.#onError(error instanceof Error ? error : new Error(String(error)));
@@ -357,7 +357,7 @@ export class WeftClientMirror {
 
   readonly #onPush = (push: WorkerPush): void => {
     if (!isDeltaPush(push)) {
-      // Status listeners rather than the engine's: nothing about a row moved, and waking every
+      // Status listeners rather than the engine's. Nothing about a row moved, and waking every
       // subscribed query so a connection indicator could change colour would re-scan every list
       // on this page each time the relay was polled.
       this.#status = push.status;
@@ -371,10 +371,10 @@ export class WeftClientMirror {
   #applyDelta(delta: WorkerDelta): void {
     for (const key of delta.removed) this.rows.delete(key);
     // Only the rows that moved are in the delta, so every other entry in the map keeps the object
-    // it had — and with it the revision `RowIdentityCache` decides identity by, which is what makes
+    // it had, and with it the revision `RowIdentityCache` decides identity by, which is what makes
     // `React.memo` hold across a push that touched one row of a thousand.
     for (const row of delta.rows) this.rows.set(localKey(toTableName(row.tableName), toRowId(row.id)), toLocalRow(row));
-    // Every result in the delta is one this page asked for: the worker sends each port only the
+    // Every result in the delta is one this page asked for. The worker sends each port only the
     // statements that port registered, so there is nothing here to sift out. A delta that carried
     // the whole scope's statements would wake this tab for every list every other tab is rendering.
     for (const [cacheKey, ids] of delta.results) this.#results.set(cacheKey, ids as readonly RowId[]);
@@ -387,7 +387,7 @@ interface MirrorWatch {
    * The statement itself, kept rather than only its cache key.
    *
    * A registration lives in the worker, and a tab that reconnects to a new one has to register
-   * everything it is reading all over again — and a cache key is a hash of the compiled statement,
+   * everything it is reading all over again, and a cache key is a hash of the compiled statement,
    * which cannot be turned back into one.
    */
   readonly query: ReactiveSqlQuery;
@@ -408,10 +408,10 @@ function toLocalRow(row: WireRow): LocalRow {
     created: row.created,
     fields: new Map(row.fields.map(([name, value]) => [fieldName(name), value] as const)),
     internals: {
-      // Per-field HLCs, diff3 ancestors and the first-sync stamp stay in the worker: they are what
+      // Per-field HLCs, diff3 ancestors and the first-sync stamp stay in the worker. They are what
       // the sync session and retention read, and neither of those runs on this thread.
       _weft_first_synced_at: null,
-      // Mirrored exactly. This is the single correctness property the bridge rests on — see
+      // Mirrored exactly. This is the single correctness property the bridge rests on. See
       // `WireRow.rev`.
       _weft_rev: row.rev,
       _weft_dirty: row.dirty,

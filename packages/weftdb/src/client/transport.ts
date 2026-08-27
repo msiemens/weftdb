@@ -1,6 +1,6 @@
-// A sync session is four calls — handshake, push, pull, snapshot — and every decision between
-// them is the client's. That makes the calls the only thing a network has to change, so a
-// relay reached over HTTP and an in-process `WeftServer` differ here and nowhere else.
+// A sync session is four calls (handshake, push, pull, snapshot), and every decision between them
+// is the client's. That makes the calls the only thing a network has to change, so a relay reached
+// over HTTP and an in-process `WeftServer` differ here and nowhere else.
 import type { ScopeId, WeftOp } from "weftdb/core";
 import type { HandshakeRequest, HandshakeResponse, PullBatch, PushAck, Snapshot, WeftServer } from "weftdb/server";
 import { snapshotFromEnvelope, type SnapshotEnvelope } from "weftdb/server/snapshot";
@@ -43,9 +43,9 @@ export interface HttpTransportOptions {
 }
 
 /**
- * The relay's HTTP surface, as a transport. The scope travels in the token rather than the
- * request, so the `scopeId` arguments here are the client's own view and are not sent: a client
- * cannot reach a scope its token does not name.
+ * The relay's HTTP surface, as a transport. The scope travels in the token, so the `scopeId`
+ * arguments here are the client's own view and are not sent. A client cannot reach a scope its
+ * token does not name.
  */
 export function httpTransport(options: HttpTransportOptions): AsyncSyncTransport {
   const call = async (path: string, init?: RequestInit): Promise<unknown> => {
@@ -59,8 +59,8 @@ export function httpTransport(options: HttpTransportOptions): AsyncSyncTransport
       },
     });
     if (!response.ok) {
-      // 401/403 are configuration, not sync outcomes: a rejection the client should reason
-      // about always arrives as a 200 with a body describing it.
+      // A 401 or 403 is a configuration failure. A rejection the client should reason about
+      // always arrives as a 200 with a body describing it.
       throw new RelayError(response.status, await response.text().catch(() => ""));
     }
     return response.json();
@@ -74,7 +74,7 @@ export function httpTransport(options: HttpTransportOptions): AsyncSyncTransport
     pull: async (_scopeId, lastServerSeq) => (await call(`/pull?last_server_seq=${lastServerSeq}`)) as PullBatch,
     snapshot: async () => {
       // `/snapshot` answers with the bytes and their digest; the records are read back out of
-      // them here, which also checks the content address rather than taking it on trust.
+      // them here, which also checks the content address.
       return snapshotFromEnvelope((await call("/snapshot")) as SnapshotEnvelope);
     },
   };

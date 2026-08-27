@@ -1,9 +1,9 @@
 // The port a SQL backend implements, and the vocabulary its statements are written in.
 //
-// Two ports, one vocabulary. The relay runs on `node:sqlite`, which answers a statement by
-// returning its rows, so `SqlExecutor` is synchronous. A device runs on SQLite compiled to
-// WebAssembly over a storage layer that yields — IndexedDB is reached by a request and an event —
-// so `AsyncSqlExecutor` is the same four methods over promises. `SqlStatement` and the value types
+// The relay runs on `node:sqlite`, which answers a statement by returning its rows, so
+// `SqlExecutor` is synchronous. A device runs on SQLite compiled to WebAssembly over a storage
+// layer that yields, because IndexedDB is reached by a request and an event, so
+// `AsyncSqlExecutor` is the same four methods over promises. `SqlStatement` and the value types
 // below are what both are written in, and a statement composed for one runs on the other.
 
 export type SqlValue = string | number | bigint | Uint8Array<ArrayBuffer> | null;
@@ -23,7 +23,7 @@ export interface SqlExecutor {
   transaction<Result>(body: () => Result): Result;
 }
 
-/** The three statement forms, shared by the executor and by a transaction open on it. */
+/** The statement forms shared by the executor and by a transaction open on it. */
 export interface AsyncSqlStatements {
   all<Decoded>(statement: SqlStatement<Decoded>): Promise<readonly Decoded[]>;
   get<Decoded>(statement: SqlStatement<Decoded>): Promise<Decoded | undefined>;
@@ -34,8 +34,8 @@ export interface AsyncSqlStatements {
  * One open transaction, and the only way to issue a statement inside it.
  *
  * `transaction` nests, because `SqliteClientStore` wraps its writes in one while a caller may
- * already hold an outer transaction (§5.2). A nested call runs its body against this same handle:
- * the connection has one transaction open and every statement in it belongs to that one.
+ * already hold an outer transaction (§5.2). A nested call runs its body against this same handle,
+ * because the connection has one transaction open and every statement in it belongs to that one.
  */
 export interface AsyncSqlTransaction extends AsyncSqlStatements {
   transaction<Result>(body: (tx: AsyncSqlTransaction) => Result | PromiseLike<Result>): Promise<Result>;
@@ -75,8 +75,8 @@ export function asyncSqlExecutor(executor: SqlExecutor): AsyncSqlExecutor {
 }
 
 /**
- * The queue every asynchronous executor is built on: statements from outside wait for the
- * connection, statements from inside a transaction run where they stand.
+ * The queue every asynchronous executor is built on. Statements from outside wait for the
+ * connection; statements from inside a transaction run where they stand.
  *
  * `boundary` issues `BEGIN`, `COMMIT` and `ROLLBACK` against the connection the statements above
  * run on.

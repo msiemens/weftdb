@@ -3,8 +3,8 @@
 //   node scripts/style-check.mjs docs/src/content/docs/concepts/scopes.md ...
 //
 // Reports line numbers and a short excerpt per hit. Heuristic rules are marked "review": they flag
-// shapes that are usually violations, not always. It catches the mechanical half of STYLE.md and
-// none of the register, so a clean report is a floor rather than a pass.
+// shapes that are usually violations. It catches the mechanical half of STYLE.md and none of the
+// register, so a clean report leaves the register for a reader to judge.
 //
 // Rules the checker cannot hold, and a reader must: whether a heading is a noun phrase on a concept
 // page and a gerund on a guide, whether a sentence is rhetorical contrast, whether a paragraph
@@ -91,7 +91,7 @@ for (const file of files) {
     if (line.trim().startsWith("|") && !/^\s*\|[\s|:-]+\|\s*$/.test(line)) {
       for (const cell of line.split("|").slice(1, -1)) {
         // The glossary defines each term in a sentence and says so in its own preamble, so §12's
-        // rule against terminal periods in a cell is deliberately not how that page is written.
+        // rule against a terminal period in a cell does not describe that page.
         if (/\w\.\s*$/.test(cell) && !file.endsWith("reference/glossary.md")) {
           at("table cell ends in a period (§12)");
         }

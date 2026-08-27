@@ -1,7 +1,7 @@
 // Reconnection timing for a client's socket to the relay.
 //
-// Not in the package's exports map, so the schedule stays an implementation detail rather than
-// something a caller can depend on.
+// Not in the package's exports map, so the schedule stays an implementation detail a caller
+// cannot depend on.
 
 /** The first wait after a connection drops. Short enough that a blip is invisible. */
 export const FIRST_RETRY_MS = 500;

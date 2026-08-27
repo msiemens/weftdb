@@ -1,7 +1,6 @@
-// RFC 6455 framing, only as much of it as a wake-up channel needs. This is deliberately small
-// and deliberately strict: anything it does not understand closes the connection rather than
-// being guessed at, because a socket that misreads a length is a socket that reads the next
-// frame's bytes as payload.
+// RFC 6455 framing, only as much of it as a wake-up channel needs. Anything it does not
+// understand closes the connection rather than being guessed at, because a socket that
+// misreads a length is a socket that reads the next frame's bytes as payload.
 
 export const OPCODE = {
   continuation: 0x0,
@@ -78,8 +77,8 @@ export function decodeFrame(buffer: Buffer, requireMask = true): FrameRead {
 
 /**
  * Server frames are never masked, so this is only ever the sending half. It refuses to build
- * what the other side of this file would refuse to read: emitting a frame a conforming peer
- * has to close the connection over is a bug worth failing on rather than shipping.
+ * what the other side of this file would refuse to read, because emitting a frame a conforming
+ * peer has to close the connection over is a bug worth failing on rather than shipping.
  */
 export function encodeFrame(opcode: Opcode, payload: Buffer, fin = true): Buffer {
   if (payload.length > MAX_PAYLOAD_BYTES) {
@@ -112,9 +111,9 @@ export function encodeClose(code: number, reason = ""): Buffer {
 
 /**
  * The largest frame this will read. The socket carries whole sync sessions, so a push can be
- * as big as one over HTTP — the same 8MB `MAX_BODY_BYTES` the HTTP surface allows, for the
- * same reason: a peer must not be able to make the server hold an unbounded amount of a
- * message it has not finished sending.
+ * as big as one over HTTP, and both cap at the same 8MB `MAX_BODY_BYTES` for the same reason.
+ * A peer must not be able to make the server hold an unbounded amount of a message it has not
+ * finished sending.
  */
 export const MAX_PAYLOAD_BYTES = 8 * 1024 * 1024;
 

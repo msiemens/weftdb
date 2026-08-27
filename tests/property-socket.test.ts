@@ -1,7 +1,7 @@
 // The socket stack under generated histories, with the connection failing at generated moments.
-// A transport is only worth anything when the network is behaving badly, so the interesting
-// question is not whether a sync works — the other suites establish that — but whether these
-// hold no matter where a socket dies:
+// A transport is only worth anything when the network is behaving badly. The other suites
+// already establish that a sync works, so the interesting question here is whether these hold
+// no matter where a socket dies:
 //
 //   nothing acknowledged is lost, the outbox always drains once the relay is reachable again,
 //   the devices converge, and a session over the socket ends where the same session over HTTP
@@ -139,7 +139,7 @@ async function waitFor(condition: () => boolean, message: string, timeoutMs = 5_
 /**
  * Syncs until there is nothing left to push. A client learns that its socket died only when
  * the close reaches it, so right after a drop it will still call itself connected and the send
- * will fail — which is exactly the condition being tested. Settling therefore has to be driven
+ * will fail, which is exactly the condition being tested. Settling therefore has to be driven
  * by the outcome (is the outbox empty?) rather than by the connection flag, and it has to
  * allow for the reconnect backoff.
  */
@@ -154,24 +154,24 @@ async function settle(
     for (const [index, client] of clients.entries()) {
       const transport = sockets[index];
       if (transport === undefined) continue;
-      // A device with nothing to push still has to complete a session: an empty outbox is not
-      // the same as being caught up, and a sync that failed pulled nothing.
+      // A device with nothing to push still has to complete a session, because an empty outbox
+      // is not the same as being caught up, and a sync that failed pulled nothing.
       if (!(await trySync(client, transport))) complete = false;
     }
     return complete && clients.every((client) => client.outbox.length === 0);
   };
 
   while (Date.now() < deadline) {
-    // Two clean rounds: the first drains and the second lets each device see what the other
-    // pushed during the first.
+    // Two clean rounds, the first draining and the second letting each device see what the
+    // other pushed during the first.
     if ((await round()) && (await round())) return;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error("the devices never settled against a reachable relay");
 }
 
-/** Runs a session, tolerating the failures the history is deliberately causing. Returns
- * whether the session actually completed. */
+/** Runs a session, tolerating the failures the history causes. Returns whether the session
+ * actually completed. */
 async function trySync(client: WeftClient, transport: SocketTransport): Promise<boolean> {
   try {
     await client.syncWith(transport, HASH);
@@ -259,7 +259,7 @@ test("no history of edits and connection failures loses acknowledged work", asyn
           );
         }
 
-        // And they agree, unless something is quarantined — which is the one state where a
+        // And they agree, unless something is quarantined, which is the one state where a
         // device is allowed to differ, because its diverged work is waiting on a person.
         const [first, second] = running.clients;
         if (first?.listQuarantine().length === 0 && second?.listQuarantine().length === 0) {
@@ -314,7 +314,7 @@ test("a session over the socket lands where the same session over HTTP does", as
             }
           }
 
-          // Each device ends holding the same shape of state: its own row in whatever state the
+          // Each device ends holding the same shape of state, its own row in whatever state the
           // history left it, plus the other's.
           await overSocket.syncWith(socket, HASH);
           await overHttp.syncWith(http, HASH);
@@ -346,7 +346,7 @@ test("a session over the socket lands where the same session over HTTP does", as
 
 test("many requests in flight at once each get their own answer", async () => {
   // One socket carries every request, correlated by id. If that correlation is wrong under
-  // load, a client silently gets another request's answer — a pull batch belonging to someone
+  // load, a client silently gets another request's answer, a pull batch belonging to someone
   // else's cursor, applied as though it were its own.
   await fc.assert(
     fc.asyncProperty(fc.integer({ min: 2, max: 24 }), async (count) => {
@@ -382,7 +382,7 @@ test("many requests in flight at once each get their own answer", async () => {
 
 /**
  * A relay with nothing attached to it. The shared world opens two sockets of its own, which
- * makes it useless for counting who is connected — the count would be measuring the harness.
+ * makes it useless for counting who is connected, since the count would be measuring the harness.
  */
 async function bareRelay(): Promise<{
   readonly url: string;
@@ -466,7 +466,7 @@ test("a socket carrying hundreds of requests answers all of them", async () => {
     if (socket === undefined) return;
     await waitFor(() => socket.connected, "the socket never connected");
 
-    // Sustained sequential use on one connection: nothing accumulating, nothing drifting.
+    // Sustained sequential use on one connection, with nothing accumulating and nothing drifting.
     for (let index = 0; index < 300; index += 1) {
       const batch = await socket.pull(SCOPE, 0);
       assert.equal(typeof batch.serverSeq, "number", `request ${index} came back malformed`);
@@ -479,7 +479,7 @@ test("a socket carrying hundreds of requests answers all of them", async () => {
 
 test("an answer too big for one message survives being cut into pieces", async () => {
   // Snapshots are the answers that get large, and they are also the ones a client falls back
-  // to when it cannot be caught up incrementally — so losing one to reassembly would strand a
+  // to when it cannot be caught up incrementally, so losing one to reassembly would strand a
   // device precisely when it had no other way back.
   await fc.assert(
     fc.asyncProperty(fc.integer({ min: 1, max: 6 }), async (multiplier) => {

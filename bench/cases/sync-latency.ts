@@ -1,6 +1,6 @@
 // How long one edit takes to become visible on a second device. Every path here is the real
 // relay over the loopback interface, so what separates them is the protocol and the transport
-// rather than the network — see the caveats in RESULTS.md before quoting any of it.
+// rather than the network. See the caveats in RESULTS.md before quoting any of it.
 import type { WireValue } from "weftdb/core";
 import {
   connectSocketTransport,
@@ -34,7 +34,7 @@ export const syncLatency: BenchGroup = {
   ],
 };
 
-/** The floor: the same session with no transport under it at all. */
+/** The floor, the same session with no transport under it at all. */
 async function inProcessRoundTrip(config: BenchConfig): Promise<CaseResult> {
   const server = new WeftServer();
   const alpha = benchClient("device-0");
@@ -170,9 +170,9 @@ async function sessionOverSocket(config: BenchConfig): Promise<readonly CaseResu
 }
 
 /**
- * The subscribed path: device B never asks. The relay sends it the batch its cursor is missing
- * the moment the scope moves, so the measurement ends when B has applied the edit rather than
- * when A's session finishes.
+ * The subscribed path, where device B never asks. The relay sends it the batch its cursor is
+ * missing the moment the scope moves, so the measurement ends when B has applied the edit
+ * rather than when A's session finishes.
  */
 async function pushedBatch(config: BenchConfig): Promise<CaseResult> {
   const relay = await startBenchRelay(2);

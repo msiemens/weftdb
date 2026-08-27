@@ -75,9 +75,9 @@ export type ProjectsQueryBuilder = (statement: ScopedRowQuery<Database, "project
 
 /**
  * A statement over `projects`, scoped and selecting `id` before the callback sees it. Chain
- * `where`, `orderBy`, `limit`, and `offset` onto it. Scoping is not the caller's to get
- * right: one database file holds every scope, and a row id is unique only within its
- * collection, so an unscoped statement can match another scope's row.
+ * `where`, `orderBy`, `limit`, and `offset` onto it. One database file holds every scope,
+ * and a row id is unique only within its collection, so an unscoped statement can match
+ * another scope's row; scoping it here means the caller never has to get that right itself.
  */
 export function projectsSqlQuery(scopeId: string, build: ProjectsQueryBuilder = (statement) => statement): ReactiveSqlQuery {
   const scoped = weftStatements.selectFrom("projects").select("id").where("scope_id", "=", scopeId);
@@ -95,9 +95,9 @@ export function nextProjectsRank(rows: readonly ProjectsRow[], device: DeviceId)
 }
 
 /**
- * Moves the row at `index` one place. Reordering writes one field — the row's new rank,
- * taken from between the two rows it lands between — so nothing below it is renumbered and
- * two devices reordering at once do not undo each other.
+ * Moves the row at `index` one place. Reordering writes one field, the row's new rank, taken
+ * from between the two rows it lands between, so nothing below it is renumbered and two
+ * devices reordering at once do not undo each other.
  */
 export async function moveProjects(
   mutators: ProjectsMutators,
@@ -168,9 +168,9 @@ export type IssuesQueryBuilder = (statement: ScopedRowQuery<Database, "issues">)
 
 /**
  * A statement over `issues`, scoped and selecting `id` before the callback sees it. Chain
- * `where`, `orderBy`, `limit`, and `offset` onto it. Scoping is not the caller's to get
- * right: one database file holds every scope, and a row id is unique only within its
- * collection, so an unscoped statement can match another scope's row.
+ * `where`, `orderBy`, `limit`, and `offset` onto it. One database file holds every scope,
+ * and a row id is unique only within its collection, so an unscoped statement can match
+ * another scope's row; scoping it here means the caller never has to get that right itself.
  */
 export function issuesSqlQuery(scopeId: string, build: IssuesQueryBuilder = (statement) => statement): ReactiveSqlQuery {
   const scoped = weftStatements.selectFrom("issues").select("id").where("scope_id", "=", scopeId);
@@ -188,9 +188,9 @@ export function nextIssuesRank(rows: readonly IssuesRow[], device: DeviceId): st
 }
 
 /**
- * Moves the row at `index` one place. Reordering writes one field — the row's new rank,
- * taken from between the two rows it lands between — so nothing below it is renumbered and
- * two devices reordering at once do not undo each other.
+ * Moves the row at `index` one place. Reordering writes one field, the row's new rank, taken
+ * from between the two rows it lands between, so nothing below it is renumbered and two
+ * devices reordering at once do not undo each other.
  */
 export async function moveIssues(
   mutators: IssuesMutators,
@@ -253,9 +253,9 @@ export type CommentsQueryBuilder = (statement: ScopedRowQuery<Database, "comment
 
 /**
  * A statement over `comments`, scoped and selecting `id` before the callback sees it. Chain
- * `where`, `orderBy`, `limit`, and `offset` onto it. Scoping is not the caller's to get
- * right: one database file holds every scope, and a row id is unique only within its
- * collection, so an unscoped statement can match another scope's row.
+ * `where`, `orderBy`, `limit`, and `offset` onto it. One database file holds every scope,
+ * and a row id is unique only within its collection, so an unscoped statement can match
+ * another scope's row; scoping it here means the caller never has to get that right itself.
  */
 export function commentsSqlQuery(scopeId: string, build: CommentsQueryBuilder = (statement) => statement): ReactiveSqlQuery {
   const scoped = weftStatements.selectFrom("comments").select("id").where("scope_id", "=", scopeId);

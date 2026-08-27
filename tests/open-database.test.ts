@@ -1,14 +1,14 @@
-// `openWeftDatabase` under §8.7: the whole page-side assembly, as one call.
+// `openWeftDatabase` under §8.7, the whole page-side assembly, as one call.
 //
 // What is being tested is the composition. Sending the `hydrate` that says which database a port is
 // for, refusing a page and a worker built from different schemas, one engine per mirror, the device
 // identity, reconnecting when the browser stops the worker, and the order the whole thing comes
-// down in are each a mistake an application assembling this by hand makes silently — no error, no
+// down in are each a mistake an application assembling this by hand makes silently: no error, no
 // type error, just rows that stop moving.
 //
 // Everything is real except IndexedDB. `node:worker_threads` channels carry every tab's connection,
 // the storage worker and the WebAssembly SQLite under it are the shipped ones, and the VFS keeps
-// its files in memory — so messages really are structured-cloned and really do arrive on a later
+// its files in memory, so messages really are structured-cloned and really do arrive on a later
 // turn, which is where the ordering mistakes live.
 import assert from "node:assert/strict";
 import { MessageChannel } from "node:worker_threads";
@@ -89,8 +89,8 @@ test("§8.7 two tabs of one scope read one client, and a write in one appears in
 test("§8.7 two tabs of one scope do not share a subscription engine", async () =>
   withBrowser(async (browser) => {
     // One engine caches the last snapshot per query and the identity of each row by revision, so two
-    // mirrors sharing one evict each other's entries on every render — which `useSyncExternalStore`
-    // turns into an update loop rather than a slow render.
+    // mirrors sharing one evict each other's entries on every render, which `useSyncExternalStore`
+    // turns into an update loop instead of a slow render.
     const first = await browser.open("scope-1");
     const second = await browser.open("scope-1");
     assert.notEqual(first.source.engine, second.source.engine, "two tabs were handed one engine");
@@ -189,7 +189,7 @@ test("§8.7 the token option is read per credential and reaches the worker's ses
     await waitFor(() => browser.tokens.length === 1, "the open never signed the device in");
 
     token = "second";
-    // No argument re-reads the option: a token refreshed since the open is a new credential, and a
+    // No argument re-reads the option. A token refreshed since the open is a new credential, and a
     // transport carries its token, so the session is rebuilt around it.
     await weft.setToken();
     await waitFor(() => browser.tokens.length === 2, "a refreshed token never reached the session");
@@ -218,18 +218,19 @@ test("§8.7 a request in flight when the worker goes away rejects, and the re-hy
 
     // And the tab reconnects to whichever worker is serving now and reloads from the file, so what
     // it shows is whatever committed.
-    // Waited on the statement and not on the rows: a reconnect pushes the scope's rows and the
-    // answers to the statements this tab had registered as two separate messages, so a tab holding
-    // the row is not yet a tab whose list has been recomputed.
+    // The check above waits on the statement's rows, not the underlying row map, because a
+    // reconnect pushes the scope's rows and the answers to the statements this tab had registered
+    // as two separate messages, so a tab holding the row is not yet a tab whose list has been
+    // recomputed.
     await waitFor(() => rowsOf(weft, "scope-1").length === 1, "the tab never reconnected");
     assert.deepEqual(rowsOf(weft, "scope-1").map(title), ["committed"]);
   }));
 
 test("§8.7 a worker that stops without closing its port is noticed, and the tab reconnects", async () =>
   withBrowser(async (browser) => {
-    // What a browser actually does. `close` on a `MessagePort` is specified and unimplemented —
-    // Chrome 151 and Firefox 152 both answer `"onclose" in new MessageChannel().port1` with
-    // `false` — so a page whose `SharedWorker` was stopped is told nothing at all, and a request
+    // What a browser actually does. `close` on a `MessagePort` is specified and unimplemented
+    // (Chrome 151 and Firefox 152 both answer `"onclose" in new MessageChannel().port1` with
+    // `false`), so a page whose `SharedWorker` was stopped is told nothing at all, and a request
     // that never comes back is the only evidence it has.
     const weft = await browser.open("scope-1", { token: () => "token", workerDeadlineMs: 150 });
     await weft.source.watch(todosOrdered("scope-1"));
@@ -239,7 +240,7 @@ test("§8.7 a worker that stops without closing its port is noticed, and the tab
     await browser.stopSilently();
 
     // Nothing was in flight, so the deadline has to be reached by a request made after the worker
-    // went: a page whose worker dies while it is idle learns of it when the person next does
+    // went. A page whose worker dies while it is idle learns of it only when the person next does
     // something.
     const writing = weft.source.create(TODOS, rowId("todo-2"), values("after", 2), txnId("txn-2")).then(
       () => "resolved",
@@ -247,9 +248,9 @@ test("§8.7 a worker that stops without closing its port is noticed, and the tab
     );
     assert.equal(await writing, "rejected", "a write into a worker that had gone was reported as landing");
 
-    // And the tab reconnects, so the write the person makes next lands. Retried because the
-    // reconnect is asynchronous: an attempt made straight after the rejection can still meet the
-    // transport that is on its way out.
+    // The tab reconnects, so the write the person makes next lands. Retried because the
+    // reconnect is asynchronous, and an attempt made straight after the rejection can still meet
+    // the transport that is on its way out.
     for (let attempt = 0; attempt < 40; attempt += 1) {
       try {
         await weft.source.create(TODOS, rowId("todo-3"), values("after", 3), txnId("txn-3"));
@@ -266,8 +267,8 @@ test("§8.7 a worker that stops without closing its port is noticed, and the tab
  * One browser: one `localStorage`, one origin's storage, and one `SharedWorker` at a time serving
  * whatever tabs a test opens against them.
  *
- * The namespace is per browser rather than per suite, so two tests running in one process do not
- * read each other's rows out of a storage keyed by name.
+ * The namespace is scoped per browser, so two tests running in one process do not read each
+ * other's rows out of a storage keyed by name.
  */
 class Browser {
   readonly storage = new MemoryStorage();
@@ -323,7 +324,7 @@ class Browser {
   }
 
   /**
-   * The browser stopping the worker under memory pressure: every port to it closes at once, and a
+   * The browser stopping the worker under memory pressure. Every port to it closes at once, and a
    * tab that constructs one again is served by a new instance over the same storage.
    */
   async stop(): Promise<void> {
@@ -334,7 +335,7 @@ class Browser {
   }
 
   /**
-   * The same, as a browser performs it: the worker stops answering and every port it left behind
+   * The same, as a browser performs it. The worker stops answering and every port it left behind
    * stays open. No browser raises `close` on a `MessagePort`, so silence is the whole of the
    * notice a page gets.
    */
@@ -348,7 +349,7 @@ class Browser {
     for (const weft of this.#opened) await weft.dispose();
     await this.#worker.stop();
     // An open port keeps Node's event loop alive, so a failing run that skipped these would hang
-    // the whole file rather than report a failure.
+    // the whole file with no failure ever reported.
     for (const channel of this.#ports) {
       channel.port1.close();
       channel.port2.close();

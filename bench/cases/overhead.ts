@@ -1,4 +1,4 @@
-// The harness measuring itself. Nothing below is a claim about weftdb: it is here so a reader can
+// The harness measuring itself. Nothing below is a claim about weftdb. It is here so a reader can
 // see how much of a reported duration could be the timer rather than the system, and so a case
 // that ever lands near this number can be recognised as unmeasurable rather than fast.
 import { consume, duration, repeat, type BenchConfig, type BenchGroup, type CaseResult } from "../harness.ts";

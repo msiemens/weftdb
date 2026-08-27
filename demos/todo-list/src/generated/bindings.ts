@@ -78,9 +78,9 @@ export type TodosQueryBuilder = (statement: ScopedRowQuery<Database, "todos">) =
 
 /**
  * A statement over `todos`, scoped and selecting `id` before the callback sees it. Chain
- * `where`, `orderBy`, `limit`, and `offset` onto it. Scoping is not the caller's to get
- * right: one database file holds every scope, and a row id is unique only within its
- * collection, so an unscoped statement can match another scope's row.
+ * `where`, `orderBy`, `limit`, and `offset` onto it. One database file holds every scope,
+ * and a row id is unique only within its collection, so an unscoped statement can match
+ * another scope's row; scoping it here means the caller never has to get that right itself.
  */
 export function todosSqlQuery(scopeId: string, build: TodosQueryBuilder = (statement) => statement): ReactiveSqlQuery {
   const scoped = weftStatements.selectFrom("todos").select("id").where("scope_id", "=", scopeId);
@@ -98,9 +98,9 @@ export function nextTodosRank(rows: readonly TodosRow[], device: DeviceId): stri
 }
 
 /**
- * Moves the row at `index` one place. Reordering writes one field — the row's new rank,
- * taken from between the two rows it lands between — so nothing below it is renumbered and
- * two devices reordering at once do not undo each other.
+ * Moves the row at `index` one place. Reordering writes one field, the row's new rank, taken
+ * from between the two rows it lands between, so nothing below it is renumbered and two
+ * devices reordering at once do not undo each other.
  */
 export async function moveTodos(
   mutators: TodosMutators,
@@ -161,9 +161,9 @@ export type TodoEventsQueryBuilder = (statement: ScopedRowQuery<Database, "todo_
 
 /**
  * A statement over `todo_events`, scoped and selecting `id` before the callback sees it. Chain
- * `where`, `orderBy`, `limit`, and `offset` onto it. Scoping is not the caller's to get
- * right: one database file holds every scope, and a row id is unique only within its
- * collection, so an unscoped statement can match another scope's row.
+ * `where`, `orderBy`, `limit`, and `offset` onto it. One database file holds every scope,
+ * and a row id is unique only within its collection, so an unscoped statement can match
+ * another scope's row; scoping it here means the caller never has to get that right itself.
  */
 export function todoEventsSqlQuery(scopeId: string, build: TodoEventsQueryBuilder = (statement) => statement): ReactiveSqlQuery {
   const scoped = weftStatements.selectFrom("todo_events").select("id").where("scope_id", "=", scopeId);

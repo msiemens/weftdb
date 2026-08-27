@@ -1,13 +1,12 @@
 // Who a tab is, and whose data it is looking at.
 //
-// Two levels, and they are deliberately different lifetimes:
+// Two levels, with different lifetimes:
 //
 //   scope   one per visitor, in local storage. Shared by every tab of that browser and kept
-//           across reloads, so opening a second tab shows you your own data rather than a
-//           stranger's. A deployed demo has many visitors on one relay; each is a scope.
-//   device  one per tab, in session storage. Reloading keeps your unsent work, a new tab is a
-//           new device. That is what makes opening a second tab interesting: two devices holding
-//           the same data, each with its own outbox, clock and cursor, merging through the relay
+//           across reloads, so a second tab reads the same visitor's data. A deployed demo has
+//           many visitors on one relay; each is a scope.
+//   device  one per tab, in session storage. Reloading keeps your unsent work, and a new tab is
+//           a new device, each with its own outbox, clock and cursor, merging through the relay
 //           exactly as a laptop and a phone would.
 //
 // Scope equality is the whole of the authorization model, so this is also what keeps one visitor
@@ -43,7 +42,7 @@ export interface TabIdentityOptions {
   /** Slug of the demo. Namespaces its storage and prefixes the visitor's scope id. */
   readonly demo: string;
   /**
-   * Pins the scope instead of deriving one per visitor. For tests, and for a local run where a
+   * Pins the scope instead of deriving one per visitor, for tests, and for a local run where a
    * predictable scope is easier to inspect in the relay's SQLite file.
    */
   readonly scope?: ScopeId | undefined;
@@ -63,10 +62,10 @@ export async function tabIdentity(
     const parsed = JSON.parse(existing) as { readonly id: string; readonly label: string };
     return identityFor(scope, parsed.id, parsed.label);
   }
-  // Two tabs opened at once read the same counter and both claim the next number — local storage
-  // has no atomic increment — so the ordinal is a convenience and the suffix is what actually
-  // tells them apart. Both go in the label: a device you cannot name is one you cannot reason
-  // about when its edits show up somewhere unexpected.
+  // Two tabs opened at once read the same counter and both claim the next number, since local
+  // storage has no atomic increment, so the ordinal is a convenience and the suffix is what
+  // actually tells them apart. Both go in the label, because a device you cannot name is one you
+  // cannot reason about when its edits show up somewhere unexpected.
   const ordinal = Number(local.getItem(counterKey) ?? "0") + 1;
   local.setItem(counterKey, String(ordinal));
   const suffix = randomToken(1);
@@ -79,20 +78,20 @@ export async function tabIdentity(
 /**
  * The visitor's own scope, made once and kept.
  *
- * It is long because it is the only thing separating one visitor's rows from another's: the relay
- * accepts whatever scope a token names, so a guessable id would be a readable one. That makes it
- * unguessable, which is not the same as access control — see the note in `auth.ts`. A demo relay
- * belongs on loopback or behind something that knows who is asking.
+ * It is long because it is the only thing separating one visitor's rows from another's. The relay
+ * accepts whatever scope a token names, so a guessable id would be a readable one, and being hard
+ * to guess is only obscurity, as the note in `auth.ts` explains. A demo relay belongs on loopback
+ * or behind something that knows who is asking.
  */
 async function visitorScope(local: StorageLike, demo: string): Promise<ScopeId> {
   const key = `${demoKeyPrefix(demo)}scope`;
   const settled = local.getItem(key);
   if (settled !== null && settled !== "") return scopeId(settled);
-  // Held across the read and the write. Local storage has no compare-and-set, so two tabs opened
-  // together both find nothing and both mint, and the one whose write lands second leaves the other
-  // running under a scope no storage names. Two tabs of one visitor are then in separate worlds for
-  // as long as they stay open: neither can see the other's rows, because scope equality is the
-  // whole of what decides that.
+  // Held across the read and the write, since local storage has no compare-and-set, so two tabs
+  // opened together both find nothing and both mint, and the one whose write lands second leaves
+  // the other running under a scope no storage names. Two tabs of one visitor are then in
+  // separate worlds for as long as they stay open, because scope equality is the whole of what
+  // decides which rows a tab can see.
   return await withTabLock(key, async () => {
     const won = local.getItem(key);
     if (won !== null && won !== "") return scopeId(won);

@@ -109,7 +109,10 @@ class MemoryStorage implements EnumerableStorage {
   }
 }
 
-/** `IDBFactory` in the two members a reset touches, recording what it was asked to delete. */
+/**
+ * `IDBFactory` in the `databases` and `deleteDatabase` members a reset touches, recording what it
+ * was asked to delete.
+ */
 class MemoryDatabases {
   readonly deleted: string[] = [];
   readonly #names: readonly string[];

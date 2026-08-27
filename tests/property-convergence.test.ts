@@ -1,7 +1,7 @@
-// DESIGN.md §9 "Convergence" — the invariants that need a specific arrangement rather than
-// a generated history. Commutativity, idempotence, snapshot equivalence, floor
-// independence and stale-client safety. §9.3, §9.4, §9.8, §9.8a, §9.8b and §9.15 are
-// checked continuously by the world model instead (property-invariants.ts).
+// DESIGN.md §9 "Convergence", the invariants that need a specific arrangement instead of a
+// generated history. Commutativity, idempotence, snapshot equivalence, floor independence and
+// stale-client safety. §9.3, §9.4, §9.8, §9.8a, §9.8b and §9.15 are checked continuously by the
+// world model instead (property-invariants.ts).
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import fc from "fast-check";
@@ -95,7 +95,7 @@ test("§9.5 snapshot plus outbox replay equals incremental pull plus outbox repl
 
       if (incremental.tombstoneFloorSeq > 0) {
         // Purging destroys the records a from-zero stream would need, so the equivalence is
-        // only claimed above the floor: below it the client must resync instead (§1.5).
+        // only claimed above the floor. Below it the client must resync instead (§1.5).
         assert.equal(fromPull.resyncRequired, true, "an unusable incremental stream was applied anyway");
         await fromPull.applySnapshot(snapshot);
       }
@@ -186,7 +186,7 @@ test("§9.7 a client one schema version behind cannot alter a newer field", asyn
 
 /**
  * A valid local history from one device, captured as one op array per transaction. Only
- * `lww` fields take part: a `diff3` field makes acceptance depend on arrival order by
+ * `lww` fields take part. A `diff3` field makes acceptance depend on arrival order by
  * design (§5.4), which is the opposite of what commutativity asks about.
  */
 async function transactionsFor(history: readonly Mutation[]): Promise<{
@@ -237,8 +237,9 @@ function deliver(
   options: { readonly duplicate?: boolean } = {},
 ): PropertyWorld {
   const world = createWorld(0);
-  // Creating transactions land first: a `set` ahead of its `create` is `row_absent` by
-  // design (§5.9), not a delivery order the server is expected to absorb.
+  // Creating transactions land first, because delivering a `set` ahead of its `create` would
+  // trigger `row_absent` by design (§5.9), which is not the kind of reordering this property
+  // is about.
   for (const batch of permute(batches.creates, keys)) push(world.server, batch, keys, options.duplicate ?? false);
   for (const batch of permute(batches.rest, keys.slice(8))) push(world.server, batch, keys, options.duplicate ?? false);
   return world;
@@ -256,7 +257,7 @@ function push(server: WeftServer, batch: readonly WeftOp[], keys: readonly numbe
     );
 }
 
-/** A generated permutation: sort by the generated keys, ties broken by original position. */
+/** A generated permutation, sorted by the generated keys with ties broken by original position. */
 function permute<T>(items: readonly T[], keys: readonly number[]): readonly T[] {
   return items
     .map((item, index) => ({ item, index, key: keys[index % keys.length] ?? index }))

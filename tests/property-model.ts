@@ -1,9 +1,9 @@
-// The world model the §9 property suite runs against: N simulated devices and one server
-// in one scope, plus a neighbouring scope reusing the same row ids so cross-scope isolation
-// is exercised by every generated history.
+// The world model the §9 property suite runs against. N simulated devices and one server in
+// one scope, plus a neighbouring scope reusing the same row ids, so cross-scope isolation is
+// exercised by every generated history.
 //
 // Commands are fast-check `Command`s, so histories are generated, replayed and shrunk by
-// fast-check rather than by a hand-rolled seed loop. Every command asserts the world
+// fast-check instead of by a hand-rolled seed loop. Every command asserts the world
 // invariants in `property-invariants.ts` after it runs.
 import fc from "fast-check";
 import {
@@ -62,7 +62,7 @@ export const propertySchema = defineSchema({
 export const propertySchemaHash = schemaHash(propertySchema);
 
 /**
- * The next release of the same application: one more nullable field, one higher version.
+ * The next release of the same application, one more nullable field, one higher version.
  * A device running it rolls the scope forward and locks out the ones that have not updated
  * (§5.10), which is what the upgrade command models.
  */
@@ -152,9 +152,10 @@ export interface WorldTrace {
   readonly written: Set<string>;
   /**
    * The value each device's application last put in a field, keyed `device\0table\0row\0field`.
-   * The client's own queues cannot answer this once a write has been set aside: quarantined ops
-   * are never superseded by a later edit (§5.5 makes them the person's to decide about), so the
-   * op still holds the value the field had before that edit, not the one it ends on.
+   * The client's own queues cannot answer this once a write has been set aside, because
+   * quarantined ops are never superseded by a later edit (§5.5 makes them the person's to decide
+   * about); the op just sits there holding the value it captured, regardless of what the field
+   * goes on to hold.
    */
   readonly lastWrites: Map<string, WireValue>;
   /** Base-field values as first observed, for the immutability invariant. */
@@ -221,7 +222,7 @@ function recordPushes(server: WeftServer, trace: WorldTrace): WeftServer {
     trace.pushed.push(...ops.map((op) => ({ ...op })));
     const result = original(scope, ops);
     // A failed push can still have applied the transactions before the rejected one, and those
-    // are as accepted as any other — the client is told about them and drains them.
+    // are as accepted as any other, since the client is told about them and drains them.
     const applied = new Set(result.acks?.map((ack) => ack.txnId) ?? []);
     const landed = result.ok ? ops : ops.filter((op) => applied.has(op.txnId));
     trace.accepted.push(...landed.map((op) => ({ ...op })));
@@ -235,14 +236,14 @@ function recordPushes(server: WeftServer, trace: WorldTrace): WeftServer {
 /**
  * §5.4: a `set` carrying a base hash was checked against the value it claims to follow, so a
  * push that accepts it has to be holding it afterwards. Accepting a write and then discarding
- * it by some other rule is the one failure a client cannot detect — it is told the push
- * succeeded — and convergence cannot see it either, since every device happily agrees on the
+ * it by some other rule is the one failure a client cannot detect, since it is told the push
+ * succeeded, and convergence cannot see it either, since every device happily agrees on the
  * value that replaced the one they were promised.
  */
 function assertCertifiedWritesLanded(server: WeftServer, scope: ScopeId, ops: readonly WeftOp[]): void {
   const certified = new Map<string, WireValue>();
   for (const op of ops) {
-    // Last write wins within the batch: an earlier one being overwritten here is ordinary.
+    // Last write wins within the batch, so an earlier one being overwritten here is ordinary.
     if (op.kind === "set" && op.baseHash !== undefined)
       certified.set(writeKey(op.tableName, op.rowId, op.field), op.value);
   }
@@ -263,7 +264,7 @@ function assertCertifiedWritesLanded(server: WeftServer, scope: ScopeId, ops: re
 function makeDevice(id: string, scope: ScopeId, now: () => number, trace: WorldTrace): PropertyDevice {
   const drift = { skewMs: 0 };
   const device: PropertyDevice = {
-    // Each device gets its own schema object: an upgrade bumps the version this build
+    // Each device gets its own schema object, so an upgrade bumps the version this build
     // presents without touching what the other devices are running.
     client: new WeftClient(scope, deviceId(id), { ...propertySchema }, () => now() + drift.skewMs),
     emittedHlcs: [],
@@ -316,7 +317,7 @@ function instrument(device: PropertyDevice, trace: WorldTrace): PropertyDevice {
       const fields = name === "update" ? Object.keys(values) : [...Object.keys(values), "id", "scope_id", "created"];
       for (const field of fields) trace.written.add(writeKey(table, row, fieldName(field)));
       await original(table, row, values, txn);
-      // Read back rather than recorded from the call: `create` fills in `created` itself, and
+      // Read back from the row after the call, because `create` fills in `created` itself, and
       // what the row ends up holding is what the application asked for either way.
       const written = device.client.getRow(table, row)?.fields;
       for (const field of fields) {
@@ -339,8 +340,8 @@ export function writeKey(table: TableName, row: RowId, field: FieldName): string
 // ---------------------------------------------------------------------------
 
 /**
- * Row ids in play. The abstract model is deliberately small: every command's precondition
- * is a question about one device's real local state, which the model cannot mirror without
+ * Row ids in play. The abstract model stays small, because every command's precondition is a
+ * question about one device's real local state, which the model cannot mirror without
  * reimplementing merge, so commands re-read it and no-op when they do not apply.
  */
 export interface WorldModel {
@@ -421,10 +422,10 @@ function editNotes(device: number, row: number, line: number, text: string): Wor
 
 /**
  * Both devices edit the same prose field before either pushes, which is the only way to reach
- * the server's fast-forward check and the client's rebase behind it. Left to chance the
- * generator reached that path a handful of times per run — two devices holding unsent edits to
- * the same field at the same moment is a coincidence, and the interesting behaviour is all on
- * the other side of it.
+ * the server's fast-forward check and the client's rebase behind it. Left to chance, the
+ * generator reached that path only a handful of times per run, since two devices holding unsent
+ * edits to the same field at the same moment is a coincidence, and the interesting behaviour is
+ * all on the other side of it.
  */
 function contendNotes(device: number, row: number, line: number, mine: string, theirs: string): WorldCommand {
   return command(`contendNotes(d${device}, r${row}, line ${line})`, async (model, world) => {
@@ -547,8 +548,8 @@ function duplicateDelivery(device: number): WorldCommand {
     if (!target.online) return;
     // A transport that delivers the same batch twice. What is replayed is what the wire
     // actually carried, taken from the recording the push wrapper makes as each batch goes
-    // out — reading the outbox beforehand would replay stamps a rebase or a skew correction
-    // changed during the sync, which is traffic no transport ever saw.
+    // out. Reading the outbox beforehand would replay stamps a rebase or a skew correction
+    // changed during the sync, traffic no transport ever saw.
     const alreadySent = world.trace.pushed.length;
     await target.client.syncWith(inProcessTransport(world.server), target.schemaHash);
     const stillPending = new Set(target.client.outbox.map(opIdentity));
@@ -558,9 +559,9 @@ function duplicateDelivery(device: number): WorldCommand {
       .map((op) => ({ ...op }));
     if (delivered.length === 0) return;
 
-    // Idempotence is not merely "the values converge": re-delivering an accepted op must
-    // leave the record *and* its sequence number alone. Bumping the sequence number would
-    // make every other device re-pull a value it already has.
+    // Idempotence requires re-delivering an accepted op to leave the record *and* its sequence
+    // number alone. Bumping the sequence number would make every other device re-pull a value
+    // it already has.
     const before = JSON.stringify(world.server.snapshot(world.scopeId));
     world.server.push(world.scopeId, delivered);
     world.server.push(
@@ -597,7 +598,7 @@ export type RepairMode = "retry" | "discard";
 
 function repairQuarantine(device: number, mode: RepairMode, pick: number): WorldCommand {
   return command(`repairQuarantine(d${device}, ${mode})`, async (_model, world) => {
-    // The UI must offer repair for quarantined work (§5.5), so histories exercise it: the
+    // The UI must offer repair for quarantined work (§5.5), so histories exercise it. The
     // user retries a transaction or discards it.
     const target = deviceAt(world, device);
     const transactions = [...new Set(target.client.quarantine.map((op) => op.txnId))];
@@ -615,9 +616,9 @@ function repairQuarantine(device: number, mode: RepairMode, pick: number): World
 
 function upgradeSchema(device: number): WorldCommand {
   return command(`upgradeSchema(d${device})`, (_model, world) => {
-    // A rolling update: this device now runs the next release. It rolls the scope forward on
+    // A rolling update. This device now runs the next release. It rolls the scope forward on
     // its next handshake, and every device still on the old build is locked out until it
-    // updates too (§5.10) — with its outbox left untouched.
+    // updates too (§5.10), though its outbox is left untouched.
     upgradeDevice(deviceAt(world, device));
   });
 }
@@ -630,7 +631,7 @@ function skewDeviceClock(device: number, offsetMs: number): WorldCommand {
 
 function runRetention(device: number, days: number): WorldCommand {
   return command(`runRetention(d${device}, ${days}d default)`, async (_model, world) => {
-    // Retention is client-driven: expired rows become ordinary delete ops (§7).
+    // Retention is client-driven, so expired rows become ordinary delete ops (§7).
     const target = deviceAt(world, device);
     const expired = planRetentionDeletes(target.client, propertySchema, { defaultAutoDeleteDays: days }, world.now);
     for (const candidate of expired) {
@@ -883,7 +884,7 @@ export function replaceLine(text: string, index: number, replacement: string): s
  * the last device pulled still gets its work delivered before state is compared.
  */
 export async function quiesce(world: PropertyWorld, maxRounds = 200): Promise<void> {
-  // Settling is what happens once the fleet has caught up: clocks are corrected, and any
+  // Settling is what happens once the fleet has caught up. Clocks are corrected, and any
   // rolling update finishes, because a device left on the old build is locked out of the
   // scope by design (§5.10) and could never converge.
   const upgraded = world.devices.some((device) => device.schemaHash === upgradedSchemaHash);
@@ -932,7 +933,7 @@ export function pendingOps(client: WeftClient, table: TableName, row: RowId): re
   ];
 }
 
-/** Rows no device holds pending work for: every device must agree with the server on them. */
+/** Rows with no pending work anywhere, so every device must agree with the server on them. */
 export function settledRowKeys(world: PropertyWorld): readonly string[] {
   const keys = new Set<string>();
   for (const device of world.devices) {
@@ -1003,7 +1004,7 @@ export function at<T>(items: readonly T[], index: number): T {
   return value;
 }
 
-/** The model schema's aggregate arithmetic: fixture logic, not something the client provides. */
+/** The model schema's aggregate arithmetic, fixture logic that the client itself does not provide. */
 export function isOverridden(row: MaterializedRow, overrideField: FieldName): boolean {
   return row.fields.get(overrideField) !== null && row.fields.get(overrideField) !== undefined;
 }

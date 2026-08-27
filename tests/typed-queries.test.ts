@@ -1,6 +1,6 @@
 // Typing is only worth having if it refuses things, so the refusals are the test. Every
-// `@ts-expect-error` below fails the build if the line it marks stops being an error — this
-// file is checked by `tsc --noEmit` along with everything else, so these are assertions.
+// `@ts-expect-error` below fails the build if the line it marks stops being an error, because
+// this file is checked by `tsc --noEmit` along with everything else.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { fieldName, tableName } from "weftdb/core";
@@ -35,8 +35,8 @@ test("a schema loaded at runtime that disagrees is refused rather than queried",
 });
 
 test("a query naming something the schema does not declare does not compile", () => {
-  // Never called: the point is that the compiler refuses them, and calling one would only
-  // prove the runtime guard fires, which the previous test already does.
+  // Never called. The compiler refuses them, and calling one would only prove the runtime guard
+  // fires, which the previous test already does.
   // @ts-expect-error - `titel` is not a field of `todos`
   () => queryKey(schema, "todos", { fields: ["titel"] });
   // @ts-expect-error - ordering by a field that does not exist
@@ -67,8 +67,8 @@ test("a decoder that does not produce the row type the key promises does not com
 });
 
 test("a source's key type is the source's, not any string", () => {
-  // A store that knows which queries it holds says so, and asking for anything else is an
-  // error rather than an `undefined` at runtime.
+  // A store's key type lists exactly the queries it holds, so passing anything else fails to
+  // compile.
   type Known = "greeting" | "farewell";
   const source: SubscriptionSource<string, Known> = {
     getSnapshot: (key) => key,

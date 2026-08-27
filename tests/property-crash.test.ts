@@ -1,9 +1,8 @@
-// Durability, as a property rather than as three moments somebody thought of. §4.1 makes local
-// storage the client's state rather than a cache of the server's, so a mutation's promise
-// resolves only once its edit has committed — and a process killed at *any* point must come
-// back holding every edit made before it died, whether or not any of them ever reached a
-// server. The existing durability tests pick particular instants to die at; this generates both
-// the work and the instant.
+// Durability, tested as a property instead of as a few moments somebody thought of. §4.1 makes
+// local storage the client's actual state, so a mutation's promise resolves only once its edit
+// has committed, and a process killed at *any* point must come back holding every edit made
+// before it died, whether or not any of them ever reached a server. The existing durability
+// tests pick particular instants to die at; this generates both the work and the instant.
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import fc from "fast-check";
@@ -34,9 +33,9 @@ const schema = defineSchema({
 type Step =
   { readonly kind: "create" | "edit"; readonly row: number; readonly title: string } | { readonly kind: "sync" };
 
-// Two rows rather than a wide spread, and edits weighted above creates: the case that matters
-// is an edit made and then crashed on, and a generator that scatters its writes across many
-// rows spends its runs never making the same row twice.
+// Two rows, and edits weighted above creates, because the case that matters is an edit made and
+// then crashed on; a generator that scattered its writes across many rows would spend its runs
+// never making the same row twice.
 const stepArb: fc.Arbitrary<Step> = fc.oneof(
   {
     arbitrary: fc.record({
@@ -94,7 +93,7 @@ test("a process killed at any point comes back holding every edit it had made", 
         );
         assert.equal(child.signal, "SIGKILL", `the child exited instead of being killed: ${child.stderr}`);
 
-        // Reopened from disk alone — the process that made these edits no longer exists.
+        // Reopened from disk alone. The process that made these edits no longer exists.
         using clientFile = openSqliteExecutor(clientPath);
         const store = new SqliteClientStore(asyncSqlExecutor(clientFile), schema);
         const reopened = await store.hydrate(SCOPE, DEVICE);
@@ -105,8 +104,8 @@ test("a process killed at any point comes back holding every edit it had made", 
           assert.equal(row?.fields.get(TITLE), title, `${id} came back holding an older title than it was left with`);
         }
 
-        // Nothing the server acknowledged may be missing from it either: the client dropped
-        // those ops from its outbox on the strength of that acknowledgement.
+        // Nothing the server acknowledged may be missing from it either, because the client
+        // dropped those ops from its outbox on the strength of that acknowledgement.
         using serverExecutor = openSqliteExecutor(serverPath);
         const server = new SqliteWeftServer(serverExecutor, () => 1_000);
         const stored = new Set(
@@ -172,6 +171,6 @@ for (const step of steps) {
 }
 
 // Die the way a power cut does: no close, no flush, no exit handlers. Everything above is on
-// disk: each mutation's promise resolved only once its write had committed.
+// disk, because each mutation's promise resolved only once its write had committed.
 process.kill(process.pid, "SIGKILL");
 `;

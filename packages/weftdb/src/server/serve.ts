@@ -1,5 +1,5 @@
-// The runnable relay: a Node HTTP listener around the fetch-style handler in relay.ts, plus
-// the configuration a deployment needs. This is what the container image runs.
+// The runnable relay. A Node HTTP listener wraps the fetch-style handler in relay.ts, plus the
+// configuration a deployment needs; this is what the container image runs.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { WeftServer } from "./index.ts";
 import { SqliteWeftServer } from "./sqlite.ts";
@@ -21,8 +21,8 @@ export interface ServeOptions {
   readonly databasePath?: string;
   readonly tokens: ReadonlyMap<string, AuthContext>;
   /**
-   * Replaces the static token table. Deployments that issue tokens rather than list them —
-   * and the demo, which lets any tab name itself — supply their own verifier here.
+   * Replaces the static token table. Deployments that issue tokens rather than list them, and
+   * the demo that lets any tab name itself, supply their own verifier here.
    */
   readonly verifier?: TokenVerifier;
   /** How often the sync socket pings. Zero turns the keepalive off. */
@@ -59,17 +59,17 @@ export async function startRelay(options: ServeOptions): Promise<RunningServer> 
   const handler = createRelayHandler({ server, verifier });
   const sockets = new SyncSocketHub({
     verifier,
-    // The socket carries whole sync sessions, through the same four calls HTTP reaches.
+    // The socket carries whole sync sessions, reaching the same calls HTTP does.
     operations: syncOperations({ server, verifier }),
-    // What a subscribed connection is sent when its scope moves: the same batch the same
+    // What a subscribed connection is sent when its scope moves. It is the same batch the same
     // `/pull` would have answered with, delivered without being asked for it.
     pull: (scopeId, lastServerSeq) => server.pull(scopeId, lastServerSeq),
     ...(options.keepaliveMs === undefined ? {} : { keepaliveMs: options.keepaliveMs }),
   });
-  // Watching the server rather than the HTTP surface means every path that moves a scope wakes
-  // its devices, including the ones no client asked for — a prune raising the tombstone floor.
-  // This relay is the only one there is; several sharing a database would need the advance to
-  // travel between the processes, which is noted in TODO.md and not built.
+  // Watching the server means every path that moves a scope wakes its devices, including the
+  // ones no client asked for, such as a prune raising the tombstone floor. This relay is the
+  // only one there is; several sharing a database would need the advance to travel between the
+  // processes, which is noted in TODO.md and not built.
   const unwatch = server.watch((scopeId, serverSeq) => sockets.advanced(scopeId, serverSeq));
   const pruneTimer = startPruneTimer(server, options);
   const http = createServer(createRequestListener(withHealthCheck(handler)));
@@ -115,15 +115,15 @@ export async function startRelay(options: ServeOptions): Promise<RunningServer> 
 /**
  * Sweeps every scope the server knows about, on an interval.
  *
- * Pruning runs by default because the protocol assumes it has: a scope's `tombstone_floor_seq`
+ * Pruning runs by default because the protocol assumes it has. A scope's `tombstone_floor_seq`
  * only advances here, and a device below the floor is what makes a snapshot resync necessary. A
  * relay that never prunes keeps every tombstone it has ever written and leaves the floor at zero,
  * so the resync path never triggers and storage grows without bound. `pruneIntervalMs: 0` turns
  * the sweep off, the same way `keepaliveMs` does.
  *
- * `server.scopes` is already populated for every scope the server has handled: the in-memory
+ * `server.scopes` is already populated for every scope the server has handled. The in-memory
  * `WeftServer` fills it in as scopes are touched, and `SqliteWeftServer` reads every row of it
- * out of storage at construction. Nothing further is needed to find the scopes to prune.
+ * out of storage at construction, so nothing further is needed to find the scopes to prune.
  */
 function startPruneTimer(server: WeftServer, options: ServeOptions): ReturnType<typeof setInterval> | undefined {
   const intervalMs = options.pruneIntervalMs ?? DEFAULT_PRUNE_INTERVAL_MS;
@@ -238,8 +238,8 @@ export type ConfigResult =
 
 /**
  * Configuration comes from the environment so the image needs no config file. Tokens are
- * mandatory: a relay with no way to authenticate anyone should refuse to start rather than
- * come up and reject every request.
+ * mandatory, because a relay with no way to authenticate anyone should refuse to start rather
+ * than come up and reject every request.
  */
 export function serveOptionsFromEnv(env: Readonly<Record<string, string | undefined>>): ConfigResult {
   const errors: string[] = [];
@@ -309,7 +309,7 @@ function numberFromEnv(
 
 /**
  * The JWT settings, or nothing if this deployment lists its tokens instead. The algorithms are
- * named explicitly because they are the deployment's decision: a verifier that accepts whatever
+ * named explicitly because they are the deployment's decision. A verifier that accepts whatever
  * a token asks for is one a token can talk out of checking it.
  */
 function jwtOptionsFromEnv(
@@ -321,7 +321,7 @@ function jwtOptionsFromEnv(
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
   // An empty variable is an unset one. Left as a value, `WEFT_JWT_SECRET=""` satisfies every
-  // check that a key was configured and hands the verifier an empty HMAC key — which anyone can
+  // check that a key was configured and hands the verifier an empty HMAC key, which anyone can
   // sign with, for any scope. A mistyped secret name in a deployment is exactly how that happens.
   const secret = emptyToUndefined(env["WEFT_JWT_SECRET"]?.trim());
   const publicKey = emptyToUndefined(env["WEFT_JWT_PUBLIC_KEY"]?.trim());
@@ -353,8 +353,8 @@ function jwtOptionsFromEnv(
   if (!symmetric && algorithms.length > 0 && secret !== undefined) {
     errors.push("a public-key algorithm needs WEFT_JWT_PUBLIC_KEY, not WEFT_JWT_SECRET");
   }
-  // RFC 7518 §3.2: an HMAC key must be at least as long as the digest it produces. A shorter one
-  // does not fail — it verifies, with less work to forge than the algorithm's name implies.
+  // RFC 7518 §3.2 requires an HMAC key at least as long as the digest it produces. A shorter
+  // one does not fail; it verifies, with less work to forge than the algorithm's name implies.
   const requiredSecretBytes = Math.max(
     0,
     ...algorithms.filter((algorithm) => algorithm.startsWith("HS")).map(hmacKeyBytes),
@@ -422,7 +422,7 @@ export async function resolveTokenSource(
 
 /**
  * Command-line settings, as the environment variables they stand for. Both surfaces exist for
- * different reasons: the container image is configured by environment because that is what an
+ * different reasons. The container image is configured by environment because that is what an
  * orchestrator sets and where a mounted secret lands, and a person starting a relay by hand
  * wants flags they can discover with `--help` and read back in their shell history. Flags win,
  * because someone typing one is being more specific than the environment they inherited.

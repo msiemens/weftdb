@@ -1,7 +1,7 @@
-// `pnpm dev` inside a demo: Vite, serving that demo's page.
+// `pnpm dev` inside a demo. Vite, serving that demo's page.
 //
-// Driven through Vite's API rather than its binary, which keeps this working the same however the
-// package manager invokes it.
+// Driven through Vite's API rather than its binary, so this works the same however the package
+// manager invokes it.
 import { resolve } from "node:path";
 
 export interface DemoDevOptions {

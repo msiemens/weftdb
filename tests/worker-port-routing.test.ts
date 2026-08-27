@@ -1,13 +1,12 @@
 // §8.7 what one worker does once it is serving several tabs.
 //
-// The failure this is about is quiet: with one port there is only one place a reply can go, and
-// with several there is a right one and a wrong one. A response addressed to the wrong port settles
-// whatever request that tab happened to have outstanding under the same number — request ids are
-// per tab and every tab counts from one — and nothing anywhere reports a fault.
+// Request ids are per tab and every tab counts from one, so two tabs can have a request numbered
+// the same outstanding at once. A response addressed to the wrong port settles whatever request
+// that tab happens to have outstanding under that number, and nothing anywhere reports a fault.
 //
 // Rows and results are routed differently, and both halves are checked here. A row belongs to the
-// scope, so every port serving it is told; a result belongs to whoever registered the statement,
-// and one tab's list is nothing to the tab beside it.
+// scope, so every port serving it is told. A result belongs to whoever registered the statement,
+// and one tab's list means nothing to the tab beside it.
 import assert from "node:assert/strict";
 import { MessageChannel } from "node:worker_threads";
 import { test } from "vitest";
@@ -45,10 +44,9 @@ test("§8.7 a response goes to the tab that asked and to no other", async () => 
   const first = worker.connect();
   const second = worker.connect();
   try {
-    // Both tabs count their requests from one, so both have a request numbered 1 outstanding at the
-    // same moment. That is the arrangement this design introduces and the reason the host has to
-    // route by port: with the two answers swapped, each tab settles the other's request with a
-    // value of the wrong shape — and both promises resolve, so nothing raises.
+    // Both tabs count their requests from one, so both have a request numbered 1 outstanding at
+    // the same moment. Swapping the two answers settles each request with a value of the wrong
+    // shape, and both promises still resolve, so a routing bug here would not throw.
     const executed = first.request({ type: "execute", query: query("one").compiled });
     const hydrated = second.request({
       type: "hydrate",
@@ -77,7 +75,7 @@ test("§8.7 an error goes back to the tab whose request failed", async () => {
   const second = worker.connect();
   try {
     // `sync` needs a session and this worker has none, so it is refused. A refusal routed to every
-    // port would reject a request another tab is waiting on — an edit reported as failed when it
+    // port would reject a request another tab is waiting on, reporting an edit as failed when it
     // never was.
     const refused = second.request({ type: "sync" }).then(
       () => "resolved",
@@ -109,8 +107,8 @@ test("§8.7 a push reaches every connected tab", async () => {
     );
     await first.request({ type: "hydrate", scopeId: SCOPE, deviceId: "device-1", namespace: NAMESPACE });
 
-    // One tab mutates. The delta belongs to all of them: the worker recomputes every watched
-    // statement after every mutation, whichever tab caused it.
+    // One tab mutates, and the delta belongs to all of them, because the worker recomputes every
+    // watched statement after every mutation, whichever tab caused it.
     await first.request({
       type: "mutate",
       mutation: {
@@ -151,14 +149,14 @@ test("§8.7 a tab's watches are released by its own disconnect and by nobody els
     second.dispose();
     await settle(() => worker.host.connections === 1);
 
-    // The statement the leaving tab held alone is retired; the one the staying tab is also reading
-    // is not. Retiring both would freeze a list the remaining tab is rendering, and retiring
-    // neither would leave the worker re-running a statement nobody reads for the rest of the
-    // session — which under a `SharedWorker` is the rest of the browser's.
+    // The statement the leaving tab held alone is retired, and the one the staying tab is also
+    // reading is not. Retiring both would freeze a list the remaining tab is rendering, and
+    // retiring neither would leave the worker re-running a statement nobody reads for the rest of
+    // the session, which under a `SharedWorker` is the rest of the browser's.
     //
-    // Both halves of that are asserted, because one port cannot see the whole of it: a delta
-    // carries only the statements its own tab registered, so the retired one is invisible from here
-    // whether or not the worker is still running it.
+    // Both halves are asserted because one port cannot see the whole of it. A delta carries only
+    // the statements its own tab registered, so the retired one is invisible from here whether or
+    // not the worker is still running it.
     assert.deepEqual(worker.host.watching, [shared.cacheKey], "a disconnect released the wrong registrations");
     const results = await worker.recompute(first);
     assert.deepEqual(results, [shared.cacheKey], "the staying tab stopped being answered for its own statement");
@@ -169,8 +167,8 @@ test("§8.7 a tab's watches are released by its own disconnect and by nobody els
 
 test("§8.7 a worker whose last tab has gone says so", async () => {
   // A `SharedWorker` outlives every tab of its origin, so nothing else can tell the entry point
-  // that a client is finished with. Without this, one database per `(namespace, scope)` the origin
-  // had ever opened stays resident for as long as the browser keeps the worker.
+  // that a client is finished with it. Without this, one database per `(namespace, scope)` the
+  // origin had ever opened stays resident for as long as the browser keeps the worker.
   using worker = await Worker.open();
   const first = worker.connect();
   const second = worker.connect();
@@ -235,7 +233,7 @@ class Worker {
     );
   }
 
-  /** One more tab, connected the way `onconnect` connects one: with a port of its own. */
+  /** One more tab, connected the way `onconnect` connects one, with a port of its own. */
   connect(): WorkerPortTransport {
     const channel = new MessageChannel();
     this.#ports.push(channel);
@@ -269,8 +267,8 @@ class Worker {
   [Symbol.dispose](): void {
     for (const transport of this.#opened) transport.dispose();
     this.host.stop();
-    // An open port keeps Node's event loop alive, so a failing run that skipped these would hang
-    // the whole file rather than report a failure.
+    // An open port keeps Node's event loop alive, so leaving one open when a test fails hangs the
+    // whole file without ever reporting the failure.
     for (const channel of this.#ports) {
       channel.port1.close();
       channel.port2.close();

@@ -1,8 +1,8 @@
-// The one thing every multi-tab test needs and neither Node nor vitest provides: a port in the
-// shape both halves of the worker protocol expect.
+// Every multi-tab test needs a port in the shape both halves of the worker protocol expect, and
+// neither Node nor vitest provides one.
 //
-// A `node:worker_threads` port is a real port — messages cross a channel and are delivered on a
-// later turn of the loop — so what a test built on this exercises is the shipped protocol with the
+// A `node:worker_threads` port is a real port; messages cross a channel and are delivered on a
+// later turn of the loop, so what a test built on this exercises is the shipped protocol with the
 // process boundary taken out.
 import { type MessagePort, type TransferListItem } from "node:worker_threads";
 
@@ -10,7 +10,7 @@ import { type MessagePort, type TransferListItem } from "node:worker_threads";
  * A `node:worker_threads` port in the shape a `SharedWorker`'s port and a worker's own connection
  * are each expected to have.
  *
- * `postMessage` takes a transfer list, because a demo hands its relay over as one: a `MessagePort`
+ * `postMessage` takes a transfer list, because a demo hands its relay over as one. A `MessagePort`
  * cannot be cloned, so it reaches the worker only by being moved into it.
  */
 export class PortEndpoint<Incoming = unknown> {
@@ -19,8 +19,8 @@ export class PortEndpoint<Incoming = unknown> {
 
   constructor(port: MessagePort) {
     this.port = port;
-    // A port reached through `addEventListener` rather than through its EventEmitter face does not
-    // begin delivering on its own.
+    // `addEventListener` does not implicitly start the port the way its EventEmitter face does,
+    // so `start()` is called explicitly here.
     this.port.start();
   }
 
@@ -53,9 +53,9 @@ export class PortEndpoint<Incoming = unknown> {
 }
 
 /**
- * A `MessagePort` and a `BroadcastChannel` both deliver on a later turn of the loop, and a mirror's
- * mutators return before anything has crossed either — so a test waits on the condition rather than
- * on a guessed number of ticks.
+ * A `MessagePort` and a `BroadcastChannel` both deliver on a later turn of the loop, and a
+ * mirror's mutators return before anything has crossed either. A test waits on the condition
+ * instead of guessing a number of ticks.
  */
 export async function settle(condition: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;

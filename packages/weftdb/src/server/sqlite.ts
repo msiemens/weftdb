@@ -92,9 +92,9 @@ export class SqliteWeftServer extends WeftServer {
 
   /**
    * Reads a scope in once. Memory is where the protocol runs and storage is written behind it,
-   * so re-reading on every pull would cost the size of the scope to answer a question about
-   * three records — and, worse, would overwrite anything memory holds that storage has not
-   * caught up with, quietly undoing it.
+   * so re-reading on every pull would cost the size of the scope just to answer a question about
+   * a few rows. Worse, it would overwrite anything memory holds that storage has not caught up
+   * with, quietly undoing it.
    */
   private loadScope(scopeIdValue: ScopeId): void {
     if (this.loaded.has(scopeIdValue)) return;
@@ -108,17 +108,18 @@ export class SqliteWeftServer extends WeftServer {
   }
 
   /**
-   * Writes what the last operation touched, and nothing else. Rewriting the scope would make
-   * the cost of accepting one field the size of the scope — a relay holding ten thousand rows
-   * would spend a tenth of a second storing a changed word.
+   * Writes what the last operation touched, and nothing else. Rewriting the scope would make the
+   * cost of accepting one field the size of the scope. A relay holding ten thousand rows would
+   * spend a tenth of a second storing a changed word.
    *
-   * A touched key whose record is gone from memory was removed rather than written, which is
-   * how a prune reaches storage without a separate path.
+   * A touched key whose record is gone from memory was removed rather than written, which is how
+   * a prune reaches storage without a separate path.
    */
   private persistScope(scopeIdValue: ScopeId): void {
     this.executor.transaction(() => {
-      // Keys are dropped as they are written rather than cleared at the end: a key belonging to
-      // another scope is another scope's still-pending write, and clearing it would lose it.
+      // Keys are dropped as they are written rather than cleared at the end, because a key
+      // belonging to another scope is another scope's still-pending write, and clearing it
+      // would lose it.
       for (const key of [...this.touchedFields]) {
         const field = this.fields.get(key);
         if (field === undefined) {

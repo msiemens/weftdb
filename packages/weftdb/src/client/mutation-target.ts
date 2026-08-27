@@ -1,13 +1,13 @@
-// What a write goes through, named structurally rather than by class.
+// What a write goes through, named structurally instead of by class.
 //
-// Two things carry a device's writes. `WeftClient` applies them itself, against the rows and the
-// outbox it holds on the thread it was built on. `WeftClientMirror` posts them to the worker that
-// holds the client, and waits for the echo. Typing generated mutators against the class would pick
-// the first and exclude the second, leaving an application whose database is in the storage worker
-// with generated read hooks and every write to hand-write.
+// `WeftClient` applies a device's writes itself, against the rows and the outbox it holds on the
+// thread it was built on. `WeftClientMirror` posts them to the worker that holds the client, and
+// waits for the echo. Typing generated mutators against the class would pick `WeftClient` and
+// exclude the mirror, leaving an application whose database is in the storage worker with generated
+// read hooks and every write to hand-write.
 //
-// Neither class is told about this file. It is the shape they already had, written down: nothing
-// here was widened to fit, and `WeftClient` in particular satisfies it as it stands.
+// Neither class is told about this file. TypeScript's structural typing is what lets each satisfy
+// it without declaring so, and `WeftClient` already does, as it stands.
 import type { FieldName, RowId, TableName, TxnId, WireValue } from "weftdb/core";
 
 /**
