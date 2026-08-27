@@ -694,8 +694,14 @@ const rowArb = fc.integer({ min: 0, max: MODEL_ROWS.length - 1 });
 const invoiceArb = fc.integer({ min: 0, max: MODEL_INVOICES.length - 1 });
 const textArb = fc.string({ minLength: 1, maxLength: 12 });
 
-/** The generated command space, weighted so sync traffic keeps up with mutations. */
-export function worldCommands(maxCommands = 100): fc.Arbitrary<Iterable<WorldCommand>> {
+/**
+ * The generated command space, weighted so sync traffic keeps up with mutations.
+ *
+ * fast-check prints a `replayPath` in the comment beside a reported counterexample, and a history
+ * replays only when that path is handed back to the generator that drew it. A seed and a `path`
+ * alone reach a different history, because shrinking a command list depends on what running it did.
+ */
+export function worldCommands(maxCommands = 100, replayPath?: string): fc.Arbitrary<Iterable<WorldCommand>> {
   return fc.commands<WorldModel, PropertyWorld, true>(
     [
       fc
@@ -744,7 +750,7 @@ export function worldCommands(maxCommands = 100): fc.Arbitrary<Iterable<WorldCom
       fc.constant(prune()),
       fc.tuple(rowArb, textArb).map(([row, title]) => neighbourScopeWrite(row, title)),
     ],
-    { maxCommands, size: "medium" },
+    { maxCommands, size: "medium", ...(replayPath === undefined ? {} : { replayPath }) },
   );
 }
 
