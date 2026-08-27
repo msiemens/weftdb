@@ -5,7 +5,17 @@ import { join } from "node:path";
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import fc from "fast-check";
-import { compareHlc, deviceId, fieldName, rowId, scopeId, tableName, txnId, type HlcString } from "weftdb/core";
+import {
+  compareHlc,
+  deviceId,
+  fieldName,
+  rowId,
+  scopeId,
+  stableHash,
+  tableName,
+  txnId,
+  type HlcString,
+} from "weftdb/core";
 import {
   asyncSqlExecutor,
   type AsyncSqlExecutor,
@@ -265,6 +275,34 @@ test("client SQLite hydrate preserves a pending resync requirement", async () =>
     deviceId("device"),
   );
   assert.equal(hydrated.resyncRequired, true, "a restart dropped the pending snapshot requirement");
+});
+
+test("client SQLite hydrate preserves a deleted row's diff3 ancestor", async () => {
+  using db = TempSqlite.open();
+  const store = new SqliteClientStore(db.executor, schema);
+  const tasks = tableName("tasks");
+  const notes = fieldName("notes");
+  const row = rowId("task-1");
+  const server = new WeftServer(() => 1_000);
+  const client = await store.attach(new WeftClient(scopeId("ancestor-scope"), deviceId("device"), schema, () => 1_000));
+  await client.create(tasks, row, { [fieldName("title")]: "kept", [notes]: "alpha\nbravo" }, txnId("create"));
+  await client.syncWith(inProcessTransport(server), schemaHash(schema));
+  await client.delete(tasks, row, txnId("delete"));
+
+  // A delete leaves the relay holding the row's field values (§5.9), so the ancestor has to come
+  // back with the tombstone or the first prose edit after a restore claims one the relay never had.
+  const hydrated = await new SqliteClientStore(db.executor, schema).hydrate(
+    scopeId("ancestor-scope"),
+    deviceId("device"),
+  );
+  await hydrated.restore(tasks, row, { [fieldName("title")]: "back" }, txnId("restore"));
+  await hydrated.update(tasks, row, { [notes]: "alpha\ncharlie" }, txnId("edit"));
+  const edit = hydrated.outbox.find((op) => op.kind === "set" && op.field === notes && op.txnId === txnId("edit"));
+  assert.equal(
+    edit?.kind === "set" ? edit.baseHash : undefined,
+    stableHash("alpha\nbravo"),
+    "a reload lost the ancestor the relay is still holding for a deleted row",
+  );
 });
 
 test("client SQLite hydrate preserves the clock across a reload", async () => {

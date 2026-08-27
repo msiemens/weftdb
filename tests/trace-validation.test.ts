@@ -56,6 +56,8 @@ const ROW_IDS: Readonly<Record<(typeof ROWS)[number], RowId>> = { r1: rowId("r1"
 
 type SpecRowState = "absent" | "live" | "deleted";
 type SpecOp = "none" | "create" | "write" | "delete" | "restore";
+/** What the specification carries about work the server refused, from its `Refusals`. */
+type SpecRefusal = "none" | "brought" | "addressed";
 
 /** One row of the specification's state, as observed in the implementation. */
 interface SpecState {
@@ -66,7 +68,7 @@ interface SpecState {
   readonly cursor: Readonly<Record<string, number>>;
   readonly view: Readonly<Record<string, Readonly<Record<string, SpecRowState>>>>;
   readonly outbox: Readonly<Record<string, Readonly<Record<string, SpecOp>>>>;
-  readonly quarantined: Readonly<Record<string, Readonly<Record<string, boolean>>>>;
+  readonly quarantined: Readonly<Record<string, Readonly<Record<string, SpecRefusal>>>>;
   /** The client's `resyncRequired`: discarded work waiting for a snapshot to re-derive it. */
   readonly resyncing: Readonly<Record<string, boolean>>;
 }
@@ -226,7 +228,10 @@ async function apply(
       return;
     }
     case "repair":
-      for (const quarantined of new Set(client.quarantine.map((op) => op.txnId)))
+      // `Repair(d, r)` clears one row, and the client clears one transaction, so this repairs
+      // every transaction set aside for this row. A recorded transaction touches one row, so
+      // nothing else moves with it.
+      for (const quarantined of new Set(client.quarantine.filter((op) => op.rowId === row).map((op) => op.txnId)))
         await client.discardQuarantinedTxn(quarantined);
       return;
     case "pull":
@@ -251,7 +256,7 @@ interface RawState {
   readonly cursor: Readonly<Record<string, number>>;
   readonly view: Readonly<Record<string, Readonly<Record<string, SpecRowState>>>>;
   readonly outbox: Readonly<Record<string, Readonly<Record<string, SpecOp>>>>;
-  readonly quarantined: Readonly<Record<string, Readonly<Record<string, boolean>>>>;
+  readonly quarantined: Readonly<Record<string, Readonly<Record<string, SpecRefusal>>>>;
   readonly resyncing: Readonly<Record<string, boolean>>;
 }
 
@@ -288,7 +293,7 @@ function observe(server: WeftServer, clients: readonly WeftClient[]): RawState {
     quarantined: Object.fromEntries(
       clients.map((client, index) => [
         DEVICES[index] ?? "d1",
-        Object.fromEntries(ROWS.map((name) => [name, client.quarantine.some((op) => op.rowId === ROW_IDS[name])])),
+        Object.fromEntries(ROWS.map((name) => [name, quarantinedOp(client, ROW_IDS[name])])),
       ]),
     ),
     resyncing: Object.fromEntries(clients.map((client, index) => [DEVICES[index] ?? "d1", client.resyncRequired])),
@@ -341,6 +346,18 @@ function pendingOp(client: WeftClient, row: RowId): SpecOp {
 }
 
 /**
+ * The set-aside queue, as the specification's `Refusals` describes it. What it has to be able to
+ * say is whether discarding takes the row with it, so an operation that put the row here outranks
+ * every later one addressed to it.
+ */
+function quarantinedOp(client: WeftClient, row: RowId): SpecRefusal {
+  const held = client.quarantine.filter((op) => op.rowId === row);
+  if (held.length === 0) return "none";
+  const brought = held.some((op) => op.kind === "create" || op.kind === "append" || op.kind === "restore");
+  return brought ? "brought" : "addressed";
+}
+
+/**
  * Ranks a sequence number as the position of the first transaction boundary at or above it.
  * Heads are the boundaries, because a cursor is always a head, so this preserves every
  * comparison the specification makes while collapsing a transaction's several numbers into one.
@@ -365,7 +382,7 @@ function traceModule(name: string, trace: readonly SpecState[]): string {
         `          cursor |-> ${record_(state.cursor, String)},`,
         `          view |-> ${record_(state.view, (rows) => record_(rows, quoted))},`,
         `          outbox |-> ${record_(state.outbox, (rows) => record_(rows, quoted))},`,
-        `          quarantined |-> ${record_(state.quarantined, (rows) => record_(rows, (value) => (value ? "TRUE" : "FALSE")))},`,
+        `          quarantined |-> ${record_(state.quarantined, (rows) => record_(rows, quoted))},`,
         `          resyncing |-> ${record_(state.resyncing, (value) => (value ? "TRUE" : "FALSE"))}`,
         "        ]",
       ].join("\n"),

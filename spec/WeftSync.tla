@@ -66,7 +66,7 @@ VARIABLES
     view,             \* Devices -> Rows -> what that device believes
     superseded,       \* Devices -> Rows -> holding a field value the scope has moved past
     outbox,           \* Devices -> Rows -> the unsent local op, if any
-    quarantined,      \* Devices -> Rows -> local work the server refused
+    quarantined,      \* Devices -> Rows -> what the server refused, "none" for nothing
     resyncing,        \* Devices -> discarded local work, waiting for a snapshot to re-derive
     purgeSeq          \* Rows -> the record a purge was started against
 
@@ -75,6 +75,29 @@ vars == <<serverState, serverRowSeq, serverSeq, epoch, fieldSeq, floor, purging,
 
 RowStates == {"absent", "live", "deleted"}
 Ops == {"none", "create", "write", "delete", "restore"}
+
+(***************************************************************************)
+(* What the model carries about work the server refused. A `create` and a   *)
+(* `restore` brought the row to the device and are the whole of its claim   *)
+(* that the row is there, so discarding one takes the row away; a write or  *)
+(* a delete addressed a row that was already there, and discarding one      *)
+(* leaves it. Nothing reads any finer distinction, and carrying the         *)
+(* operation's own kind instead doubled WeftSyncEpoch.cfg, from 640,527     *)
+(* distinct states to 1,203,046.                                            *)
+(***************************************************************************)
+Refusals == {"none", "brought", "addressed"}
+
+SetAside(op) ==
+    CASE op = "none"                    -> "none"
+      [] op \in {"create", "restore"}   -> "brought"
+      [] OTHER                          -> "addressed"
+
+(***************************************************************************)
+(* Which of two refusals the model keeps. It carries one per row where the  *)
+(* client carries a queue, and the one worth carrying is the one that says  *)
+(* whether the row is on the device at all.                                 *)
+(***************************************************************************)
+Kept(held, arriving) == IF held = "brought" THEN held ELSE SetAside(arriving)
 
 TypeOK ==
     /\ serverState \in [Rows -> RowStates]
@@ -89,7 +112,7 @@ TypeOK ==
     /\ view \in [Devices -> [Rows -> RowStates]]
     /\ superseded \in [Devices -> [Rows -> BOOLEAN]]
     /\ outbox \in [Devices -> [Rows -> Ops]]
-    /\ quarantined \in [Devices -> [Rows -> BOOLEAN]]
+    /\ quarantined \in [Devices -> [Rows -> Refusals]]
     /\ purgeSeq \in [Rows -> 0..MaxSeq]
     /\ resyncing \in [Devices -> BOOLEAN]
 
@@ -106,7 +129,7 @@ Init ==
     /\ view = [d \in Devices |-> [r \in Rows |-> "absent"]]
     /\ superseded = [d \in Devices |-> [r \in Rows |-> FALSE]]
     /\ outbox = [d \in Devices |-> [r \in Rows |-> "none"]]
-    /\ quarantined = [d \in Devices |-> [r \in Rows |-> FALSE]]
+    /\ quarantined = [d \in Devices |-> [r \in Rows |-> "none"]]
     /\ purgeSeq = [r \in Rows |-> 0]
     /\ resyncing = [d \in Devices |-> FALSE]
 
@@ -247,7 +270,7 @@ WriteLoses(d, r) ==
 
 Quarantines(d, r) ==
     /\ outbox' = [outbox EXCEPT ![d][r] = "none"]
-    /\ quarantined' = [quarantined EXCEPT ![d][r] = TRUE]
+    /\ quarantined' = [quarantined EXCEPT ![d][r] = Kept(quarantined[d][r], outbox[d][r])]
     /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, fieldSeq, superseded>>
 
 Push(d, r) ==
@@ -267,18 +290,25 @@ Push(d, r) ==
     /\ UNCHANGED <<epoch, floor, purging, cursor, view, purgeSeq, resyncing>>
 
 (***************************************************************************)
-(* Repair. The user discards the quarantined work. The client cannot        *)
-(* re-derive the row there and then — it has no server state in hand at     *)
-(* that moment — so it marks itself for a resync and the next read fetches  *)
-(* a snapshot. Between the two it holds a row it no longer has any claim    *)
-(* to, which is why `Consistent` excuses a device that is resyncing.        *)
+(* Repair. The user discards the quarantined work, and the row that work    *)
+(* put here goes with it. A `create` or a `restore` is the whole of this    *)
+(* device's claim that the row is there, so once it is discarded nothing    *)
+(* else takes the row away. A snapshot keeps every row a device still holds *)
+(* work for (§5.7), so a refusal left beside it that only addressed the row *)
+(* would hold the row on the device for as long as it sat there.            *)
+(*                                                                          *)
+(* What the scope holds under that id is a question the client has no       *)
+(* answer to at this moment, so it marks itself for a resync and the next   *)
+(* read fetches a snapshot. `Consistent` excuses it in between.             *)
 (***************************************************************************)
 Repair(d, r) ==
-    /\ quarantined[d][r]
-    /\ quarantined' = [quarantined EXCEPT ![d][r] = FALSE]
+    /\ quarantined[d][r] # "none"
+    /\ view' = [view EXCEPT ![d][r] =
+                  IF quarantined[d][r] = "brought" THEN "absent" ELSE view[d][r]]
+    /\ quarantined' = [quarantined EXCEPT ![d][r] = "none"]
     /\ resyncing' = [resyncing EXCEPT ![d] = TRUE]
     /\ UNCHANGED <<serverState, serverRowSeq, serverSeq, epoch, fieldSeq, floor, purging, cursor,
-                   deviceEpoch, view, superseded, outbox, purgeSeq>>
+                   deviceEpoch, superseded, outbox, purgeSeq>>
 
 (***************************************************************************)
 (* Pruning, in two steps so the window between them is reachable. With      *)
@@ -336,7 +366,7 @@ PruneFinish(r) ==
 (* device holds unsent or quarantined work for are not overwritten — that   *)
 (* divergence is surfaced, not erased.                                      *)
 (***************************************************************************)
-Holds(d, r) == outbox[d][r] # "none" \/ quarantined[d][r]
+Holds(d, r) == outbox[d][r] # "none" \/ quarantined[d][r] # "none"
 
 (***************************************************************************)
 (* Local work the arriving batch contradicts is *moved* to quarantine, not  *)
@@ -344,10 +374,15 @@ Holds(d, r) == outbox[d][r] # "none" \/ quarantined[d][r]
 (* outbox later and count as settled while still showing the row it never   *)
 (* reconciled. Only rows the batch actually spoke about are affected — an   *)
 (* incremental batch carries nothing at all about a row the server has no   *)
-(* record for, so local work on it is untouched.                            *)
+(* record for, so local work on it is untouched. A row already quarantined  *)
+(* and holding nothing queued keeps what it has, because the operation      *)
+(* under decision is the one the person has yet to answer for.              *)
 (***************************************************************************)
 Surfacing(d, doomed) ==
-    /\ quarantined' = [quarantined EXCEPT ![d] = [r \in Rows |-> IF r \in doomed THEN TRUE ELSE quarantined[d][r]]]
+    /\ quarantined' = [quarantined EXCEPT ![d] = [r \in Rows |->
+         IF r \in doomed /\ outbox[d][r] # "none"
+         THEN Kept(quarantined[d][r], outbox[d][r])
+         ELSE quarantined[d][r]]]
     /\ outbox' = [outbox EXCEPT ![d] = [r \in Rows |-> IF r \in doomed THEN "none" ELSE outbox[d][r]]]
 
 \* Incremental: a tombstone the device had not seen, for a row it holds work on.
@@ -387,8 +422,15 @@ IncrementalPull(d) ==
 \* A snapshot carries every field record the scope has, whatever its number, so it repairs
 \* every superseded value at once. This is the only thing that repairs the defect today, and
 \* nothing in the protocol makes a device take one.
+\*
+\* A record in the snapshot settles the row's liveness whatever the device is holding, because
+\* §5.7 applies the server's state to a dirty row and replays the outbox on top of it. Absence is
+\* the one case the device's own work speaks to, because a row the snapshot does not mention was
+\* purged below the floor and the local work addressed to it is a divergence for the person to
+\* resolve (§5.7, step 3).
 Resync(d) ==
-    /\ view' = [view EXCEPT ![d] = [r \in Rows |-> IF Holds(d, r) THEN view[d][r] ELSE serverState[r]]]
+    /\ view' = [view EXCEPT ![d] = [r \in Rows |->
+         IF serverState[r] = "absent" /\ Holds(d, r) THEN view[d][r] ELSE serverState[r]]]
     /\ superseded' = [superseded EXCEPT ![d] = [r \in Rows |-> FALSE]]
     /\ cursor' = [cursor EXCEPT ![d] = serverSeq]
     \* Adopted outright. A cursor above the snapshot's head belongs to a history this server no

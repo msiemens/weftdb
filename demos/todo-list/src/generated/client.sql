@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS tombstones (
   row_id TEXT NOT NULL,
   hlc TEXT NOT NULL,
   server_seq INTEGER NOT NULL,
+  diff3_base TEXT,
   PRIMARY KEY (scope_id, table_name, row_id)
 );
 

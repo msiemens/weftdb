@@ -5,6 +5,14 @@ with the rejections that can follow, quarantine and its repair, delete and resto
 liveness register, incremental pull against the server sequence counter, snapshot resync, and
 tombstone pruning with a floor.
 
+Quarantine carries the operation the server refused, because what repairing it does depends on which
+operation it was. Discarding a `create` or a `restore` takes the row with it, because that operation
+is the whole of the device's claim that the row is there. A snapshot keeps every row a device still
+holds work for (§5.7), so a refused write left beside it would hold the row on the device for as
+long as the person leaves it sitting there. Discarding a refused write leaves the row alone. One
+set-aside operation is carried per row where the client carries a queue, and the one carried is
+whichever of them says whether the row is on the device at all.
+
 Field values themselves are not carried. What is carried is the *delivery* of a field write's
 outcome. A write's stamp either beats the stored one or it does not; the model reaches both
 answers as separate steps, tracks which devices are left holding a value the scope has moved
@@ -66,9 +74,9 @@ tlc -config spec/WeftSyncLivenessBuggy.cfg spec/WeftSync.tla     # expected to f
 
 | Configuration | Result |
 |---|---|
-| `WeftSync.cfg` (2 devices, 2 rows, MaxSeq 3, MaxEpoch 1) | 4,992,171 distinct states, no violation, 5m43s, depth 28 |
-| `WeftSyncEpoch.cfg` (2 devices, 1 row, MaxSeq 3, MaxEpoch 2) | 89,365 distinct states, no violation, depth 30 |
-| `WeftSyncLiveness.cfg` (2 devices, 1 row, MaxSeq 3) | 54,391 states, temporal property holds |
+| `WeftSync.cfg` (2 devices, 2 rows, MaxSeq 2, MaxEpoch 1) | 7,435,316 distinct states, no violation, 6m26s, depth 39 |
+| `WeftSyncEpoch.cfg` (2 devices, 1 row, MaxSeq 3, MaxEpoch 2) | 640,527 distinct states, no violation, 22s, depth 35 |
+| `WeftSyncLiveness.cfg` (2 devices, 1 row, MaxSeq 3) | 364,946 states, temporal property holds, 52s |
 | `WeftSyncBuggy.cfg` | `Consistent` violated, as expected |
 | `WeftSyncRacyPrune.cfg` | `Consistent` violated, as expected |
 | `WeftSyncSilentLoss.cfg` (2 devices, 1 row, MaxSeq 3) | `FieldConsistent` violated, as expected |
@@ -81,10 +89,18 @@ million distinct states with its queue still growing. `WeftSyncEpoch.cfg` checks
 it finishes at, which is the arrangement liveness already uses and for the same reason.
 
 Modelling field delivery costs about 28% on the full safety configuration — it was 3,870,301
-distinct states before `fieldSeq` and `superseded` — and about 31% on liveness, where it was
-40,364. The search depth does not move. That is cheap because neither variable is a value
-domain: `fieldSeq` reuses the sequence numbers already bounded by `MaxSeq`, and `superseded`
-is one bit per device per row.
+distinct states at `MaxSeq = 3` before `fieldSeq` and `superseded`, against 4,992,171 with them —
+and about 31% on liveness, where it was 40,364. The search depth does not move. That is cheap
+because neither variable is a value domain: `fieldSeq` reuses the sequence numbers already bounded
+by `MaxSeq`, and `superseded` is one bit per device per row.
+
+Carrying what a refusal was costs far more, and it is what dropped the full configuration from
+`MaxSeq = 3` to `MaxSeq = 2`. `quarantined` holds three values where it held two, and a snapshot now
+settles the liveness of a row the device holds work for instead of leaving its view alone, which
+puts more of the fleet's views within reach of each other. At `MaxSeq = 3` the search reached
+70,782,790 distinct states in 56 minutes with 7.6 million still queued at depth 28. Two is where both
+broken configurations already violate safety, and the reduced bound still catches the snapshot rule:
+put `Holds` back in front of `Resync` and TLC reports `Consistent` violated at depth 10.
 
 Liveness runs at smaller bounds because temporal checking re-explores the space looking for
 cycles; symmetry reduction, which the safety-only configurations use, is unsound for temporal
@@ -160,6 +176,12 @@ to the next sync rather than doing it immediately; a row with quarantined work c
 edited; a field write advances the scope counter without moving the row's record; and a
 client may take a snapshot whenever it likes, not only when the incremental path cannot
 serve.
+
+Model checking found a fifth, the moment repair could take a row away. `Resync` kept a device's view
+of every row it held work for, where §5.7 applies the server's state to a dirty row and replays the
+outbox on top of it. Absence is the one case a device's own work speaks to, because a row a snapshot
+does not mention was purged below the floor and the local work addressed to it is a divergence the
+person has to resolve. The implementation always read it that way; the specification now does too.
 
 Trace validation covers single-transaction pushes only — the client's `flush` can send
 several transactions across several rows in one call, which matches no single step of a

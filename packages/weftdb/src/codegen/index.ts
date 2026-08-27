@@ -162,6 +162,7 @@ export function generateClientDdl(schema: SchemaDefinition): string {
   row_id TEXT NOT NULL,
   hlc TEXT NOT NULL,
   server_seq INTEGER NOT NULL,
+  diff3_base TEXT,
   PRIMARY KEY (scope_id, table_name, row_id)
 );`,
     `CREATE TABLE IF NOT EXISTS sync_state (

@@ -80,6 +80,15 @@ export interface Tombstone {
   rowId: RowId;
   hlc: HlcString;
   serverSeq: number;
+  /**
+   * The diff3 ancestors the row held when it went. A delete leaves every field value in place on
+   * the relay (§5.9), so the version this device last synced is still the version the next write
+   * to a restored row will be compared against, and the tombstone is the only thing that survives
+   * the delete to carry it. Without it a restore starts from no ancestor at all, and the first
+   * prose edit after it claims `stableHash(null)` against a value the relay is still holding
+   * (§5.4).
+   */
+  diff3Base: Map<FieldName, WireValue>;
 }
 
 export type QuarantinedOp = WeftOp & {
@@ -257,6 +266,7 @@ export class WeftClient {
     // the push can never take back.
     this.rejectAppendClassLifecycle(tableName, "deleted");
     const hlc = this.clock.next();
+    const row = this.rows.get(localKey(tableName, rowId));
     this.rows.delete(localKey(tableName, rowId));
     this.touch(localKey(tableName, rowId));
     this.tombstones.set(localKey(tableName, rowId), {
@@ -265,6 +275,7 @@ export class WeftClient {
       rowId,
       hlc,
       serverSeq: this.lastServerSeq,
+      diff3Base: new Map(row?.internals.diff3Base ?? []),
     });
     this.pushOutbox({ scopeId: this.scopeId, tableName, rowId, kind: "delete", hlc, txnId });
     await this.persist();
@@ -279,6 +290,7 @@ export class WeftClient {
     this.rejectAppendClassLifecycle(tableName, "restored");
     const key = localKey(tableName, rowId);
     const created = wireText(values[fieldName("created")] ?? new Date(this.now()).toISOString());
+    const tombstone = this.tombstones.get(key);
     this.tombstones.delete(key);
     this.touch(key);
     const row: LocalRow = {
@@ -287,7 +299,9 @@ export class WeftClient {
       tableName,
       created,
       fields: new Map(typedEntries(values)),
-      internals: emptyInternals(1, 1),
+      // The relay kept this row's field values through the delete (§5.9), so the ancestor the
+      // tombstone carried is still the version it will compare the next prose edit against.
+      internals: { ...emptyInternals(1, 1), diff3Base: new Map(tombstone?.diff3Base ?? []) },
     };
     this.rows.set(key, row);
     this.pushOutbox(this.rowOp(tableName, rowId, "restore", txnId));
@@ -304,8 +318,6 @@ export class WeftClient {
     }
     for (const [field, value] of typedEntries(values)) {
       if (BASE_FIELDS.has(field)) continue;
-      // No base hash. This is a new life of the row, and the ancestor a diff3 merge would be
-      // asked to rebase against is a value this device dropped when the delete came through.
       this.pushOutbox(this.setOp(tableName, rowId, field, value, txnId));
     }
     await this.persist();
@@ -337,10 +349,19 @@ export class WeftClient {
     const discarded = this.quarantine.filter((op) => op.txnId === txnId);
     if (discarded.length === 0) return;
     this.quarantine.splice(0, this.quarantine.length, ...this.quarantine.filter((op) => op.txnId !== txnId));
+    // A row a discarded transaction made goes with it. It is on the device because this
+    // transaction put it there, so leaving it shows the person work they have just discarded,
+    // and a later write of theirs that is still set aside keeps the row dirty, which is what
+    // stops a snapshot from taking it away (§5.7). An event-log row is exempt from every delete
+    // branch (§9.18), so an `append` leaves its row where it is.
+    for (const op of discarded) {
+      if (op.kind !== "create" && op.kind !== "restore") continue;
+      this.rows.delete(localKey(op.tableName, op.rowId));
+      this.touch(localKey(op.tableName, op.rowId));
+    }
     for (const op of discarded) this.recomputeDirty(op.tableName, op.rowId);
-    // Discarding is "drop the local change and re-pull" (§5.5). Dropping the ops alone would
-    // strand whatever they had already written locally (a row the server has never seen and
-    // now never will), so the next sync re-derives this scope from a snapshot.
+    // Discarding is "drop the local change and re-pull" (§5.5), and the re-pull is what says
+    // what the scope holds under an id this device has just stopped claiming.
     this.resyncRequired = true;
     await this.persist();
   }
@@ -584,6 +605,7 @@ export class WeftClient {
           rowId: row.rowId,
           hlc: row.deletedHlc,
           serverSeq: row.serverSeq,
+          diff3Base: new Map(local?.internals.diff3Base ?? []),
         });
       } else {
         // A live row record is the only protocol event that can clear a local tombstone.

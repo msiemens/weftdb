@@ -173,20 +173,65 @@ test("an edit written while the row's own create is set aside rebases against wh
   if (notes !== edited) throw new Error(`the scope holds ${JSON.stringify(notes)} for prose only one device wrote`);
 });
 
+test("a prose edit after a restore rebases against the version the relay kept through the delete", async () => {
+  // The arrangement a generated history shrank to at seed 1705897141, written out so it does not
+  // depend on a seed. One device, so `tasks.notes` is written by nothing else in the world.
+  //
+  // A delete leaves every field value in place on the relay (§5.9), so the version this device
+  // last synced is still the one the relay compares the next write against once the row is back,
+  // and the tombstone is the only thing that survives the delete to carry it. An edit that claims
+  // an absent ancestor instead earns `merge_required` against prose the same device wrote, and
+  // with the row deleted here again there is nothing left to merge from, so the edit is set aside
+  // for good and the relay keeps the text it was typed over.
+  const world = createWorld(1);
+  const row = rowId("row-0");
+  const device = deviceAt(world, 0).client;
+  const transport = inProcessTransport(world.server);
+  const edited = "edited\nbravo\ncharlie\ndelta";
+
+  await device.create(
+    TASKS,
+    row,
+    {
+      [TITLE]: "a task",
+      [STATUS]: "open",
+      [NOTES]: BASE_NOTES,
+      [RANK]: "a:only",
+      [CONSUMED_AT]: world.now,
+      [AUTO_DELETE_DAYS]: 30,
+    },
+    txnId("create"),
+  );
+  await device.syncWith(transport, propertySchemaHash);
+  await device.delete(TASKS, row, txnId("delete"));
+  await device.restore(TASKS, row, { [TITLE]: "brought back" }, txnId("restore"));
+  await device.update(TASKS, row, { [NOTES]: edited }, txnId("edit"));
+  await device.delete(TASKS, row, txnId("delete-again"));
+
+  await quiesce(world);
+  await assertSettledInvariants(world);
+  const notes = world.server
+    .snapshot(world.scopeId)
+    .fields.find((record) => record.rowId === row && record.field === NOTES)?.value;
+  if (notes !== edited) throw new Error(`the scope holds ${JSON.stringify(notes)} for prose only one device wrote`);
+});
+
 test("a set-aside edit is not demanded of a life of the row it was never made to", async () => {
   // The arrangement a second generated history shrank to. `device-1` holds an edit to the prose
   // that was set aside when the delete arrived (§9.22), brings the row back, and the relay purges
-  // the id under it, so the restore is set aside too. Discarding the restore leaves the edit alone
-  // in quarantine, against a row whose only life on this device is the one the restore made.
+  // the id under it, so the restore is set aside too.
   //
-  // That life carries no `first_seen_at`, because the relay has never named it, and the edit
-  // carries the one the relay gave the row it was made to (§5.8). `applyField` refuses to put a
-  // write into a life it was not made to, so the field holds nothing, and the edit waits for the
-  // person. A row the relay has named still has to show the write, which §5.8.unsent asserts.
-  const world = createWorld(2);
+  // Discarding the restore takes the row with it, because the restore is the whole of this
+  // device's claim that the row is there, and the edit left in quarantine would otherwise keep the
+  // row dirty for as long as it sits there, which is what stops a snapshot from taking it away
+  // (§5.7). The edit stays for the person to decide about (§5.5). When another device makes the id,
+  // the edit still carries the `first_seen_at` of the row it was written to and the new life
+  // carries its own (§5.8), so `applyField` leaves the relay's prose on the row it named.
+  const world = createWorld(3);
   const row = rowId("row-0");
   const author = deviceAt(world, 0).client;
   const reader = deviceAt(world, 1).client;
+  const stranger = deviceAt(world, 2).client;
   const transport = () => inProcessTransport(world.server);
 
   await author.create(
@@ -219,9 +264,31 @@ test("a set-aside edit is not demanded of a life of the row it was never made to
   await reader.discardQuarantinedTxn(txnId("restore"));
 
   await assertWorldInvariants(world, "discarding the restore");
-  const kept = reader.rows.get(`${TASKS}\0${row}`);
-  if (kept?.internals._weft_first_synced_at !== null) throw new Error("the restored row was named by the relay");
-  if (kept.fields.get(NOTES) !== undefined) throw new Error("a life the relay never named was given an older edit");
+  if (reader.rows.has(`${TASKS}\0${row}`)) throw new Error("a discarded restore left its row on the device");
+  if (!reader.quarantine.some((op) => op.txnId === txnId("edit"))) throw new Error("the edit left quarantine");
+
+  const remade = "stranger\nbravo\ncharlie\ndelta";
+  await stranger.syncWith(transport(), propertySchemaHash);
+  await stranger.create(
+    TASKS,
+    row,
+    {
+      [TITLE]: "made again",
+      [STATUS]: "open",
+      [NOTES]: remade,
+      [RANK]: "a:stranger",
+      [CONSUMED_AT]: world.now,
+      [AUTO_DELETE_DAYS]: 30,
+    },
+    txnId("remake"),
+  );
+  await stranger.syncWith(transport(), propertySchemaHash);
+  await reader.syncWith(transport(), propertySchemaHash);
+
+  await assertWorldInvariants(world, "reading a life of the id the edit was never made to");
+  if (reader.getRow(TASKS, row)?.fields.get(NOTES) !== remade) {
+    throw new Error("a life the relay named was given an edit written to another");
+  }
   if (!reader.quarantine.some((op) => op.txnId === txnId("edit"))) throw new Error("the edit left quarantine");
 });
 

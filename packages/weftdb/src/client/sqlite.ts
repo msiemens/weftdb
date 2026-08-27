@@ -266,7 +266,7 @@ VALUES (${entries.map(() => "?").join(", ")})`,
 
   private async loadTombstones(scopeIdValue: ScopeId): Promise<readonly Tombstone[]> {
     return this.executor.all({
-      sql: "SELECT scope_id, table_name, row_id, hlc, server_seq FROM tombstones WHERE scope_id = ?",
+      sql: "SELECT scope_id, table_name, row_id, hlc, server_seq, diff3_base FROM tombstones WHERE scope_id = ?",
       parameters: [scopeIdValue],
       decode: decodeTombstone,
     });
@@ -302,9 +302,16 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 
   private async saveTombstone(tx: AsyncSqlTransaction, tombstone: Tombstone): Promise<void> {
     await tx.run({
-      sql: `INSERT INTO tombstones (scope_id, table_name, row_id, hlc, server_seq)
-VALUES (?, ?, ?, ?, ?)`,
-      parameters: [tombstone.scopeId, tombstone.tableName, tombstone.rowId, tombstone.hlc, tombstone.serverSeq],
+      sql: `INSERT INTO tombstones (scope_id, table_name, row_id, hlc, server_seq, diff3_base)
+VALUES (?, ?, ?, ?, ?, ?)`,
+      parameters: [
+        tombstone.scopeId,
+        tombstone.tableName,
+        tombstone.rowId,
+        tombstone.hlc,
+        tombstone.serverSeq,
+        encodeDiff3Base(tombstone.diff3Base),
+      ],
     });
   }
 
@@ -447,7 +454,25 @@ function decodeTombstone(row: SqlRow): Tombstone {
     rowId: rowId(requiredString(column(row, "row_id"))),
     hlc: requiredString(column(row, "hlc")) as HlcString,
     serverSeq: requiredNumber(column(row, "server_seq")),
+    diff3Base: decodeDiff3Base(column(row, "diff3_base")),
   };
+}
+
+/**
+ * The diff3 ancestors a deleted row was holding, as one column, because `tombstones` is one table
+ * for every collection and has no `_weft_base_<field>` column of its own to put them in.
+ */
+function encodeDiff3Base(base: ReadonlyMap<FieldName, WireValue>): string | null {
+  return base.size === 0 ? null : JSON.stringify(Object.fromEntries(base));
+}
+
+function decodeDiff3Base(raw: SqlValue | undefined): Map<FieldName, WireValue> {
+  if (typeof raw !== "string") return new Map();
+  const parsed: unknown = JSON.parse(raw);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return new Map();
+  return new Map(
+    Object.entries(parsed as Record<string, WireValue>).map(([field, value]) => [fieldName(field), value]),
+  );
 }
 
 function encodeOutboxParameters(op: WeftOp): readonly (string | number | null)[] {

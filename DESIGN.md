@@ -325,7 +325,7 @@ outbox(seq INTEGER PK AUTOINCREMENT, scope_id, table_name, row_id,
 
 outbox_quarantine(… same shape …, rejected_at, reason, server_value)
 
-tombstones(scope_id, table_name, row_id, hlc, server_seq,
+tombstones(scope_id, table_name, row_id, hlc, server_seq, diff3_base,
            PRIMARY KEY (scope_id, table_name, row_id))
 
 sync_state(scope_id PK, last_server_seq, schema_hash, schema_version,
@@ -337,6 +337,12 @@ records that this device's cursor is below the scope's tombstone floor. Both are
 hydrate: without the first, the next edit after a reload can carry a stamp below work still in
 the outbox; without the second, a restart resumes pulling incrementally from a point the relay
 has already purged.
+
+`tombstones.diff3_base` carries what the row's `_weft_base_*` columns held when it went, as one
+JSON column because the table serves every collection. A delete leaves field values in place on the
+relay (§5.9), so a restore takes those ancestors back onto the row, and the first prose edit after
+it is compared against the version the relay is still holding (§5.4). Claiming an absent ancestor
+there earns a `merge_required` against the device's own last-synced text.
 
 Every domain table is keyed `(scope_id, id)`. A row id is unique within its scope and nowhere
 else, so one database holding two scopes has two rows legitimately sharing an id.
