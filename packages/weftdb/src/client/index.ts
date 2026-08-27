@@ -4,6 +4,7 @@ import {
   diff3,
   HlcClock,
   fieldName,
+  parseHlc,
   stableHash,
   wireText,
   type DeviceId,
@@ -564,6 +565,7 @@ export class WeftClient {
         // A live row record is the only protocol event that can clear a local tombstone.
         this.tombstones.delete(key);
         this.touch(key);
+        this.adoptRowIdentity(row.tableName, row.rowId, row.firstSeenAt);
         if (local) {
           // The server's value is authoritative here, because a purged id brought back by a
           // later `create` is a new row with a new `first_seen_at`, and a device holding the
@@ -649,14 +651,17 @@ export class WeftClient {
     // A write set aside in quarantine is unsent for good, and the value it left in the row is the
     // divergence the person is the one who has to decide about (§5.5), so the relay's copy does
     // not get to settle it either. The write speaks for the row it was made to and for no other,
-    // so a life of a reused id that it never saw keeps what the relay sent. A relay value stamped
-    // above it is a write the person made after it and had taken, which they are not asking about.
+    // so a life of a reused id that it never saw keeps what the relay sent.
+    //
+    // A later write of this device's that the relay took is the exception, because the person
+    // typed over the text they are being asked about and the scope has it. Another device's write
+    // is not, however it is stamped, so the comparison reads the device out of the stamp as well.
     const quarantined = this.quarantinedWrite(field.tableName, field.rowId, field.field);
-    if (
+    const typedOver =
       quarantined !== undefined &&
-      quarantined.rowIdentity === row.internals._weft_first_synced_at &&
-      compareHlc(field.hlc, quarantined.hlc) <= 0
-    ) {
+      compareHlc(field.hlc, quarantined.hlc) > 0 &&
+      parseHlc(field.hlc).deviceId === this.deviceId;
+    if (quarantined !== undefined && quarantined.rowIdentity === row.internals._weft_first_synced_at && !typedOver) {
       row.fields.set(field.field, quarantined.value);
       row.internals.hlc.set(field.field, quarantined.hlc);
     }
@@ -704,15 +709,7 @@ export class WeftClient {
       for (const rowAck of ack.firstSeenAtByRow) {
         const row = this.rows.get(localKey(rowAck.tableName, rowAck.rowId));
         if (row) row.internals._weft_first_synced_at = rowAck.firstSeenAt;
-        // A write set aside before the scope had ever seen its row was set aside against no
-        // identity at all, and the acknowledgement is where that row gets one. Learned here, the
-        // write still speaks for the row the person made. Left null, it matches a row the relay
-        // rebuilds only by accident, and the person's value would land on whichever life of the
-        // id happened to arrive.
-        for (const op of this.quarantine) {
-          if (op.rowIdentity !== null || op.tableName !== rowAck.tableName || op.rowId !== rowAck.rowId) continue;
-          op.rowIdentity = rowAck.firstSeenAt;
-        }
+        this.adoptRowIdentity(rowAck.tableName, rowAck.rowId, rowAck.firstSeenAt);
       }
       // A write of this device's that lost is acknowledged like any other, and the record that
       // beat it kept a sequence below this device's cursor, so a pull will not bring it. Applied
@@ -966,7 +963,20 @@ export class WeftClient {
     return latest;
   }
 
-  /** The identity of the row a write is being set aside against, absent until the row is acked. */
+  /**
+   * Gives a write set aside before the scope had ever named its row the identity the scope names it
+   * by now. The row takes that identity in the same breath, from an acknowledgement or from a row
+   * record, so a write left without one could never match the row it was written to again, and the
+   * person's value would stop being shown the moment the row was named.
+   */
+  private adoptRowIdentity(tableName: TableName, rowId: RowId, firstSeenAt: number): void {
+    for (const op of this.quarantine) {
+      if (op.rowIdentity !== null || op.tableName !== tableName || op.rowId !== rowId) continue;
+      op.rowIdentity = firstSeenAt;
+    }
+  }
+
+  /** The identity of the row a write is being set aside against, absent until the row is named. */
   private rowIdentityFor(tableName: TableName, rowId: RowId): number | null {
     return this.rows.get(localKey(tableName, rowId))?.internals._weft_first_synced_at ?? null;
   }
