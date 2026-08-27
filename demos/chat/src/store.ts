@@ -6,7 +6,13 @@
 // row looks like once the client's own knowledge is added to it.
 import { deviceId as toDeviceId, rowId, type DeviceId, type RowId } from "weftdb/core";
 import type { SessionStatus, StorageLike, WeftClientMirror } from "weftdb/client";
-import { openDemoDatabase, DemoSync, type DemoDatabase, type DemoOpenOverrides } from "weftdb-demo-shared/open";
+import {
+  dropIfRowIsGone,
+  openDemoDatabase,
+  DemoSync,
+  type DemoDatabase,
+  type DemoOpenOverrides,
+} from "weftdb-demo-shared/open";
 import { tabIdentity, type TabIdentity } from "weftdb-demo-shared/identity";
 import { schema } from "./schema.ts";
 import { DEMO } from "./scope.ts";
@@ -116,8 +122,11 @@ export class ChatStore {
 
   /** Starts the heartbeat that puts this tab on the device strip. */
   start(): () => void {
-    void this.touch();
-    const timer = setInterval(() => void this.touch(), HEARTBEAT_MS);
+    // The heartbeat rewrites a row it read a moment earlier, and a pull landing in between takes
+    // that row away, so every five seconds for as long as the tab is open there is a write that can
+    // find nothing to write to.
+    dropIfRowIsGone(this.touch());
+    const timer = setInterval(() => dropIfRowIsGone(this.touch()), HEARTBEAT_MS);
     return () => clearInterval(timer);
   }
 

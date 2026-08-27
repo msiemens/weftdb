@@ -18,6 +18,7 @@ import {
 import { Diff3EditorBuffer } from "weftdb/client";
 import { fieldName, hasConflictMarkers, rowId as toRowId, tableName, type TableName } from "weftdb/core";
 import { resetDemoData, watchDemoReset } from "weftdb-demo-shared/reset";
+import { dropIfRowIsGone } from "weftdb-demo-shared/open";
 import {
   issues_commentsRelation,
   issues_projectRelation,
@@ -860,7 +861,7 @@ function useBufferedField(
   id: string,
   field: string,
   value: string,
-  commit: (next: string) => void,
+  commit: (next: string) => Promise<void>,
 ): {
   readonly value: string;
   readonly onChange: (next: string) => void;
@@ -895,7 +896,10 @@ function useBufferedField(
     if (idle.current !== undefined) clearTimeout(idle.current);
     if (next === committed.current) return;
     committed.current = next;
-    commit(next);
+    // A keystroke becomes a transaction after the typing stops, and the row can go in between:
+    // deleted here, or deleted elsewhere and pulled in while the write is on its way to the worker.
+    // Clearing the timer covers the first and cannot cover the second.
+    dropIfRowIsGone(commit(next));
   };
 
   return {

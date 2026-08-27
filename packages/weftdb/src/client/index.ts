@@ -23,6 +23,34 @@ import type { FieldRecord, HandshakeRequest, HandshakeResponse, PullBatch, PushA
 import type { SchemaDefinition } from "weftdb/schema";
 import type { AsyncSyncTransport, PushResult } from "./transport.ts";
 
+/**
+ * A write addressed a row this device does not hold.
+ *
+ * Separate from an ordinary `Error` because it is the one failure a mutator has that an application
+ * can be expected to meet in normal use: an edit debounced behind a keystroke reaches the client
+ * after the row was deleted, here or on another device, and there is nothing left to write to. A
+ * caller that can tell this apart can drop the edit and carry on, where anything else is a fault.
+ *
+ * It crosses the worker boundary as a message, so a page holding a mirror sees an `Error` with this
+ * `name` and matches on that.
+ */
+export class WeftMissingRowError extends Error {
+  readonly tableName: TableName;
+  readonly rowId: RowId;
+
+  constructor(tableName: TableName, rowId: RowId) {
+    super(`missing local row: ${tableName}/${rowId}`);
+    this.name = "WeftMissingRowError";
+    this.tableName = tableName;
+    this.rowId = rowId;
+  }
+}
+
+/** Whether a failure is a write to a row the device no longer holds, however it reached the caller. */
+export function isMissingRowError(error: unknown): boolean {
+  return error instanceof Error && error.name === "WeftMissingRowError";
+}
+
 export interface LocalRowInternals {
   _weft_first_synced_at: number | null;
   _weft_rev: number;
@@ -897,7 +925,7 @@ export class WeftClient {
 
   private requireRow(tableName: TableName, rowId: RowId): LocalRow {
     const row = this.rows.get(localKey(tableName, rowId));
-    if (!row) throw new Error(`missing local row: ${tableName}/${rowId}`);
+    if (!row) throw new WeftMissingRowError(tableName, rowId);
     return row;
   }
 

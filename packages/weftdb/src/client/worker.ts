@@ -87,7 +87,7 @@ export type WorkerRequest = WorkerRequestBody & { readonly id: number };
 
 export type WorkerResponse =
   | { readonly id: number; readonly ok: true; readonly value: unknown }
-  | { readonly id: number; readonly ok: false; readonly error: string };
+  | { readonly id: number; readonly ok: false; readonly error: string; readonly errorName?: string };
 
 /** A row as it crosses the boundary. Maps do not survive a structured clone with their key order
  * stated, and a `LocalRow`'s sync internals — per-field HLCs, diff3 ancestors — are the worker's
@@ -367,8 +367,15 @@ export class WorkerPortTransport {
     this.#pending.delete(message.id);
     clearTimeout(pending.deadline);
     if (message.ok) pending.resolve(message.value);
-    else pending.reject(new Error(message.error));
+    else pending.reject(named(message.error, message.errorName));
   };
+}
+
+/** The worker's rejection, with the name it carried, so a caller can tell which failure it was. */
+function named(message: string, name: string | undefined): Error {
+  const error = new Error(message);
+  if (name !== undefined) error.name = name;
+  return error;
 }
 
 function withRequestId(id: number, message: WorkerRequestBody): WorkerRequest {

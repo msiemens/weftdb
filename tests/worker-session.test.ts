@@ -15,6 +15,7 @@ import { WeftServer } from "weftdb/server";
 import {
   type AsyncSyncTransport,
   inProcessTransport,
+  isMissingRowError,
   serveWeftWorker,
   type SessionStatus,
   WeftClient,
@@ -54,6 +55,38 @@ test("§8.7 the page hands over a token and the worker starts syncing under it",
 
   assert.deepEqual(bridge.tokens, ["token-1"], "the transport was not built from the token the page gave");
   assert.equal(bridge.mirror.status()?.online, true);
+});
+
+test("a write to a row the device no longer holds is refused as such through the worker", async () => {
+  // An edit debounced behind a keystroke reaches the client after the row was deleted, here or on
+  // another device that this one pulled from. A page that cannot tell that from a fault either
+  // treats every failed write as normal or lets this one crash it, and a rejection nobody is left
+  // to catch takes the process down under Node. The name is what carries across the boundary; an
+  // `Error` does not survive a structured clone with its prototype.
+  using bridge = await Bridge.open();
+  await bridge.mirror.hydrate();
+  await bridge.mirror.create(TODOS, rowId("todo-1"), { title: "typed", done: false, rank: 1 }, txnId("create"));
+  await bridge.mirror.delete(TODOS, rowId("todo-1"), txnId("delete"));
+
+  const refused = await bridge.mirror.update(TODOS, rowId("todo-1"), { title: "typed again" }, txnId("late")).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+
+  assert.equal(isMissingRowError(refused), true, `a deleted row's write came back as ${String(refused)}`);
+
+  // And the other direction, or a page written against this would drop every failed write. A
+  // create over a row this device holds is a fault in the caller, and has to stay one.
+  await bridge.mirror.create(TODOS, rowId("todo-2"), { title: "held", done: false, rank: 2 }, txnId("second"));
+  const faulted = await bridge.mirror
+    .create(TODOS, rowId("todo-2"), { title: "again", done: false, rank: 3 }, txnId("again"))
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+  assert.equal(faulted instanceof Error, true, "a duplicate create resolved");
+  assert.equal(isMissingRowError(faulted), false, `a caller's fault was reported as a row that had gone`);
 });
 
 test("§8.7 a manual sync pushes this device's work and answers when it has landed", async () => {

@@ -3,6 +3,7 @@
 // watch what the merge does when it comes back.
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Diff3EditorBuffer } from "weftdb/client";
+import { dropIfRowIsGone } from "weftdb-demo-shared/open";
 import { fieldName, hasConflictMarkers, rowId as toRowId, tableName } from "weftdb/core";
 import { resetDemoData, watchDemoReset } from "weftdb-demo-shared/reset";
 import { newTodoId, useTodoEventsQuery, useTodos, type StoreStatus, type TodoStore, type TodoView } from "./store.ts";
@@ -196,14 +197,19 @@ function TodoItem({
           className={todo.done ? "check on" : "check"}
           aria-label={todo.done ? `Mark ${todo.title} not done` : `Mark ${todo.title} done`}
           onClick={() => {
-            void store.todos.update(todo.id, { done: !todo.done });
+            // The row can be deleted between the render that drew this control and the click that
+            // reaches the worker, by this tab or by one it pulls from, so the tick is allowed to
+            // find nothing to tick.
+            dropIfRowIsGone(store.todos.update(todo.id, { done: !todo.done }));
             // Event-log ids are minted per write: two tabs ticking the same row at the same
             // moment are two entries in history, not one write racing another.
-            void store.todoEvents.create(`event-${crypto.randomUUID()}`, {
-              todo_id: todo.id,
-              kind: todo.done ? "reopened" : "completed",
-              actor: store.identity.label,
-            });
+            dropIfRowIsGone(
+              store.todoEvents.create(`event-${crypto.randomUUID()}`, {
+                todo_id: todo.id,
+                kind: todo.done ? "reopened" : "completed",
+                actor: store.identity.label,
+              }),
+            );
           }}
         >
           {todo.done ? "✓" : ""}
@@ -493,7 +499,7 @@ function useBufferedField(
   id: string,
   field: string,
   value: string,
-  commit: (next: string) => void,
+  commit: (next: string) => Promise<void>,
 ): {
   readonly value: string;
   readonly onChange: (next: string) => void;
@@ -528,7 +534,11 @@ function useBufferedField(
     if (idle.current !== undefined) clearTimeout(idle.current);
     if (next === committed.current) return;
     committed.current = next;
-    commit(next);
+    // A keystroke becomes a transaction after the typing stops, and the row can go in between:
+    // deleted in this tab, or deleted in another one and pulled in while the write is on its way to
+    // the worker. Clearing the timer covers the first and cannot cover the second, so the write is
+    // allowed to fail. What is gone is an edit to a row nobody has any more.
+    dropIfRowIsGone(commit(next));
   };
 
   return {

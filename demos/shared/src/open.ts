@@ -17,6 +17,7 @@
 import type { ScopeId } from "weftdb/core";
 import type { SchemaDefinition } from "weftdb/schema";
 import {
+  isMissingRowError,
   openWeftDatabase,
   type SessionStatus,
   type StorageLike,
@@ -36,6 +37,22 @@ import type { RelayPortLike } from "./port-transport.ts";
  * holds the rows and never syncs them.
  */
 export const DEMO_TOKEN = "demo";
+
+/**
+ * A write nobody is waiting on, where the row going before it lands is an ordinary outcome.
+ *
+ * These demos write from event handlers and a heartbeat, none of which can await, so a rejection
+ * has nowhere to go: under Node it takes the process down, and in a browser it reaches the console
+ * with no page left to receive it. The case that arrives in normal use is a row deleted between the
+ * render and the write, on the tab doing the deleting or on one pulling the delete in. Anything
+ * else is a fault and stays one.
+ */
+export function dropIfRowIsGone(write: Promise<void>): void {
+  void write.catch((error: unknown) => {
+    if (isMissingRowError(error)) return;
+    throw error;
+  });
+}
 
 export interface DemoOpenOverrides {
   /** Stands in for the browser's `SharedWorker`, so a test can drive the whole assembly under Node. */

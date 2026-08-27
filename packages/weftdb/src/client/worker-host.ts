@@ -278,10 +278,14 @@ export class WeftWorkerHost {
         (error: unknown) => {
           // A rejection crosses as text: an `Error` does not survive a structured clone with its
           // prototype intact, and dropping it would hang the page on a request already given up on.
+          // The name goes with it, because which failure it is decides whether a caller can carry
+          // on: a write to a row that has since been deleted is one an application meets in normal
+          // use, and telling it apart from a fault needs more than a message to match on.
           this.#post(connection, {
             id: request.id,
             ok: false,
             error: error instanceof Error ? error.message : String(error),
+            ...(error instanceof Error && error.name !== "Error" ? { errorName: error.name } : {}),
           });
         },
       )
