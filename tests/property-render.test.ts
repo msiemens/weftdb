@@ -66,6 +66,18 @@ interface Page {
 }
 
 let openPage: (name: string, browser: DemoBrowser) => Promise<Page>;
+/**
+ * Waits until every page has stopped rendering, with the waiting itself inside `act`.
+ *
+ * An action on one tab moves the relay, which wakes the others, and their deltas arrive over a port
+ * on a later task than the one the action settled on. React schedules those renders whenever the
+ * machine gets to them, which a fast machine does before the assertion and a loaded one does after.
+ * Soak runs logged 72, 36 and 12 `act` warnings against this file where 200 local runs logged none.
+ *
+ * A budget that misses the renders a second tab causes is measured against the wrong number, so the
+ * wait belongs in front of the assertion and inside `act`, where React flushes them here.
+ */
+let settle: (pages: readonly Page[]) => Promise<void>;
 
 function newBrowser(): DemoBrowser {
   return new DemoBrowser({ schema, demo: DEMO });
@@ -85,6 +97,18 @@ beforeAll(async () => {
   const { createRoot } = await import("react-dom/client");
   const { act } = await import("react");
   const { App } = await import("weftdb-demo-todo/app");
+
+  settle = async (pages) => {
+    // Bounded, because a page that renders on every tick is the fault this file exists to catch,
+    // and it should fail the budget below instead of spinning here.
+    for (let attempt = 0; attempt < 25; attempt += 1) {
+      const before = pages.map((page) => page.commits());
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      if (pages.every((page, index) => page.commits() === before[index])) return;
+    }
+  };
 
   openPage = async (name, browser) => {
     const { identity, database } = await browser.tab(name);
@@ -235,6 +259,7 @@ test("no sequence of things a person can do makes the page render without bound"
         const budget = MOUNT_BUDGET + actions.length * COMMITS_PER_ACTION;
         for (const action of actions) {
           await page.run(action);
+          await settle([page]);
           // Checked after every action rather than at the end, so the failure names the action
           // that ran away rather than the sequence that contained it.
           assert.ok(
@@ -265,6 +290,7 @@ test("a second tab does not make the first one render without bound", async () =
           await (index % 2 === 0 ? first : second).run(action);
           await first.run({ kind: "sync" });
           await second.run({ kind: "sync" });
+          await settle([first, second]);
           for (const [name, page] of [
             ["first", first],
             ["second", second],
