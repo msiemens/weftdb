@@ -199,13 +199,49 @@ test("tabs that race for the same ordinal are still telling themselves apart", a
   // the label has to say so — otherwise two of them look like one and the merges make no sense
   // to whoever is watching.
   const contended: StorageLike = { getItem: () => "2", setItem: () => undefined, removeItem: () => undefined };
-  const first = tabIdentity(memoryStorage(), contended, { demo: DEMO });
-  const second = tabIdentity(memoryStorage(), contended, { demo: DEMO });
+  const first = await tabIdentity(memoryStorage(), contended, { demo: DEMO });
+  const second = await tabIdentity(memoryStorage(), contended, { demo: DEMO });
 
   assert.match(first.label, /^tab 3/u);
   assert.match(second.label, /^tab 3/u, "the ordinals did not actually collide, so this proves nothing");
   assert.notEqual(first.deviceId, second.deviceId, "two tabs became one device");
   assert.notEqual(first.label, second.label, "two devices are showing the same name");
+});
+
+test("minting a visitor scope is held alone across the origin", async () => {
+  // The scope separates one visitor's rows from another's, so two tabs that mint different ones are
+  // in separate worlds and neither ever sees the other's messages. Local storage has no
+  // compare-and-set, and two tabs are two contexts, so both read before either writes unless the
+  // mint is held.
+  //
+  // What is asserted is the lock, because the race itself is between browsing contexts and one Node
+  // process cannot stage it: the read and the write have no await between them, so a second caller
+  // here never runs until the first has finished writing. Two tabs in Chrome do reach it, and the
+  // browser probe in the scratchpad is where that was seen.
+  const held: string[] = [];
+  const original = (globalThis as { navigator?: unknown }).navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    value: {
+      locks: {
+        request: async <T>(name: string, body: () => Promise<T>): Promise<T> => {
+          held.push(name);
+          return await body();
+        },
+      },
+    },
+    configurable: true,
+  });
+  try {
+    const local = memoryStorage();
+    const first = await tabIdentity(memoryStorage(), local, { demo: DEMO });
+    const second = await tabIdentity(memoryStorage(), local, { demo: DEMO });
+
+    assert.deepEqual(held, [`weftdb-demo/${DEMO}/scope`], "the scope was minted without holding the origin");
+    assert.equal(first.scopeId, second.scopeId, "a second tab did not adopt the scope already written");
+    assert.notEqual(first.deviceId, second.deviceId, "two tabs became one device");
+  } finally {
+    Object.defineProperty(globalThis, "navigator", { value: original, configurable: true });
+  }
 });
 
 test("a tab's token can travel as a WebSocket subprotocol", async () => {
@@ -215,7 +251,7 @@ test("a tab's token can travel as a WebSocket subprotocol", async () => {
   // polling, and nothing in the console says why. A separator chosen for the token is the likeliest
   // way an illegal character gets in.
   const separators = /[()<>@,;:\\"/[\]?={} \t]/u;
-  const identity = tabIdentity(memoryStorage(), memoryStorage(), { demo: DEMO });
+  const identity = await tabIdentity(memoryStorage(), memoryStorage(), { demo: DEMO });
 
   for (const token of [identity.token, `${TOKEN_PROTOCOL_PREFIX}${identity.token}`]) {
     assert.doesNotMatch(token, separators, `"${token}" is not a legal subprotocol name`);

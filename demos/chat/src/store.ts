@@ -102,7 +102,7 @@ export class ChatStore {
    * device id — which is what puts a second chip on the device strip when you open a second tab.
    */
   static async open(window: WindowLike, overrides?: DemoOpenOverrides): Promise<ChatStore> {
-    const identity = tabIdentity(window.sessionStorage, window.localStorage, { demo: DEMO });
+    const identity = await tabIdentity(window.sessionStorage, window.localStorage, { demo: DEMO });
     const database = await openDemoDatabase({
       schema,
       scopeId: identity.scopeId,

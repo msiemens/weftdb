@@ -138,7 +138,7 @@ export class TodoStore {
    * id — which is what makes a second tab a second device rather than a second view.
    */
   static async open(window: WindowLike, overrides?: DemoOpenOverrides): Promise<TodoStore> {
-    const identity = tabIdentity(window.sessionStorage, window.localStorage, { demo: DEMO });
+    const identity = await tabIdentity(window.sessionStorage, window.localStorage, { demo: DEMO });
     const database = await openDemoDatabase({
       schema,
       scopeId: identity.scopeId,

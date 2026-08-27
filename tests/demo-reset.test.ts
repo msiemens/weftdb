@@ -8,11 +8,11 @@ const DEMO = "todo";
 test("a reset leaves the visitor a scope and a device they have never used", async () => {
   const local = new MemoryStorage();
   const session = new MemoryStorage();
-  const before = tabIdentity(session, local, { demo: DEMO });
+  const before = await tabIdentity(session, local, { demo: DEMO });
 
   await reset(local, session);
 
-  const after = tabIdentity(session, local, { demo: DEMO });
+  const after = await tabIdentity(session, local, { demo: DEMO });
   assert.notEqual(after.scopeId, before.scopeId, "the visitor came back to the scope they just cleared");
   assert.notEqual(after.deviceId, before.deviceId, "the tab came back as the device that wrote the outbox");
 });
@@ -20,21 +20,25 @@ test("a reset leaves the visitor a scope and a device they have never used", asy
 test("a reset takes only the keys of the demo it was asked for", async () => {
   const local = new MemoryStorage();
   const session = new MemoryStorage();
-  const chat = tabIdentity(session, local, { demo: "chat" });
-  tabIdentity(session, local, { demo: DEMO });
+  const chat = await tabIdentity(session, local, { demo: "chat" });
+  await tabIdentity(session, local, { demo: DEMO });
   // The host page's own storage, which a demo embedded in a docs site shares.
   local.setItem("theme", "dark");
 
   await reset(local, session);
 
-  assert.equal(tabIdentity(session, local, { demo: "chat" }).scopeId, chat.scopeId, "the other demo was cleared");
+  assert.equal(
+    (await tabIdentity(session, local, { demo: "chat" })).scopeId,
+    chat.scopeId,
+    "the other demo was cleared",
+  );
   assert.equal(local.getItem("theme"), "dark", "the host page's own key was cleared");
 });
 
 test("a reset drops the databases this demo's namespaces named", async () => {
   const local = new MemoryStorage();
   const session = new MemoryStorage();
-  const identity = tabIdentity(session, local, { demo: DEMO });
+  const identity = await tabIdentity(session, local, { demo: DEMO });
   // What the storage worker calls the file for a namespace of `weftdb-demo/<demo>/<device>`, and
   // one from a demo sharing the origin.
   const mine = `weft-${encodeURIComponent(`weftdb-demo/${DEMO}/${identity.deviceId}`)}`;
@@ -49,7 +53,7 @@ test("a reset drops the databases this demo's namespaces named", async () => {
 test("a reset tells the other tabs before it reloads", async () => {
   const local = new MemoryStorage();
   const session = new MemoryStorage();
-  tabIdentity(session, local, { demo: DEMO });
+  await tabIdentity(session, local, { demo: DEMO });
   const order: string[] = [];
 
   await resetDemoData({

@@ -125,7 +125,7 @@ export class DemoBrowser {
    * been through the relay.
    */
   async tab(name: string, options: TabOptions = {}): Promise<DemoTab> {
-    const identity = tabIdentity(this.session(name), this.local, { demo: this.#demo });
+    const identity = await tabIdentity(this.session(name), this.local, { demo: this.#demo });
     const database = await openDemoDatabase({
       schema: this.#schema,
       scopeId: identity.scopeId,

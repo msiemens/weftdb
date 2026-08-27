@@ -49,8 +49,12 @@ export interface TabIdentityOptions {
   readonly scope?: ScopeId | undefined;
 }
 
-export function tabIdentity(session: StorageLike, local: StorageLike, options: TabIdentityOptions): TabIdentity {
-  const scope = options.scope ?? visitorScope(local, options.demo);
+export async function tabIdentity(
+  session: StorageLike,
+  local: StorageLike,
+  options: TabIdentityOptions,
+): Promise<TabIdentity> {
+  const scope = options.scope ?? (await visitorScope(local, options.demo));
   const deviceKey = `${demoKeyPrefix(options.demo)}device`;
   const counterKey = `${demoKeyPrefix(options.demo)}tab-counter`;
 
@@ -80,13 +84,36 @@ export function tabIdentity(session: StorageLike, local: StorageLike, options: T
  * unguessable, which is not the same as access control — see the note in `auth.ts`. A demo relay
  * belongs on loopback or behind something that knows who is asking.
  */
-function visitorScope(local: StorageLike, demo: string): ScopeId {
+async function visitorScope(local: StorageLike, demo: string): Promise<ScopeId> {
   const key = `${demoKeyPrefix(demo)}scope`;
-  const existing = local.getItem(key);
-  if (existing !== null && existing !== "") return scopeId(existing);
-  const id = `${demo}-${randomToken(4)}`;
-  local.setItem(key, id);
-  return scopeId(id);
+  const settled = local.getItem(key);
+  if (settled !== null && settled !== "") return scopeId(settled);
+  // Held across the read and the write. Local storage has no compare-and-set, so two tabs opened
+  // together both find nothing and both mint, and the one whose write lands second leaves the other
+  // running under a scope no storage names. Two tabs of one visitor are then in separate worlds for
+  // as long as they stay open: neither can see the other's rows, because scope equality is the
+  // whole of what decides that.
+  return await withTabLock(key, async () => {
+    const won = local.getItem(key);
+    if (won !== null && won !== "") return scopeId(won);
+    const id = `${demo}-${randomToken(4)}`;
+    local.setItem(key, id);
+    return scopeId(id);
+  });
+}
+
+/**
+ * Runs `body` alone across this origin, where the browser has Web Locks. Node has them from 26, so
+ * a test drives the same path a tab does.
+ */
+export async function withTabLock<T>(name: string, body: () => Promise<T>): Promise<T> {
+  const locks = (globalThis as { navigator?: { locks?: LockManagerLike } }).navigator?.locks;
+  if (locks === undefined) return await body();
+  return await locks.request(name, body);
+}
+
+interface LockManagerLike {
+  request<T>(name: string, body: () => Promise<T>): Promise<T>;
 }
 
 function identityFor(scope: ScopeId, id: string, label: string): TabIdentity {
