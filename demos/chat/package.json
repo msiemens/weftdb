@@ -19,7 +19,7 @@
     "weftdb-react": "workspace:*"
   },
   "devDependencies": {
-    "vite": "^8.2.2",
+    "vite": "^8.2.4",
     "@vitejs/plugin-react": "^6.1.0"
   },
   "exports": {
